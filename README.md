@@ -173,6 +173,37 @@ brighten colours. `./term.sh` opens Konsole configured that way, deriving
 the point size from the screen DPI (12 points at 96 DPI). Any other emulator
 with the same font settings will render the same pixels.
 
+## Tests
+
+`make check` is the gate: clippy with warnings as errors, the unit tests
+beside the code, the asset loader tests and the golden frames. The plan is
+in [docs/testing.md](docs/testing.md).
+
+```
+make check          # everything
+make test           # cargo test --release
+make golden-check   # render the golden frames in-process and score them
+make golden-record  # accept the current frames as the new reference
+```
+
+The golden frames are the eleven headless snapshots `tools/golden.sh`
+renders, drawn in-process by `tests/golden.rs` and compared cell by cell
+with the references committed under `tests/golden/*.frame`. Every run
+prints each frame's score: the percentage of identical cells, the
+percentage with the same glyph, and the mean colour distance. A frame
+passes at 98 percent identical and a mean distance of 2.0 or less;
+`GOLDEN_MIN_IDENTICAL` and `GOLDEN_MAX_DISTANCE` move those thresholds
+and `GOLDEN_STRICT=1` demands every cell identical. A failure lists the
+first ten differing cells with their expected and actual glyph and
+colours, so a shifted sprite reads differently from a colour tweak.
+`GOLDEN_DUMP=<dir>` also writes the rendered frames as `.cells` text dumps.
+
+After an intentional visual change, `make golden-record` rewrites the
+reference frames; commit them in the same change and say which frames
+moved and why. `make golden` and `make golden-bytes` keep the older
+byte-for-byte workflow through the binary: record cell dumps in `.golden`
+before a refactor, compare after.
+
 ## Fonts
 
 The PETSCII tileset needs a font covering U+1FB00 to U+1FBFF. Unscii 16 Full

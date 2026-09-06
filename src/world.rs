@@ -386,8 +386,171 @@ impl World {
 }
 
 #[cfg(test)]
+impl World {
+    /// Set every temperature band's ground wetness.
+    pub(crate) fn set_wetness(&mut self, w: f32) {
+        self.wetness = [w; BANDS];
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::test_assets;
+    use crate::camera::Camera;
+    use crate::canvas::Canvas;
+    use crate::map::{Structure, Tile};
+    use crate::render::{RenderOptions, Renderer, Scene};
+    use crate::tileset::Tileset;
+
+    /// An 8x8 island of grass at height 5 with a pond at (5, 4).
+    fn pond_map() -> Map {
+        Map::synthetic(8, 8, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (5, 4) { 1 } else { 5 }))
+    }
+
+    #[test]
+    fn player_refuses_water_and_the_island_edge_and_moves_on_land() {
+        let map = pond_map();
+        let mut w = World::new(1);
+        w.spawn_player(&map, 4, 4);
+        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((4, 4)));
+        assert!(!w.try_move(&map, 1, 0), "into the pond");
+        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((4, 4)), "a refused move leaves the player put");
+        assert!(w.try_move(&map, 0, 1), "onto grass");
+        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((4, 5)));
+        assert!(w.try_move(&map, -1, -1), "diagonals are steps too");
+        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((3, 4)));
+        let p = w.player_mut().unwrap();
+        (p.mx, p.my) = (7, 0);
+        assert!(!w.try_move(&map, 1, 0), "off the east edge");
+        assert!(!w.try_move(&map, 0, -1), "off the north edge");
+        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((7, 0)));
+        assert!(w.try_move(&map, -1, 0));
+        let mut nobody = World::new(1);
+        assert!(!nobody.try_move(&map, 1, 0), "no player, no move");
+    }
+
+    #[test]
+    fn campfires_refuse_water_and_light_on_land() {
+        let map = pond_map();
+        let mut w = World::new(1);
+        assert!(!w.light_campfire(&map, 5, 4), "on the pond");
+        assert!(!w.light_campfire(&map, 9, 9), "off the map");
+        assert!(w.lights.is_empty());
+        assert!(w.light_campfire(&map, 4, 4));
+        assert_eq!(w.lights.len(), 1);
+        let fire = map.assets.light("campfire").unwrap();
+        assert_eq!((w.lights[0].mx, w.lights[0].my, w.lights[0].z), (4, 4, 5), "the light sits on the tile top");
+        assert_eq!((w.lights[0].radius, w.lights[0].intensity), (fire.radius, fire.intensity));
+    }
+
+    /// Draw one frame of the map with the world at `tod` and return the
+    /// placed and discovered light counts the HUD would show.
+    fn light_counts(map: &Map, world: &mut World, tod: f32) -> (usize, usize) {
+        let ts = &Tileset::all(&map.assets)[0];
+        let (w, h) = (120, 40);
+        world.tod = tod;
+        let mut cam = Camera::new();
+        cam.set_zoom(4, w, h);
+        cam.look_at(8, 8, map, w, h);
+        let mut r = Renderer::new(w, h);
+        let mut cv = Canvas::new(w as u16, h as u16);
+        r.draw(&mut cv, &Scene::new(map, ts, world, &cam, 0.0), &RenderOptions { aa: true, clouds: true });
+        (world.lights.len(), r.frame_light_count())
+    }
+
+    #[test]
+    fn window_lights_join_the_frame_count_at_night_and_not_at_noon() {
+        let assets = test_assets();
+        assert!(assets.blocks[0].light.is_some(), "the first building kind glows at night");
+        let map = Map::synthetic(16, 16, assets, 0, |x, y| {
+            let mut t = Tile::flat(5);
+            if (x, y) == (8, 8) {
+                t.building = Some(Structure { kind: 0, variant: 1 });
+            }
+            t
+        });
+        let mut w = World::new(1);
+        assert!(w.light_campfire(&map, 6, 8));
+        assert_eq!(light_counts(&map, &mut w, 12.0), (1, 0), "at noon only the campfire counts");
+        assert_eq!(light_counts(&map, &mut w, 22.0), (1, 1), "at night the lit window joins it");
+    }
+
+    #[test]
+    fn storm_preset_raises_precipitation() {
+        let mut w = World::new(3);
+        w.day_secs = 1.0;
+        assert_eq!(w.weather.precip, 0.0);
+        w.weather_preset = Some(STORM);
+        for _ in 0..40 {
+            w.tick(0.05);
+        }
+        assert!(w.weather.precip > 0.95 && w.weather.cover > 0.95, "{:?}", w.weather);
+        w.weather_preset = Some(0);
+        for _ in 0..40 {
+            w.tick(0.05);
+        }
+        assert!(w.weather.precip < 0.05, "the clear preset dries it up: {:?}", w.weather);
+    }
+
+    #[test]
+    fn snowpack_grows_below_freezing_and_melts_above() {
+        let mut w = World::new(3);
+        w.day_secs = 1.0;
+        // Annual 8C is -1C in winter and 17C in summer, with no permanent snow.
+        let annual = 8.0;
+        w.season = 3.0;
+        assert_eq!(w.snow_at(annual), 0.0);
+        w.weather_preset = Some(STORM);
+        let mut last = 0.0;
+        for hours in 0..3 {
+            for _ in 0..3 {
+                w.tick(0.05);
+            }
+            assert!(w.snow_at(annual) > last, "storm stretch {hours}: the pack grows through a winter storm");
+            last = w.snow_at(annual);
+        }
+        for _ in 0..40 {
+            w.tick(0.05);
+        }
+        assert_eq!(w.snow_at(annual), 1.0, "two days of storm bury the band");
+        assert!(w.snowing_at(annual));
+        w.season = 1.0;
+        w.weather_preset = Some(0);
+        assert!(!w.snowing_at(annual));
+        let mut last = w.snow_at(annual);
+        for day in 0..6 {
+            for _ in 0..20 {
+                w.tick(0.05);
+            }
+            let now = w.snow_at(annual);
+            assert!(now <= last, "day {day}: summer melts the pack");
+            last = now;
+        }
+        assert_eq!(w.snow_at(annual), 0.0);
+    }
+
+    #[test]
+    fn wetness_dries_faster_in_sun() {
+        let mut sun = World::new(3);
+        let mut night = World::new(3);
+        for (w, tod) in [(&mut sun, 12.0), (&mut night, 0.0)] {
+            w.tod = tod;
+            w.weather_preset = Some(0);
+            w.set_wetness(1.0);
+            w.tick(1.0);
+        }
+        let (a, b) = (sun.wet_at(15.0), night.wet_at(15.0));
+        assert!(a < b && b < 1.0, "sun {a} night {b}");
+        // Rain wets the ground again.
+        night.weather_preset = Some(STORM);
+        night.day_secs = 1.0;
+        night.set_wetness(0.0);
+        for _ in 0..10 {
+            night.tick(0.05);
+        }
+        assert!(night.wet_at(15.0) > 0.5, "{}", night.wet_at(15.0));
+    }
 
     #[test]
     fn clock_steps_wrap() {
@@ -400,8 +563,8 @@ mod tests {
     }
 
     #[test]
-    fn player_refuses_water() {
-        let map = Map::new(32, 32, 7, crate::assets::test_assets());
+    fn player_never_walks_into_generated_water() {
+        let map = Map::new(32, 32, 7, test_assets());
         let mut w = World::new(7);
         w.spawn_player(&map, 16, 16);
         let p = *w.player().unwrap();

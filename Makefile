@@ -1,7 +1,7 @@
 # roguemap task runner. `make help` lists targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help build run term test test-assets lint format check clean snap screenshots fonts golden golden-check assets-export
+.PHONY: help build run term test test-assets test-golden lint format check clean snap screenshots fonts golden golden-bytes golden-check golden-record assets-export
 
 BIN      := target/release/roguemap
 SEED     ?= 7
@@ -30,26 +30,36 @@ test: ## Run unit tests
 test-assets: ## Run the asset loader tests: embedded set, cross-references, round trips
 	cargo test --release assets::
 
+test-golden: ## Compare the golden frame set with tests/golden/*.frame (see golden-check)
+	cargo test --release --test golden
+
 lint: ## Run clippy
 	cargo clippy --release -- -D warnings
 
 format: ## Format sources
 	cargo fmt
 
-check: lint test test-assets ## Run all quality gates
+check: lint test test-assets test-golden ## Run all quality gates
 
 clean: ## Remove build artefacts and generated screenshots
 	cargo clean
 	rm -f $(SHOTS)/*.png *.cells
 
-golden: build ## Record reference frames in .golden (run before a refactor)
+golden: build ## Record the frame set as cell dumps in .golden (run before a refactor)
 	tools/golden.sh .golden
 
-golden-check: build ## Re-render and compare against .golden byte for byte
+golden-bytes: build ## Re-render the cell dumps and compare against .golden byte for byte
 	tools/golden.sh .golden-new >/dev/null
 	@fail=0; for f in .golden/*.cells; do n=.golden-new/$$(basename $$f); \
 	  if ! cmp -s $$f $$n; then echo "DIFF $$(basename $$f)"; fail=1; fi; done; \
 	  if [ $$fail = 0 ]; then echo "golden: all frames identical"; else exit 1; fi
+
+# Tolerances: GOLDEN_MIN_IDENTICAL=98.0 GOLDEN_MAX_DISTANCE=2.0 GOLDEN_STRICT=1
+golden-check: ## Render the golden frames in-process and compare with tests/golden/*.frame, printing each frame's score
+	cargo test --release --test golden golden_frames -- --nocapture
+
+golden-record: ## Rewrite tests/golden/*.frame from the current code (say which frames changed and why in the commit)
+	GOLDEN_RECORD=1 cargo test --release --test golden golden_frames -- --nocapture
 
 assets-export: build ## Write the embedded asset tables to ./assets-export for editing (ROGUEMAP_ASSETS=assets-export to load them)
 	./$(BIN) --export-assets assets-export

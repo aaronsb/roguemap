@@ -39,6 +39,12 @@ fn point_light_at(wx: f32, wy: f32, wz: f32, lights: &[&Light], t: f32) -> [f32;
     pl
 }
 
+/// Soft knee on summed point light so clustered lights saturate instead of
+/// blowing out: rises like `v` near zero and never exceeds 1.6.
+pub(crate) fn knee(v: f32) -> f32 {
+    1.6 * (1.0 - (-v / 1.6).exp())
+}
+
 impl Renderer {
     pub(crate) fn light_pass(&self, cv: &mut Canvas, sc: &Scene) {
         let (world, t) = (sc.world, sc.t);
@@ -64,8 +70,6 @@ impl Renderer {
                     l = [l[0] + sun[0] * s, l[1] + sun[1] * s, l[2] + sun[2] * s];
                 }
                 let pl = point_light_at(g.wx, g.wy, g.wz, &lights, t);
-                // Soft knee so clustered lights saturate instead of blowing out.
-                let knee = |v: f32| 1.6 * (1.0 - (-v / 1.6).exp());
                 l = [l[0] + knee(pl[0]), l[1] + knee(pl[1]), l[2] + knee(pl[2])];
                 cv.put(x, y, g.ch, mul(g.glyph, l), mul(g.albedo, l));
             }
@@ -76,16 +80,49 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::World;
 
     #[test]
-    fn point_light_falls_off_to_its_radius() {
-        let l = Light { mx: 0, my: 0, z: 0, color: [1.0, 0.5, 0.0], radius: 4.0, intensity: 1.0, falloff: 2.0, flicker_amount: 0.0, flicker_omega: 0.0 };
+    fn knee_is_monotonic_and_bounded() {
+        assert_eq!(knee(0.0), 0.0);
+        let mut last = 0.0;
+        for i in 1..=400 {
+            let v = i as f32 * 0.05;
+            let k = knee(v);
+            assert!(k > last, "knee falls between {} and {v}", v - 0.05);
+            assert!(k < 1.6, "knee({v}) = {k} exceeds the bound");
+            last = k;
+        }
+        assert!((knee(0.01) - 0.01).abs() < 1e-3, "near zero the knee is the identity");
+        assert!(knee(20.0) > 1.59, "far out it saturates at the bound");
+    }
+
+    #[test]
+    fn point_light_gives_its_intensity_at_zero_and_nothing_at_its_radius() {
+        let l = Light { mx: 2, my: 3, z: 1, color: [1.0, 0.5, 0.0], radius: 4.0, intensity: 1.8, falloff: 2.0, flicker_amount: 0.0, flicker_omega: 0.0 };
         let lights = [&l];
-        let near = point_light_at(0.0, 0.0, 0.0, &lights, 0.0);
-        let mid = point_light_at(2.0, 0.0, 0.0, &lights, 0.0);
-        let out = point_light_at(4.0, 0.0, 0.0, &lights, 0.0);
-        assert!(near[0] > mid[0] && mid[0] > 0.0);
-        assert_eq!(out, [0.0, 0.0, 0.0]);
-        assert_eq!(near[2], 0.0);
+        let at = |dx: f32| point_light_at(2.0 + dx, 3.0, 1.0, &lights, 0.0);
+        assert_eq!(at(0.0), [1.8, 0.9, 0.0]);
+        assert_eq!(at(4.0), [0.0, 0.0, 0.0]);
+        assert_eq!(at(4.5), [0.0, 0.0, 0.0]);
+        let (near, mid, edge) = (at(0.5), at(2.0), at(3.9));
+        assert!(near[0] > mid[0] && mid[0] > edge[0] && edge[0] > 0.0, "it falls off through the radius");
+        assert_eq!(near[2], 0.0, "a light with no blue adds no blue");
+        // Height counts half as much as ground distance.
+        let (above, beside) = (point_light_at(2.0, 3.0, 1.0 + 2.0, &lights, 0.0), point_light_at(2.0 + 1.0, 3.0, 1.0, &lights, 0.0));
+        assert_eq!(above, beside);
+    }
+
+    #[test]
+    fn ambient_at_midnight_is_the_night_floor() {
+        let mut w = World::new(1);
+        w.tod = 0.0;
+        assert_eq!(w.ambient(), [0.15, 0.17, 0.32]);
+        w.weather.cover = 1.0;
+        assert_eq!(w.ambient(), [0.15, 0.17, 0.32], "cloud cover cannot take the night any lower");
+        assert_eq!(w.sun(), [0.0, 0.0, 0.0], "and there is no sun");
+        w.tod = 12.0;
+        let noon = w.ambient();
+        assert!(noon.iter().zip([0.15, 0.17, 0.32]).all(|(d, n)| *d > n), "noon is brighter than the floor: {noon:?}");
     }
 }

@@ -388,23 +388,190 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::test_assets;
+    use crate::tileset::Tileset;
+    use crate::world::World;
+    use std::f32::consts::{FRAC_PI_4, PI};
 
     #[test]
-    fn sextants_cover_the_block() {
+    fn sextants_are_a_bijection_onto_the_block_plus_the_half_blocks() {
         assert_eq!(sextant(0), ' ');
         assert_eq!(sextant(63), '█');
-        assert_eq!(sextant(1), '🬀');
-        assert_eq!(sextant(62), '🬻');
+        assert_eq!(sextant(21), '▌', "left column is the left half block");
+        assert_eq!(sextant(42), '▐', "right column is the right half block");
+        let mut seen: Vec<u32> = (1..63u8).filter(|&b| b != 21 && b != 42).map(|b| sextant(b) as u32).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen, (0x1FB00..=0x1FB3B).collect::<Vec<u32>>(), "every other pattern is one sextant glyph");
     }
 
     #[test]
-    fn quantise_skips_uniform_blocks() {
+    fn quantising_six_identical_colours_yields_no_glyph() {
         let flat = [Rgb(10, 10, 10); 6];
         assert!(quantise(&flat).is_none());
-        let mut split = flat;
-        split[3] = Rgb(200, 200, 200);
-        let (ch, a, b) = quantise(&split).unwrap();
-        assert_ne!(ch, ' ');
-        assert_eq!((a, b), (Rgb(10, 10, 10), Rgb(200, 200, 200)));
+        let nearly = [Rgb(10, 10, 10), Rgb(12, 10, 10), Rgb(10, 14, 10), Rgb(10, 10, 15), Rgb(11, 11, 11), Rgb(10, 10, 10)];
+        assert!(quantise(&nearly).is_none(), "differences under the threshold are not worth a glyph");
+    }
+
+    #[test]
+    fn two_colours_split_three_and_three_yield_the_expected_pattern() {
+        let (a, b) = (Rgb(10, 10, 10), Rgb(200, 200, 200));
+        // Top row and middle-left take the first colour: sextants 1, 2, 3.
+        assert_eq!(quantise(&[a, a, a, b, b, b]), Some(('\u{1FB06}', a, b)));
+        // The left column alone is the half block.
+        assert_eq!(quantise(&[a, b, a, b, a, b]), Some(('▌', a, b)));
+        // The first sample always keeps its colour as the glyph colour.
+        assert_eq!(quantise(&[b, b, b, a, a, a]), Some(('\u{1FB06}', b, a)));
+    }
+
+    /// A renderer with the height grid built for the view, as `draw` does.
+    fn prepared(map: &Map, cam: &Camera, w: i32, h: i32) -> Renderer {
+        let mut r = Renderer::new(w, h);
+        let (x0, y0, x1, y1) = r.visible_bounds(cam);
+        r.heights = Some(HeightGrid::build(map, x0, y0, x1, y1));
+        r
+    }
+
+    /// The projected corners of the square `(x, y)..(x + n, y + n)` at
+    /// height `z`, in ring order.
+    fn square(cam: &Camera, x: f32, y: f32, n: f32, z: f32) -> [(f32, f32); 4] {
+        [cam.project(x, y, z), cam.project(x + n, y, z), cam.project(x + n, y + n, z), cam.project(x, y + n, z)]
+    }
+
+    fn corner_by(corners: &[(f32, f32); 4], pick: fn(f32, f32) -> bool) -> usize {
+        let mut best = 0;
+        for i in 1..4 {
+            if pick(corners[i].1, corners[best].1) {
+                best = i;
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn flat_field_rays_hit_the_top_at_the_field_height_under_every_cell() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let world = World::new(1);
+        let mut map = Map::synthetic(8, 8, assets, 3, |_, _| Tile::flat(6));
+        map.bounded = false;
+        let (w, h) = (120, 40);
+        // No sub-tile relief at the overview zooms: the surface is exactly flat.
+        for (zoom, angle) in [(0, FRAC_PI_4), (1, 1.1), (0, 3.0), (1, 5.2)] {
+            let mut cam = Camera::new();
+            cam.angle = angle;
+            cam.set_zoom(zoom, w, h);
+            cam.look_at(0, 0, &map, w, h);
+            let r = prepared(&map, &cam, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            for y in 0..h {
+                for x in 0..w {
+                    let hit = r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5).unwrap_or_else(|| panic!("zoom {zoom}: no hit at ({x}, {y})"));
+                    assert_eq!((hit.face, hit.z, hit.tile.z, hit.below), (FACE_TOP, 6, 6, 0), "zoom {zoom} cell ({x}, {y})");
+                    assert!((hit.h - 6.5).abs() < 1e-4 && hit.sun.abs() < 1e-6, "zoom {zoom} cell ({x}, {y}): h {} sun {}", hit.h, hit.sun);
+                    assert_eq!((hit.x.floor() as i32, hit.y.floor() as i32), (hit.mx, hit.my), "the ground point lies in the tile it hit");
+                }
+            }
+        }
+        // Up close the field carries relief under one height unit, so every
+        // hit stays within that of the tile height.
+        let mut cam = Camera::new();
+        cam.set_zoom(4, w, h);
+        cam.look_at(0, 0, &map, w, h);
+        let r = prepared(&map, &cam, w, h);
+        let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+        for y in 0..h {
+            for x in 0..w {
+                let hit = r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5).unwrap_or_else(|| panic!("zoom 4: no hit at ({x}, {y})"));
+                assert!((hit.h - 6.5).abs() < 0.5 && hit.z == 6 && hit.tile.z == 6, "zoom 4 cell ({x}, {y}): h {} z {}", hit.h, hit.z);
+            }
+        }
+    }
+
+    #[test]
+    fn front_slopes_of_a_raised_tile_are_cliff_hits_on_the_predicted_side() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let world = World::new(1);
+        // One tile seven units above a plain: the field makes it a peak whose
+        // slopes fall to the neighbouring tile centres.
+        let map = Map::synthetic(16, 16, assets, 0, |x, y| Tile::flat(if (x, y) == (5, 5) { 10 } else { 3 }));
+        let (w, h) = (120, 40);
+        let (peak_x, peak_y, peak_z) = (5.5, 5.5, 10.5);
+        for angle in [FRAC_PI_4, FRAC_PI_4 + 0.3, 3.0 * FRAC_PI_4 - 0.2, PI + 0.4, 5.0 * FRAC_PI_4 + 0.1, 7.0 * FRAC_PI_4 - 0.25, 1.0, 5.6] {
+            let mut cam = Camera::new();
+            cam.angle = angle;
+            cam.set_zoom(6, w, h);
+            cam.look_at(5, 5, &map, w, h);
+            let r = prepared(&map, &cam, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            let (s, c) = angle.sin_cos();
+            let peak = cam.project(peak_x, peak_y, peak_z);
+            // A point partway down each slope that faces the camera.
+            let slopes = [(0.4 * s.signum(), 0.0, s.abs()), (0.0, 0.4 * c.signum(), c.abs())];
+            for (dx, dy, facing) in slopes {
+                if facing < 0.3 {
+                    continue; // this slope is nearly edge-on
+                }
+                let (px, py) = cam.project(peak_x + dx, peak_y + dy, peak_z - 0.4 * 7.0);
+                let expected = if px > peak.0 + 1.0 {
+                    FACE_RIGHT
+                } else if px < peak.0 - 1.0 {
+                    FACE_LEFT
+                } else {
+                    continue;
+                };
+                let hit = r.ray(&sc, px, py).unwrap_or_else(|| panic!("angle {angle}: no hit on the slope"));
+                assert_eq!((hit.mx, hit.my), (5, 5), "angle {angle}: the slope belongs to the raised tile");
+                assert_eq!(hit.face, expected, "angle {angle}: slope toward screen x {px:.1} from the peak at {:.1}", peak.0);
+                assert!(hit.below >= 1 && hit.h > 3.5 && hit.h < peak_z, "angle {angle}: a cliff hit partway down (h {})", hit.h);
+            }
+            // Just below the apex on the camera's side the walk reaches the
+            // top of the raised tile. (At the apex pixel itself the height
+            // steps of the walk can carry the ray over the point onto the
+            // far slope, which is the walk's own sampling, not geometry.)
+            let (px, py) = cam.project(peak_x + 0.2 * s, peak_y + 0.2 * c, peak_z - 7.0 * 0.2 * (s.abs() + c.abs()));
+            let near_top = r.ray(&sc, px, py).unwrap_or_else(|| panic!("angle {angle}: no hit below the apex"));
+            assert_eq!((near_top.mx, near_top.my), (5, 5), "angle {angle}: below the apex is the raised tile");
+            assert!(near_top.h > 9.0 && near_top.h < peak_z + 0.5, "angle {angle}: near the top (h {})", near_top.h);
+        }
+    }
+
+    #[test]
+    fn island_far_edge_is_sky_and_near_edge_is_plinth() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let world = World::new(1);
+        let map = Map::synthetic(8, 8, assets, 0, |_, _| Tile::flat(5));
+        let (w, h) = (120, 60);
+        let plateau = 5.5;
+        for angle in [FRAC_PI_4, FRAC_PI_4 + 0.4, 3.0 * FRAC_PI_4, 4.2] {
+            let mut cam = Camera::new();
+            cam.angle = angle;
+            cam.set_zoom(3, w, h);
+            cam.look_at(4, 4, &map, w, h);
+            let r = prepared(&map, &cam, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            // Above the far edge of the plateau there is nothing.
+            let top = square(&cam, 0.0, 0.0, 8.0, plateau);
+            let far = corner_by(&top, |a, b| a < b);
+            for n in [(far + 1) % 4, (far + 3) % 4] {
+                let (sx, sy) = ((top[far].0 + top[n].0) / 2.0, (top[far].1 + top[n].1) / 2.0 - 1.5);
+                assert!(r.ray(&sc, sx, sy).is_none(), "angle {angle}: above the far edge is sky");
+            }
+            // The edge slopes from the plateau to sea level as a cliff, and
+            // below the waterline the plinth carries on down to height zero.
+            let sea = square(&cam, 0.0, 0.0, 8.0, SEA as f32);
+            let near = corner_by(&sea, |a, b| a > b);
+            for n in [(near + 1) % 4, (near + 3) % 4] {
+                let (sx, sy) = ((sea[near].0 + sea[n].0) / 2.0, (sea[near].1 + sea[n].1) / 2.0);
+                let cliff = r.ray(&sc, sx, sy - 1.0).unwrap_or_else(|| panic!("angle {angle}: no hit on the island's side"));
+                assert!(cliff.face != FACE_TOP && cliff.h > SEA as f32 && cliff.h < plateau, "angle {angle}: the side is a cliff (h {})", cliff.h);
+                let hit = r.ray(&sc, sx, sy + 1.5).unwrap_or_else(|| panic!("angle {angle}: no plinth below the near edge"));
+                assert!(hit.face != FACE_TOP && hit.z < SEA && hit.below >= 1, "angle {angle}: the plinth is a wall hit below sea level (z {})", hit.z);
+                assert!(map.get(hit.mx, hit.my).is_some(), "angle {angle}: the plinth belongs to an island tile");
+                assert!(r.ray(&sc, sx, sy + 8.0).is_none(), "angle {angle}: below the plinth is sky again");
+            }
+        }
     }
 }

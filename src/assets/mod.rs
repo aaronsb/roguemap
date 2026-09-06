@@ -869,6 +869,9 @@ mod tests {
         assert!(fire.radius > 0.0 && fire.intensity > 0.0);
         let fire_ix = a.lights.iter().position(|l| l.name == "campfire");
         assert_eq!(a.prop("campfire").unwrap().light, fire_ix);
+        for table in TABLES {
+            assert!(a.files().iter().any(|(p, _)| p == table), "{table} is among the loaded files");
+        }
     }
 
     #[test]
@@ -881,22 +884,120 @@ mod tests {
                 assert!(sp < a.species.len() && w > 0, "{}", b.name);
             }
         }
+        for s in &a.species {
+            assert!(s.light.is_none_or(|l| l < a.lights.len()), "{}", s.name);
+        }
         for p in &a.props {
             assert!(a.art.has(&p.art), "{}", p.name);
             assert!(p.light.is_none_or(|l| l < a.lights.len()));
+            assert!(!p.terrain.is_empty(), "{} stands on some terrain", p.name);
+            assert!(p.cover.iter().all(|c| crate::biome::COVERS.contains(c)), "{}", p.name);
         }
         for k in &a.blocks {
             if let MaterialRule::Fixed(m) = k.material {
                 assert!(m < a.materials.len(), "{}", k.name);
             }
             assert!(k.light.is_none_or(|l| l < a.lights.len()));
+            assert!(!k.terrain.is_empty(), "{} stands on some terrain", k.name);
+        }
+        for c in &a.creatures {
+            assert!(a.art.has(&c.art), "{}", c.name);
+            assert!(!c.can_enter.is_empty(), "{} can enter some terrain", c.name);
+            assert!(c.home.is_none_or(|h| h < a.blocks.len()), "{}", c.name);
+            assert!(c.light.is_none_or(|l| l < a.lights.len()), "{}", c.name);
         }
         for t in &a.tilesets {
             assert!(a.art.get(&t.art.tiny_house, Tier::Tiny).is_some(), "{}", t.name);
+            for name in [&t.art.tiny.pine, &t.art.tiny.broadleaf, &t.art.tiny.scrub, &t.art.tiny.cactus] {
+                assert!(a.art.get(name, Tier::Tiny).is_some(), "{}: {name}", t.name);
+            }
         }
         for s in a.setting("glyphs").unwrap().values.iter() {
             assert!(a.tileset(s).is_some(), "{s}");
         }
+        assert!(a.material_index("stone").is_some());
+        assert!(a.block("house").is_some());
+    }
+
+    #[test]
+    fn every_placeable_row_is_described_and_categorised() {
+        let a = Assets::embedded().unwrap();
+        let mut rows: Vec<(&str, &Identity)> = Vec::new();
+        rows.extend(a.species.iter().map(|s| (s.name.as_str(), &s.identity)));
+        rows.extend(a.props.iter().map(|p| (p.name.as_str(), &p.identity)));
+        rows.extend(a.blocks.iter().map(|b| (b.name.as_str(), &b.identity)));
+        rows.extend(a.creatures.iter().map(|c| (c.name.as_str(), &c.identity)));
+        rows.extend(a.lights.iter().map(|l| (l.name.as_str(), &l.identity)));
+        assert!(rows.len() > 20);
+        for (name, id) in rows {
+            assert!(!id.description.trim().is_empty(), "{name} has no description");
+            assert!(!id.category.trim().is_empty(), "{name} has no category");
+        }
+        // Categories default to the table name, so a row without one still has one.
+        let plain = Identity::from_row(&IdentityRow { description: "x".into(), category: None, aliases: vec![] }, "props");
+        assert_eq!(plain.category, "props");
+    }
+
+    #[test]
+    fn numeric_ranges_hold_across_the_tables() {
+        let a = Assets::embedded().unwrap();
+        let unit = |v: f32| (0.0..=1.0).contains(&v);
+        for b in &a.biomes {
+            assert!(unit(b.tree_density), "{}: tree_density {}", b.name, b.tree_density);
+            assert!(b.grass <= 3, "{}: grass {}", b.name, b.grass);
+        }
+        for p in &a.props {
+            assert!(unit(p.density), "{}: density {}", p.name, p.density);
+            assert!(p.hooks.reach >= 0.0 && p.physical.spacing >= 0.0, "{}", p.name);
+            assert!(unit(p.physical.snow_cover) && unit(p.physical.sway) && unit(p.physical.heat) && unit(p.physical.cluster), "{}", p.name);
+            assert!((p.min_zoom as usize) < crate::tileset::ZOOMS.len(), "{}: min_zoom {}", p.name, p.min_zoom);
+        }
+        for s in &a.species {
+            assert!(s.radius.is_none_or(|r| r >= 0.0) && s.height.is_none_or(|h| h >= 0.0), "{}", s.name);
+            assert!(s.hooks.reach >= 0.0 && unit(s.physical.sway), "{}", s.name);
+            assert!(unit(s.conditions.wet_darkening) && unit(s.conditions.dry_fading), "{}", s.name);
+            assert_eq!(s.canopy.len(), 4, "{}: a canopy table has four seasons", s.name);
+            assert_eq!(s.canopy_glyph.len(), 4);
+        }
+        for k in &a.blocks {
+            assert!(unit(k.settle_min) && k.chance <= 100, "{}: settle_min {} chance {}", k.name, k.settle_min, k.chance);
+        }
+        for c in &a.creatures {
+            assert!(c.speed >= 0.0 && c.sight >= 0.0 && c.spacing >= 0.0 && c.hooks.reach >= 0.0, "{}", c.name);
+        }
+        for l in &a.lights {
+            assert!(l.radius > 0.0 && l.intensity >= 0.0 && l.falloff > 0.0, "{}", l.name);
+            assert!(unit(l.flicker_amount) && l.flicker_rate >= 0.0, "{}", l.name);
+            assert!(l.color.iter().all(|&c| unit(c)), "{}: colour {:?} is outside 0..1", l.name, l.color);
+        }
+        for s in &a.surfaces.surface {
+            assert!(unit(s.texture_density) && unit(s.conditions.wet_darkening), "{}", s.name);
+        }
+        let d = a.surfaces.density;
+        assert!(unit(d.grass_base) && unit(d.grass_per_level) && unit(d.cattail));
+        assert_eq!(a.raw.surfaces.season.len(), 4, "the palette file carries four seasons");
+        assert_eq!(a.surfaces.seasons.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), SEASON_NAMES);
+        assert_eq!(a.raw.surfaces.surface.len(), 4);
+        for s in &a.raw.species.species {
+            assert_eq!(s.canopy.expand().len(), 4, "{}", s.name);
+        }
+    }
+
+    #[test]
+    fn weighted_species_lists_back_every_wooded_biome() {
+        let a = Assets::embedded().unwrap();
+        for b in &a.biomes {
+            if b.tree_density > 0.0 {
+                assert!(!b.species.is_empty(), "{} has trees but no species to draw", b.name);
+                assert!(b.species.iter().all(|&(_, w)| w > 0), "{} has a zero-weight species", b.name);
+                let total: u32 = b.species.iter().map(|&(_, w)| w as u32).sum();
+                for roll in 0..total as u64 {
+                    let pick = crate::biome::weighted_pick(&b.species, roll);
+                    assert!(b.species.iter().any(|&(ix, _)| ix == pick), "{}: pick {pick} is not in the list", b.name);
+                }
+            }
+        }
+        assert!(a.biomes.iter().any(|b| b.tree_density == 0.0 && b.species.is_empty()), "the ice cap has neither");
     }
 
     #[test]

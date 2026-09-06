@@ -80,14 +80,25 @@ impl Canvas {
     }
 
     /// Write the grid as text: a header line `w h`, then one line per cell
-    /// of `codepoint fr fg fb br bg bb`, row-major.
-    pub fn dump(&self, path: &str) -> std::io::Result<()> {
-        use std::io::Write;
-        let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    /// of `codepoint fr fg fb br bg bb`, row-major. This is the cell dump
+    /// format of `--snap` and the golden frames.
+    pub fn write_to<W: std::io::Write>(&self, mut f: W) -> std::io::Result<()> {
         writeln!(f, "{} {}", self.w, self.h)?;
         for c in &self.cells {
             writeln!(f, "{} {} {} {} {} {} {}", c.ch as u32, c.fg.0, c.fg.1, c.fg.2, c.bg.0, c.bg.1, c.bg.2)?;
         }
         Ok(())
+    }
+
+    /// The cell dump as bytes.
+    pub fn dump_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(self.cells.len() * 24);
+        self.write_to(&mut v).expect("writing to a Vec cannot fail");
+        v
+    }
+
+    /// Write the cell dump to a file.
+    pub fn dump(&self, path: &str) -> std::io::Result<()> {
+        self.write_to(std::io::BufWriter::new(std::fs::File::create(path)?))
     }
 }

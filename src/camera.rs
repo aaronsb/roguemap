@@ -133,6 +133,17 @@ impl Camera {
         ((x / m).round() as i32, (y / m).round() as i32)
     }
 
+    /// The map step a walk key makes: in screen space the figure moves that
+    /// way on screen, which is a diagonal in map space; along the map axes
+    /// the key is the step itself.
+    pub fn walk_step(&self, screen_space: bool, dx: i32, dy: i32) -> (i32, i32) {
+        if screen_space {
+            self.screen_dir_to_map(dx, dy)
+        } else {
+            (dx, dy)
+        }
+    }
+
     /// Place a world point at the centre of the screen.
     pub fn look_at_point(&mut self, x: f32, y: f32, z: f32, sw: i32, sh: i32) {
         self.ox = 0.0;
@@ -216,6 +227,57 @@ mod tests {
                     let (sx, sy) = cam.project(x, y, z);
                     let (bx, by) = cam.unproject(sx, sy, z);
                     assert!((bx - x).abs() < 1e-3 && (by - y).abs() < 1e-3, "angle {angle} zoom {zoom}: ({x}, {y}) -> ({bx}, {by})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn screen_directions_give_the_eight_compass_steps() {
+        // At the compass view with 2:1 tiles the eight screen directions
+        // land on the eight distinct unit steps of the map.
+        let mut cam = Camera::new();
+        cam.set_zoom(0, 120, 40);
+        let dirs = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)];
+        let steps: Vec<(i32, i32)> = dirs.iter().map(|&(dx, dy)| cam.screen_dir_to_map(dx, dy)).collect();
+        for (i, s) in steps.iter().enumerate() {
+            assert!(s.0.abs() <= 1 && s.1.abs() <= 1 && *s != (0, 0), "{:?} -> {s:?}", dirs[i]);
+            assert!(!steps[..i].contains(s), "{:?} repeats step {s:?}", dirs[i]);
+        }
+        assert_eq!(steps[0], (-1, -1), "screen up is map north-west");
+        assert_eq!(steps[2], (1, -1), "screen right is map north-east");
+        assert_eq!(steps[4], (1, 1));
+        assert_eq!(steps[6], (-1, 1));
+    }
+
+    #[test]
+    fn screen_space_steps_are_diagonal_and_map_axes_steps_cardinal() {
+        let mut cam = Camera::new();
+        for zoom in 0..ZOOMS.len() {
+            cam.set_zoom(zoom, 120, 40);
+            for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+                let (mx, my) = cam.walk_step(true, dx, dy);
+                assert!(mx != 0 && my != 0, "zoom {zoom}: screen ({dx}, {dy}) -> ({mx}, {my}) is not a diagonal");
+                assert_eq!(cam.walk_step(false, dx, dy), (dx, dy), "map axes keep the key's own step");
+            }
+        }
+    }
+
+    #[test]
+    fn nearer_tiles_have_greater_depth_at_every_angle() {
+        let tiles = [(0, 0), (3, 1), (-2, 5), (7, -4), (10, 10), (-6, -6)];
+        let mut cam = Camera::new();
+        for i in 0..64 {
+            cam.angle = i as f32 * std::f32::consts::TAU / 64.0;
+            let (fx, fy) = cam.forward();
+            for &a in &tiles {
+                for &b in &tiles {
+                    let toward = (a.0 - b.0) as f32 * fx + (a.1 - b.1) as f32 * fy;
+                    if toward.abs() < 1e-3 {
+                        continue;
+                    }
+                    let nearer = cam.tile_depth(a.0, a.1) > cam.tile_depth(b.0, b.1);
+                    assert_eq!(nearer, toward > 0.0, "angle {} tiles {a:?} {b:?}", cam.degrees());
                 }
             }
         }

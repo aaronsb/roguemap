@@ -49,6 +49,17 @@ impl WorldMap {
         self.scale = (self.scale as i32 + dir).rem_euclid(n) as usize;
     }
 
+    /// Put the player on the nearest land to the cursor and return that
+    /// tile.
+    pub fn teleport(&self, map: &Map, world: &mut World) -> (i32, i32) {
+        let (tx, ty) = map.nearest_land(self.cursor.0, self.cursor.1);
+        if let Some(p) = world.player_mut() {
+            p.mx = tx;
+            p.my = ty;
+        }
+        (tx, ty)
+    }
+
     /// The map keeps the spring palette in every season so the legend and
     /// the plot stay readable under winter snow.
     fn plot_palette(map: &Map) -> &Palette {
@@ -173,5 +184,37 @@ impl WorldMap {
         }
         let hint = input::help_line(WORLDMAP, "  ");
         cv.text((w - hint.len() as i32).max(x), h - 1, &hint, CHROME.dim, CHROME.bar);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::test_assets;
+    use crate::map::{Terrain, Tile};
+
+    #[test]
+    fn teleport_lands_on_the_nearest_land_tile_to_the_cursor() {
+        // A lake with two islets; the cursor sits nearer the western one.
+        let map = Map::synthetic(24, 24, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (4, 10) || (x, y) == (20, 10) { 6 } else { 1 }));
+        let mut world = World::new(1);
+        world.spawn_player(&map, 20, 10);
+        let mut wm = WorldMap::new();
+        wm.cursor = (9, 12);
+        assert_eq!(map.get(9, 12).unwrap().terrain, Terrain::Water);
+        assert_eq!(wm.teleport(&map, &mut world), (4, 10));
+        assert_eq!(world.player().map(|p| (p.mx, p.my)), Some((4, 10)));
+        wm.cursor = (20, 10);
+        assert_eq!(wm.teleport(&map, &mut world), (20, 10), "a land cursor is the destination itself");
+        assert_eq!(world.player().map(|p| (p.mx, p.my)), Some((20, 10)));
+        // The map's own extents and cursor stride.
+        assert_eq!(wm.stride(), (4, 8));
+        wm.move_cursor(1, -1);
+        assert_eq!(wm.cursor, (24, 2), "the cursor steps by one cell of the current extent");
+        wm.step_extent(1);
+        assert_eq!(wm.stride(), (16, 32));
+        wm.step_extent(1);
+        assert_eq!(wm.scale, 0, "extents wrap");
+        assert_eq!(wm.teleport(&map, &mut World::new(1)), (20, 10), "with no player the destination is still reported");
     }
 }

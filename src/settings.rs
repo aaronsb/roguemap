@@ -3,7 +3,10 @@
 //! edits the same values.
 
 use crate::assets::Assets;
+use crate::map::Map;
 use crate::properties::Identity;
+use crate::render::RenderOptions;
+use crate::world::{self, World};
 
 /// One row of the settings table: a stable key for saved files and code,
 /// a display label and its cyclable values.
@@ -87,6 +90,17 @@ impl Settings {
     pub fn filled(&self) -> bool {
         self.get("view") == 1
     }
+
+    /// Push the table into the objects that act on it, and return what the
+    /// renderer needs to know.
+    pub fn apply(&self, map: &mut Map, world: &mut World) -> RenderOptions {
+        map.bounded = !self.filled();
+        world.auto_time = self.get("clock") == 0;
+        world.weather_preset = self.get("weather").checked_sub(1);
+        world.wind_preset = self.get("wind").checked_sub(1);
+        world.day_secs = world::DAY_LENGTHS[self.get("day_length")];
+        RenderOptions { aa: self.get("antialias") == 0, clouds: self.get("clouds") == 0 }
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +131,66 @@ mod tests {
             assert_eq!(s.find(&item.key), Some(i), "{}", item.key);
         }
         assert_eq!(s.get("day_length"), 1);
+    }
+
+    #[test]
+    fn every_row_cycles_through_all_its_values_and_wraps() {
+        let mut s = Settings::new(&test_assets());
+        for row in 0..s.items.len() {
+            let n = s.items[row].values.len();
+            let start = s.values[row];
+            let mut seen = Vec::with_capacity(n);
+            for _ in 0..n {
+                s.cycle_row(row, 1);
+                seen.push(s.values[row]);
+            }
+            assert_eq!(s.values[row], start, "{}: {n} steps forward come back round", s.items[row].key);
+            seen.sort_unstable();
+            assert_eq!(seen, (0..n).collect::<Vec<usize>>(), "{}: every value is visited once", s.items[row].key);
+            for _ in 0..n {
+                s.cycle_row(row, -1);
+            }
+            assert_eq!(s.values[row], start, "{}: and {n} steps back", s.items[row].key);
+            s.cycle_row(row, -1);
+            assert_eq!(s.values[row], (start + n - 1) % n, "{}: one step back from the start wraps to the end", s.items[row].key);
+            s.cycle(&s.items[row].key.clone(), 1);
+            assert_eq!(s.values[row], start, "cycling by key is the same as by row");
+            assert_eq!(s.label(row), s.items[row].values[start]);
+        }
+    }
+
+    #[test]
+    fn apply_pushes_every_row_into_what_it_governs() {
+        let assets = test_assets();
+        let mut s = Settings::new(&assets);
+        let mut map = Map::new(4, 4, 1, assets.clone());
+        let mut world = World::new(1);
+        let opts = s.apply(&mut map, &mut world);
+        assert!(map.bounded && world.auto_time && world.weather_preset.is_none() && world.wind_preset.is_none());
+        assert_eq!(world.day_secs, DAY_LENGTHS[s.get("day_length")]);
+        assert!(opts.aa && opts.clouds, "the defaults draw everything");
+
+        s.set("view", 1);
+        s.set("clock", 1);
+        s.set("weather", 4);
+        s.set("wind", 3);
+        s.set("day_length", 0);
+        s.set("clouds", 1);
+        s.set("antialias", 1);
+        let opts = s.apply(&mut map, &mut world);
+        assert!(!map.bounded, "filled view unbounds the map");
+        assert!(!world.auto_time, "paused clock stops time");
+        assert_eq!(world.weather_preset, Some(3), "storm is the last preset");
+        assert_eq!(world.wind_preset, Some(2), "windy is the third");
+        assert_eq!(world.day_secs, DAY_LENGTHS[0]);
+        assert!(!opts.aa && !opts.clouds);
+
+        s.set("weather", 0);
+        s.set("wind", 0);
+        s.apply(&mut map, &mut world);
+        assert_eq!((world.weather_preset, world.wind_preset), (None, None), "auto rows clear the presets");
+        s.set("view", 5);
+        assert_eq!(s.get("view"), 1, "set wraps into the row's values");
     }
 
     #[test]

@@ -452,9 +452,90 @@ impl Map {
 }
 
 #[cfg(test)]
+impl Tile {
+    /// A bare tile at height `z` for synthetic test maps: water below sea
+    /// level, otherwise plain grass of the first biome, at 15 degrees.
+    pub(crate) fn flat(z: i32) -> Tile {
+        Tile {
+            z,
+            terrain: if z < SEA { Terrain::Water } else { Terrain::Grass },
+            tree: None,
+            grass: 0,
+            seed: 0,
+            body_size: 0,
+            biome: 0,
+            building: None,
+            material: 0,
+            temp: 15,
+            near_water: false,
+            hf: z as f32 + 0.5,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Map {
+    /// A bounded `w` x `h` map whose tiles come from `tile` instead of the
+    /// noise fields. Chunks within `radius` chunks of the origin are filled
+    /// so an unbounded view over them never reaches the generator.
+    pub(crate) fn synthetic(w: usize, h: usize, assets: Rc<Assets>, radius: i32, tile: impl Fn(i32, i32) -> Tile) -> Map {
+        let map = Map::new(w, h, 0, assets);
+        for cy in -radius..=radius {
+            for cx in -radius..=radius {
+                let (x0, y0) = (cx * CHUNK, cy * CHUNK);
+                let tiles: Vec<Tile> = (0..CHUNK * CHUNK).map(|i| tile(x0 + i % CHUNK, y0 + i / CHUNK)).collect();
+                let max_z = tiles.iter().map(|t| t.draw_z()).max().unwrap_or(0);
+                map.chunks.borrow_mut().insert((cx, cy), Chunk { tiles, max_z });
+            }
+        }
+        map
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::assets::test_assets;
+
+    #[test]
+    fn synthetic_tiles_come_from_the_closure() {
+        let m = Map::synthetic(8, 8, test_assets(), 1, |x, y| Tile::flat(if (x, y) == (3, 4) { 9 } else { 2 }));
+        assert_eq!(m.get(3, 4).unwrap().z, 9);
+        assert_eq!(m.get(0, 0).unwrap().terrain, Terrain::Water);
+        assert_eq!(m.ceiling(0, 0), 9);
+        assert!(m.get(8, 0).is_none());
+    }
+
+    #[test]
+    fn tiles_ignore_the_order_chunks_are_touched_in() {
+        let assets = test_assets();
+        let mut a = Map::new(8, 8, 7, assets.clone());
+        let mut b = Map::new(8, 8, 7, assets);
+        a.bounded = false;
+        b.bounded = false;
+        let probes = [(-40, -40), (0, 0), (33, -2), (70, 70), (-1, 31), (31, -1)];
+        for &(x, y) in &probes {
+            a.get(x, y);
+        }
+        for &(x, y) in probes.iter().rev() {
+            b.get(x, y);
+        }
+        for y in (-48..80).step_by(5) {
+            for x in (-48..80).step_by(7) {
+                let (ta, tb) = (a.get(x, y).unwrap(), b.get(x, y).unwrap());
+                assert_eq!((ta.z, ta.terrain, ta.biome, ta.body_size), (tb.z, tb.terrain, tb.biome, tb.body_size), "({x}, {y})");
+                assert!(ta.tree.map(|f| (f.species, f.variant)) == tb.tree.map(|f| (f.species, f.variant)), "({x}, {y}) tree");
+            }
+        }
+    }
+
+    #[test]
+    fn nearest_land_is_the_closest_land_tile_to_a_water_cursor() {
+        let m = Map::synthetic(16, 16, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (10, 6) { 5 } else { 1 }));
+        assert_eq!(m.nearest_land(2, 2), (10, 6));
+        assert_eq!(m.nearest_land(15, 15), (10, 6));
+        assert_eq!(m.nearest_land(10, 6), (10, 6), "a land cursor is its own nearest land");
+    }
 
     #[test]
     fn tiles_are_deterministic_and_chunk_independent() {

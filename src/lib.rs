@@ -18,6 +18,7 @@ pub mod properties;
 pub mod raster;
 pub mod render;
 pub mod settings;
+pub mod snapshot;
 pub mod sprite;
 pub mod sprites;
 pub mod terminal;
