@@ -10,14 +10,6 @@ pub enum Weather {
 }
 
 impl Weather {
-    pub fn next(self) -> Weather {
-        match self {
-            Weather::Clear => Weather::Rain,
-            Weather::Rain => Weather::Snow,
-            Weather::Snow => Weather::Clear,
-        }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             Weather::Clear => "clear",

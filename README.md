@@ -22,7 +22,9 @@ Anything from 80x25 upward works.
 
 | Key | Action |
 |---|---|
+| `Tab` or `o` | open the settings window |
 | `w a s d` or `h j k l` | walk the player; the camera follows |
+| `v` | toggle island / filled world view |
 | arrows | pan |
 | `c` | centre on the player |
 | `r` / `R` | rotate a quarter turn about the screen centre |
@@ -36,6 +38,29 @@ Anything from 80x25 upward works.
 | `F` | put out all fires |
 | `H` | toggle the HUD |
 | `q` | quit |
+
+## Settings
+
+`Tab` opens a modal window over the scene. Up and down pick a row, left and
+right change it, `Esc` closes. Every row also has a shortcut key.
+
+| Setting | Values |
+|---|---|
+| Traversal | screen space (a key moves the figure that way on screen) or map axes |
+| World view | island (a bounded map floating in the sky) or filled (terrain in every direction) |
+| Glyphs | petscii or ascii |
+| HUD | shown or hidden |
+| Clock | running or paused |
+| Weather | clear, rain, snow |
+
+The settings table in `src/settings.rs` is the single source for the window
+and for the shortcuts.
+
+## World
+
+Terrain is a pure function of position and seed, generated on demand in
+32x32 chunks. The island view bounds it to the map size; the filled view
+lets it run in every direction.
 
 ## Level of detail
 

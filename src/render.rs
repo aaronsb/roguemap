@@ -6,7 +6,8 @@
 //! weather overlay adds precipitation.
 
 use crate::canvas::{Canvas, Rgb};
-use crate::map::{Map, Terrain, SEA};
+use crate::map::{Map, Terrain, MAX_Z, SEA};
+use crate::settings::{Settings, ITEMS};
 use crate::noise::{fbm, hash, smoothstep};
 use crate::palette::{Palette, SEASON_NAMES};
 use crate::tileset::{Sprite, Tileset, ZOOMS};
@@ -136,13 +137,22 @@ impl Camera {
 
     /// Map tile nearest the centre of the screen.
     pub fn center_tile(&self, map: &Map, sw: i32, sh: i32) -> (i32, i32) {
-        let (vx, vy) = self.unproject(sw / 2, sh / 2);
-        let (vw, vh) = self.view_dims(map);
-        let (vx, vy) = (vx.clamp(0, vw - 1), vy.clamp(0, vh - 1));
+        let (mut vx, mut vy) = self.unproject(sw / 2, sh / 2);
+        if map.bounded {
+            let (vw, vh) = self.view_dims(map);
+            vx = vx.clamp(0, vw - 1);
+            vy = vy.clamp(0, vh - 1);
+        }
         self.view_to_map(vx, vy, map)
     }
 
-    fn view_to_map(&self, vx: i32, vy: i32, map: &Map) -> (i32, i32) {
+    /// Turn a step in view space into a step in map space.
+    pub fn view_delta_to_map(&self, dvx: i32, dvy: i32) -> (i32, i32) {
+        let (u, v) = self.offset_to_map(dvx as f32, dvy as f32);
+        (u as i32, v as i32)
+    }
+
+    pub fn view_to_map(&self, vx: i32, vy: i32, map: &Map) -> (i32, i32) {
         let (w, h) = (map.w as i32, map.h as i32);
         match self.rot & 3 {
             0 => (vx, vy),
@@ -175,8 +185,6 @@ pub struct Renderer {
     w: i32,
     h: i32,
     g: Vec<GCell>,
-    view: Vec<usize>,
-    order: Vec<(i32, usize)>,
     pub show_hud: bool,
 }
 
@@ -187,7 +195,7 @@ fn wind(x: f32, y: f32, t: f32) -> f32 {
 impl Renderer {
     pub fn new(w: i32, h: i32) -> Renderer {
         let sky = GCell { albedo: Rgb(0, 0, 0), ch: ' ', glyph: Rgb(0, 0, 0), wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false };
-        Renderer { w, h, g: vec![sky; (w * h) as usize], view: Vec::new(), order: Vec::new(), show_hud: true }
+        Renderer { w, h, g: vec![sky; (w * h) as usize], show_hud: true }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -204,43 +212,89 @@ impl Renderer {
     }
 
     /// Draw one frame into `cv`.
-    pub fn draw(&mut self, cv: &mut Canvas, map: &Map, ts: &Tileset, world: &World, cam: &Camera, t: f32) {
+    pub fn draw(&mut self, cv: &mut Canvas, map: &Map, ts: &Tileset, world: &World, cam: &Camera, settings: &Settings, t: f32) {
         let pal_player = SpriteColors { bg: Rgb(52, 74, 150), fg: Rgb(240, 214, 176), trunk_bg: Rgb(52, 74, 150), trunk_fg: Rgb(240, 214, 176) };
         let pal = Palette::for_season(world.season);
         let chop = world.choppiness(t);
         self.sky_pass(ts, world, t);
-        self.build_order(map, cam);
-        let order = std::mem::take(&mut self.order);
-        for &(_, i) in &order {
-            let tile = map.tiles[i];
-            let (mx, my) = ((i % map.w) as i32, (i / map.w) as i32);
-            let (vx, vy) = cam.to_view(mx, my, map);
-            let z = tile.draw_z();
-            let (sx, sy) = cam.project(vx, vy, z);
-            if sx + 2 * cam.hw < 0 || sx - 2 * cam.hw > self.w || sy + 2 * cam.hh < -16 || sy - 12 > self.h {
-                continue;
-            }
-            self.surface(map, &tile, mx, my, sx, sy, ts, &pal, cam, t, chop);
-            self.walls(map, &tile, vx, vy, sx, sy, cam, &pal, ts);
-            if let Some(v) = tile.tree {
-                let set = ts.trees(cam.zoom);
-                let sprite = &set[v as usize % set.len()];
-                let colors = SpriteColors { bg: pal.canopy, fg: pal.canopy_glyph, trunk_bg: pal.trunk, trunk_fg: pal.trunk_glyph };
-                self.sprite(sprite, &tile, mx, my, sx, sy, &colors, true, t);
-            }
-            for e in &world.entities {
-                if e.mx == mx && e.my == my {
-                    self.sprite(ts.player(cam.zoom), &tile, mx, my, sx, sy, &pal_player, false, t);
+        // Walk every view-space tile whose footprint, walls or sprite can touch
+        // the screen, back to front along diagonals of constant vx + vy.
+        const SPRITE_H: i32 = 24;
+        const SPRITE_W: i32 = 16;
+        let (hw, hh) = (cam.hw, cam.hh);
+        let s_min = (-cam.oy - 2 * hh - MAX_Z).div_euclid(hh) - 1;
+        let s_max = (self.h - cam.oy + MAX_Z + hh + SPRITE_H).div_euclid(hh) + 1;
+        let d_min = (-cam.ox - 2 * hw - SPRITE_W).div_euclid(hw) - 1;
+        let d_max = (self.w - cam.ox + 2 * hw + SPRITE_W).div_euclid(hw) + 1;
+        for sdiag in s_min..=s_max {
+            for d in d_min..=d_max {
+                if (sdiag + d) & 1 != 0 {
+                    continue;
+                }
+                let (vx, vy) = ((sdiag + d) / 2, (sdiag - d) / 2);
+                let (mx, my) = cam.view_to_map(vx, vy, map);
+                let Some(tile) = map.get(mx, my) else { continue };
+                let z = tile.draw_z();
+                let (sx, sy) = cam.project(vx, vy, z);
+                self.surface(map, &tile, mx, my, sx, sy, ts, &pal, cam, t, chop);
+                self.walls(map, &tile, vx, vy, mx, my, sx, sy, cam, &pal, ts);
+                if let Some(v) = tile.tree {
+                    let set = ts.trees(cam.zoom);
+                    let sprite = &set[v as usize % set.len()];
+                    let colors = SpriteColors { bg: pal.canopy, fg: pal.canopy_glyph, trunk_bg: pal.trunk, trunk_fg: pal.trunk_glyph };
+                    self.sprite(sprite, &tile, mx, my, sx, sy, &colors, true, t);
+                }
+                for e in &world.entities {
+                    if e.mx == mx && e.my == my {
+                        self.sprite(ts.player(cam.zoom), &tile, mx, my, sx, sy, &pal_player, false, t);
+                    }
                 }
             }
         }
-        self.order = order;
         self.fires(map, world, cam, ts, t);
         self.light_pass(cv, world, t);
         self.weather_pass(cv, ts, world, t);
         if self.show_hud {
             self.hud(cv, ts, world, cam);
         }
+        if settings.open {
+            self.popover(cv, settings);
+        }
+    }
+
+    /// Modal settings window, one row per table item.
+    fn popover(&self, cv: &mut Canvas, settings: &Settings) {
+        let name_w = ITEMS.iter().map(|i| i.name.len()).max().unwrap_or(8);
+        let val_w = ITEMS.iter().flat_map(|i| i.values.iter().map(|v| v.len())).max().unwrap_or(8);
+        let hint = " up/down select   left/right change   esc close ";
+        let inner = (name_w + val_w + 11).max(hint.len());
+        let rows = ITEMS.len() as i32 + 4;
+        let x0 = (self.w - inner as i32 - 2) / 2;
+        let y0 = (self.h - rows) / 2;
+        let (fg, bg, dim) = (Rgb(225, 225, 235), Rgb(28, 30, 44), Rgb(140, 140, 160));
+        let row = |body: &str| format!("│{:<w$}│", body, w = inner);
+        cv.text(x0, y0, &format!("┌{}┐", "─".repeat(inner)), dim, bg);
+        cv.text(x0 + 2, y0, " settings ", fg, bg);
+        cv.text(x0, y0 + 1, &row(""), dim, bg);
+        for (i, item) in ITEMS.iter().enumerate() {
+            let selected = i == settings.cursor;
+            let body = format!(
+                "  {:<nw$}   {} {:^vw$} {}",
+                item.name,
+                if selected { '<' } else { ' ' },
+                settings.label(i),
+                if selected { '>' } else { ' ' },
+                nw = name_w,
+                vw = val_w
+            );
+            let (lf, lb) = if selected { (bg, Rgb(200, 200, 215)) } else { (fg, bg) };
+            let y = y0 + 2 + i as i32;
+            cv.text(x0, y, &row(&body), lf, lb);
+            cv.put(x0, y, '│', dim, bg);
+            cv.put(x0 + inner as i32 + 1, y, '│', dim, bg);
+        }
+        cv.text(x0, y0 + rows - 2, &row(hint), dim, bg);
+        cv.text(x0, y0 + rows - 1, &format!("└{}┘", "─".repeat(inner)), dim, bg);
     }
 
     fn sky_pass(&mut self, ts: &Tileset, world: &World, t: f32) {
@@ -262,31 +316,10 @@ impl Renderer {
         }
     }
 
-    fn build_order(&mut self, map: &Map, cam: &Camera) {
-        let (vw, vh) = cam.view_dims(map);
-        self.view.clear();
-        self.view.resize((vw * vh) as usize, usize::MAX);
-        self.order.clear();
-        for my in 0..map.h as i32 {
-            for mx in 0..map.w as i32 {
-                let (vx, vy) = cam.to_view(mx, my, map);
-                let i = (my * map.w as i32 + mx) as usize;
-                self.view[(vy * vw + vx) as usize] = i;
-                self.order.push((vx + vy, i));
-            }
-        }
-        self.order.sort_unstable();
-    }
-
+    /// Drawn height of the tile at a view position; off-map counts as ground.
     fn view_z(&self, map: &Map, cam: &Camera, vx: i32, vy: i32) -> i32 {
-        let (vw, vh) = cam.view_dims(map);
-        if vx < 0 || vy < 0 || vx >= vw || vy >= vh {
-            return 0;
-        }
-        match self.view[(vy * vw + vx) as usize] {
-            usize::MAX => 0,
-            i => map.tiles[i].draw_z(),
-        }
+        let (mx, my) = cam.view_to_map(vx, vy, map);
+        map.get(mx, my).map(|t| t.draw_z()).unwrap_or(0)
     }
 
     fn base_color(tile: &crate::map::Tile, pal: &Palette) -> Rgb {
@@ -388,7 +421,7 @@ impl Renderer {
     /// Cliff faces. For each column the neighbour directly below is found
     /// geometrically, and the height difference to it is drawn as wall rows.
     #[allow(clippy::too_many_arguments)]
-    fn walls(&mut self, map: &Map, tile: &crate::map::Tile, vx: i32, vy: i32, sx: i32, sy: i32, cam: &Camera, pal: &Palette, ts: &Tileset) {
+    fn walls(&mut self, map: &Map, tile: &crate::map::Tile, vx: i32, vy: i32, mx: i32, my: i32, sx: i32, sy: i32, cam: &Camera, pal: &Palette, ts: &Tileset) {
         let z = tile.draw_z();
         let (thw, thh) = (cam.hw, cam.hh);
         let right = z - self.view_z(map, cam, vx + 1, vy);
@@ -398,8 +431,7 @@ impl Renderer {
             return;
         }
         let surface = Self::base_color(tile, pal);
-        let idx = self.view_index(map, cam, vx, vy);
-        let (mx, my) = ((idx % map.w) as f32, (idx / map.w) as f32);
+        let (mx, my) = (mx as f32, my as f32);
         let (lo, w) = (-thh..thh).map(|dy| row_span(dy, thw, thh)).min_by_key(|&(lo, _)| lo).unwrap_or((0, 0));
         let max_w = (-thh..thh).map(|dy| row_span(dy, thw, thh).1).max().unwrap_or(0);
         let _ = w;
@@ -429,11 +461,6 @@ impl Renderer {
                 }
             }
         }
-    }
-
-    fn view_index(&self, map: &Map, cam: &Camera, vx: i32, vy: i32) -> usize {
-        let (vw, _) = cam.view_dims(map);
-        self.view[(vy * vw + vx) as usize]
     }
 
     /// Draw a billboard anchored so its bottom row sits on the tile's centre
@@ -583,7 +610,7 @@ impl Renderer {
             ts.name,
             world.lights.len(),
         );
-        let help = " wasd/hjkl walk  arrows pan  c centre  r/R rotate  z/Z zoom  g glyphs  [ ] season  , . time  p pause  W weather  f fire  F clear  H hud  q quit ";
+        let help = " tab settings  wasd/hjkl walk  arrows pan  c centre  r/R rotate  z/Z zoom  v fill  g glyphs  [ ] season  , . time  p pause  W weather  f fire  F clear  H hud  q quit ";
         cv.text(0, 0, &line, Rgb(220, 220, 230), Rgb(30, 32, 44));
         cv.text(0, self.h - 1, help, Rgb(160, 160, 176), Rgb(30, 32, 44));
     }
