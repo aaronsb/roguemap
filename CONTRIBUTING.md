@@ -1,7 +1,7 @@
 # Contributing
 
 roguemap is a Rust library crate with two binaries, `roguemap` (the game)
-and `roguemap-edit` (the asset editor). Stable Rust 1.85 or newer, no
+and `roguemap-edit` (the asset editor). Stable Rust 1.87 or newer, no
 system dependencies beyond a terminal with a font that covers the Symbols
 for Legacy Computing block (Unscii 16 is the reference; Adwaita Mono works).
 
@@ -10,11 +10,13 @@ for Legacy Computing block (Unscii 16 is the reference; Adwaita Mono works).
 ```
 make build          # release binaries
 make run            # the game in this terminal
-make check          # the gate: fmt, clippy -D warnings, tests, golden frames
+make check          # the gate: clippy -D warnings, tests, golden frames
+make format         # cargo fmt over the tree
 make snap OUT=x.png ARGS="fill=1 zoom=2 tod=21 fire=1"   # look at a change
 ```
 
-`make check` is what CI runs. It must be green before a pull request.
+`make check` must be green before a pull request. CI runs the same gates
+and adds `cargo fmt --check`, so run `make format` before pushing.
 
 ## How work goes
 

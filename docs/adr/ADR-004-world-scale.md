@@ -16,9 +16,10 @@ a secondary view always shows the other end of the scale.
 **Units.** World positions are metres as `f32`; anything stored discretely
 is centimetres as `i32`. A tile is 2 m by 2 m. Heights, radii and reaches
 in every asset table are metres. Terrain heights are metres: sea level 0,
-relief up to about 300 m in ranges, a valley floor a few metres above the
-water. The person is 2.0 m. A house level is 3 m, a barn 5 m, a tower
-level 4 m. Trees are 6 m (scrub) to 30 m (kapok) by species.
+relief up to 120 m in ranges, a sea bed 12 m down, a valley floor a few
+metres above the water. The person is 2.0 m. A house level is 3 m, a barn
+5 m, a tower level 4 m. Trees are 1 m (sagebrush) to 30 m (kapok) by
+species.
 
 **Zoom levels and ratios.** Four footprints, each an exact halving:
 

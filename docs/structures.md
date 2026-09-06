@@ -201,8 +201,8 @@ Nothing is placed per detail; the block kind, the species and the
 adjacency rules produce all of it. Measured at 168x71 in the snapshot
 timing (`frames=20`, seed 7, a boreal stand at `cx=500 cy=-300`, which is
 the densest forest in the world, and with the inset view of ADR-004 open),
-a frame takes 15.5 ms at 1:8, 15.3 at 1:4, 17.7 at 1:2 and 18.9 at 1:1;
-over the filled world at the origin, 12.5, 14.6, 15.4 and 17.9. Against
+a frame takes 15.0 ms at 1:8, 14.6 at 1:4, 17.4 at 1:2 and 19.0 at 1:1;
+over the filled world at the origin, 12.1, 14.1, 15.1 and 17.8. Against
 the same measurement before the trees were grown, the boreal stand is
 1.1 ms dearer at 1:8 and 1.8 at 1:4 — both of those are the inset, which
 draws 1:1 — 2.1 dearer at 1:2, and 1.1 cheaper at 1:1, where what the
@@ -248,13 +248,13 @@ sweeps, since a hundred thousand discs would cost more than the frame.
 
 What the walk tests is the model at the size it is drawn, not the model
 the grammar grew (`TreeModel::simplify`): leaf clusters within a lattice
-five rows of height across are merged into one, and branches thinner than
-four fifths of a column are dropped, because the foliage that grew on them
+four rows of height across are merged into one, and branches thinner than
+about one column are dropped, because the foliage that grew on them
 covers them. A tree with no foliage — bare in winter, or a snag — keeps
 every twig, since the twigs are all there is of it. A grown model is
-cached per species, seed, foliage and state in the renderer
-(`grid::ModelCache`), so a tree in view is grown once and not once a
-frame.
+cached per species, seed, foliage (quantised to nine steps), state and
+detail level in the renderer (`grid::ModelCache`), so a tree in view is
+grown once and not once a frame.
 
 ## Porous canopies
 

@@ -13,7 +13,7 @@ is one command.
   `roguemap::snapshot::render`, and compares each with its reference in
   `tests/golden/<name>.frame`: width and height as u32 little-endian, then
   per cell a u32 codepoint and the foreground and background bytes. The
-  references are committed (about half a megabyte for eleven 120x40
+  references are committed (about half a megabyte for twelve 120x40
   frames). The comparison scores a frame by the percentage of identical
   cells, the percentage with the same glyph, and the mean six-channel
   colour distance; it passes at `GOLDEN_MIN_IDENTICAL` (default 98) and

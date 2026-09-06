@@ -31,7 +31,9 @@ or `./tree-snap.sh oak.png "gnarled oak" 120 60 7 1`, which does both;
 `make tree-snap OUT=oak.png NAME="gnarled oak" ARGS="110 55 7 1"` wraps
 that, and `make screenshots` regenerates the six previews in
 docs/screenshots.
-The arguments after the output file are `cols rows seed season`, and
+The arguments after the output file are `cols rows seed season`, which
+default to 120, 60, 7 and 1; each also has a keyword form (`cols=`,
+`rows=`, `seed=`, `season=`) that wins over the positional, and
 `foliage=F` and `state=dead` may follow in any order.
 
 ## Styles
@@ -65,11 +67,11 @@ species in `[species.lsystem]`.
 | `forks` | 1.. | Branches in a whorl, or ways the trunk forks. |
 | `taper` | 0.1..1 | Factor a segment's length and radius take on entering a branch (`[`) and on every `!`. |
 | `droop` | -1..1 | Extra bend per segment drawn inside a branch, as a fraction of `branch_angle`: positive hangs the branch, negative lifts it. |
-| `leaf_density` | 0..1 | Chance an `L` becomes a cluster; thinning opens a crown without touching the branches. It is also how solid the crown is on the ray walk: the chance a sample inside one meets foliage rather than passing through (docs/structures.md, "Porous canopies"). The evergreen habits carry 0.85 and the broadleaf ones 0.7. |
+| `leaf_density` | 0..1 | Chance an `L` becomes a cluster; thinning opens a crown without touching the branches. It is also how solid the crown is on the ray walk: the chance a sample inside one meets foliage rather than passing through (docs/structures.md, "Porous canopies"). `excurrent` and `palm` carry 0.85, `shrub` 0.8 and the rest 0.7. |
 | `asymmetry` | 0..1 | How one-sided the instance is: a seeded direction the trunk leans in, with limbs on that side longer and the far side shorter. A parkland tree keeps it low, a gnarled or wind-shaped one high. |
-| `jitter` | 0..1 | Small seeded noise on every branch's angle and length and every cluster's position. A healthy tree is symmetric but never exactly, so a live tree always carries some; the default is 0.08. |
-| `prune_height` | 0..1 | Fraction of the tree's height with no live branches, because a tree self-prunes as it grows. |
-| `depth` | 0..12 | How many times the rules are applied. |
+| `jitter` | 0..1 | Small seeded noise on every branch's angle and length and every cluster's position. A healthy tree is symmetric but never exactly, so a live tree always carries some. The habits carry 0.09 to 0.12; a species with no habit falls back to 0.08. |
+| `prune_height` | 0..1 | Fraction of the grown tree's measured height with no live branches, because a tree self-prunes as it grows. The cut is capped at 0.95 of the height, and a cut that would leave a bare pole is discarded. |
+| `depth` | 0..12 inclusive | How many times the rules are applied. |
 | `length` | > 0 metres | Length of a first-level `F`, before the model is scaled to `size`. |
 | `leaf_radius` | >= 0 metres | Radius of one `L` cluster, in final metres: a clump of leaves is about a metre across whatever shape its tree is, so this does not scale with the tree. |
 
@@ -173,7 +175,8 @@ depth = 7
 `shape = "lsystem"` and a habit imply each other: a row with one and not
 the other is a load error naming the row. A species with no `style` must
 write its own grammar in `[species.lsystem]` with at least `axiom`,
-`rules`, `depth`, `angle`, `length` and `leaf_radius`; a species with a
+`depth`, `angle`, `length` and `leaf_radius`, and its `taper` falls back
+to 1.0; a species with a
 style may also replace the habit's `axiom`, `rules` or `dead_rules`
 outright. Everything is checked when the assets load, and the message
 names the file, the row and what is wrong.
@@ -190,9 +193,10 @@ an evergreen at 1 and follows `biome::vigour` for a species that `sheds`.
 the season, takes its bark colour from `TreeModel::bark`, which greys the
 live colour, and grows from the style's `dead_rules`: fewer and shorter
 branches, a broken crown. Without dead rules it grows the live grammar
-one level shallower. Which instances are dead is `Species::dead(seed)`, a
-hash against `dead_chance`, so the same tile carries the same dead tree
-every time the chunk is generated.
+one level shallower. Which instances are dead is
+`volume::stands_dead(tile seed, dead_chance)`, a hash against the
+species' `dead_chance`, so the same tile carries the same dead tree every
+time the chunk is generated.
 
 A bare or dead tree keeps the scale its leafy self had, so a winter oak
 is a bare oak and not a swollen one, and a dead one with a broken crown
@@ -231,8 +235,8 @@ ellipsoid holding them, and branches thinner than `min_radius` are
 dropped, since the foliage that grew on them covers them. A model with no
 foliage — bare, or dead — keeps every twig, because the twigs are all
 there is of it. The renderer keeps the simplified models in a cache keyed
-by species, seed, foliage and state, so a tree in view is grown once and
-not once a frame.
+by species, seed, foliage (quantised to nine steps), state and detail
+level, so a tree in view is grown once and not once a frame.
 
 ## The preview
 
