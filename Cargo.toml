@@ -3,6 +3,8 @@ name = "roguemap"
 version = "0.1.0"
 edition = "2021"
 description = "Isometric height-mapped terrain renderer for the terminal"
+license = "MIT"
+repository = "https://github.com/aaronsb/roguemap"
 default-run = "roguemap"
 build = "build.rs"
 
