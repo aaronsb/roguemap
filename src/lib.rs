@@ -10,6 +10,7 @@ pub mod blocks;
 pub mod camera;
 pub mod canvas;
 pub mod editor;
+pub mod frame;
 pub mod grid;
 pub mod input;
 pub mod lighting;

@@ -27,6 +27,9 @@ assets/
   lights.toml       named light specs: colour, radius, intensity, falloff,
                     flicker
   settings.toml     settings rows: key, label, values, default, shortcut
+  ui.toml           overlay frames: name, title, content kind, anchor,
+                    size, border, background, z, priority, show rule,
+                    toggle key (ADR-005)
   tilesets/
     petscii.toml    glyph roles and sprite vocabulary for the PETSCII set
     ascii.toml      the same for the ASCII set
@@ -131,7 +134,9 @@ positive, block levels within `max_levels`, window bands rising within a
 level, volume overrides positive), and requires what the engine relies on: every Köppen code the classifier emits has a
 biome, the four seasons and four surfaces are in order, the ten settings
 keys exist and every `glyphs` value has a tileset, a `stone` material, a
-`campfire` prop with a light, and `player` as the first creature. A
+`campfire` prop with a light, `player` as the first creature, and every
+frame of `ui.toml` naming a content kind code supplies and a key that can
+be named. A
 failure reports the file, the line for a parse error, and the table row,
 as `species.toml:31: species[4] "juniper": unknown variant \`bush\``. The
 loader tests (`make test-assets`) load the embedded set, check every

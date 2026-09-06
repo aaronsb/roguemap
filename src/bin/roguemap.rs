@@ -9,6 +9,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use roguemap::assets::Assets;
 use roguemap::camera::Camera;
 use roguemap::canvas::Canvas;
+use roguemap::frame::{Flow, FrameCtx, Frames, Item, List};
 use roguemap::input::{self, Action};
 use roguemap::map::Map;
 use roguemap::render::{Renderer, Scene};
@@ -19,7 +20,7 @@ use roguemap::worldmap::WorldMap;
 use roguemap::{snapshot, terminal, ui};
 
 /// Whether the main loop goes on after a key.
-enum Flow {
+enum Loop {
     Continue,
     Quit,
 }
@@ -31,6 +32,8 @@ struct App {
     cam: Camera,
     settings: Settings,
     wmap: WorldMap,
+    /// The overlay frames of ADR-005; which of them are open is the mode.
+    frames: Frames,
     renderer: Renderer,
     /// One per value of the glyphs setting.
     tilesets: Vec<Tileset>,
@@ -42,6 +45,7 @@ struct App {
 impl App {
     fn new(assets: Rc<Assets>, seed: u64, size: usize, sw: i32, sh: i32) -> App {
         let tilesets = Tileset::all(&assets);
+        let frames = ui::frames(&assets);
         let mut map = Map::new(size, size, seed, assets.clone());
         let mut world = World::new(seed);
         let settings = Settings::new(&assets);
@@ -56,6 +60,7 @@ impl App {
             cam,
             settings,
             wmap: WorldMap::new(),
+            frames,
             renderer: Renderer::new(sw, sh),
             tilesets,
             sw,
@@ -69,52 +74,83 @@ impl App {
         self.renderer.resize(w, h);
     }
 
-    /// Draw the current mode into `cv` at animation time `t`.
+    /// Draw the scene and every open frame into `cv` at animation time
+    /// `t`. A full-screen opaque frame covers the scene, so nothing is
+    /// rendered under one.
     fn frame(&mut self, cv: &mut Canvas, t: f32) {
         let opts = self.settings.apply(&mut self.map, &mut self.world);
+        let hud = self.settings.get("hud") == 0;
+        self.frames.set_open("hud-top", hud);
+        self.frames.set_open("hud-help", hud);
         let ts = &self.tilesets[self.settings.get("glyphs")];
-        if self.wmap.open {
-            let player = self.world.player().map(|e| (e.mx, e.my));
-            self.wmap.draw(cv, &self.map, &self.world, player);
-            return;
+        let mut lights = 0;
+        if !self.frames.is_open("worldmap") {
+            self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t), &opts);
+            lights = self.world.lights.len() + self.renderer.frame_light_count();
         }
-        self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t), &opts);
-        if self.settings.get("hud") == 0 {
-            ui::hud(cv, &self.map, ts, &self.world, &self.cam, self.world.lights.len() + self.renderer.frame_light_count());
-        }
-        if self.settings.open {
-            ui::popover(cv, &self.settings);
+        let ctx = FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts, settings: &self.settings, wmap: &self.wmap, lights, focused: false };
+        self.frames.update(&ctx);
+        self.frames.draw(cv, &ctx);
+    }
+
+    /// Add a line to the history frame, stamped with the time of day.
+    fn log(&mut self, text: impl Into<String>) {
+        let stamp = format!("{:02}:{:02}", self.world.tod.floor() as i32, (self.world.tod.fract() * 60.0) as i32);
+        if let Some(list) = self.frames.content_mut::<List>("history") {
+            list.push(Item::detailed(text, stamp));
         }
     }
 
-    /// Dispatch a key press to the table for the current mode.
-    fn handle_key(&mut self, k: KeyEvent) -> Flow {
+    /// Open or close a frame. Opening the world map puts its cursor on the
+    /// player.
+    fn toggle(&mut self, name: &str) {
+        if self.frames.toggle(name) && name == "worldmap" {
+            self.wmap.cursor = self.world.player().map(|e| (e.mx, e.my)).unwrap_or((0, 0));
+        }
+    }
+
+    /// Dispatch a key press: the focused frame first, then the binding
+    /// table of the frames whose state the app owns, and the scene table
+    /// when nothing has focus.
+    fn handle_key(&mut self, k: KeyEvent) -> Loop {
         if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
-            return Flow::Quit;
+            return Loop::Quit;
         }
-        if self.wmap.open {
-            if let Some(a) = input::lookup(input::WORLDMAP, k.code) {
-                self.worldmap_action(a);
+        let Some(focused) = self.frames.focus().map(str::to_string) else {
+            return match input::lookup(input::SCENE, k.code) {
+                Some(a) => self.scene_action(a),
+                None => Loop::Continue,
+            };
+        };
+        match self.frames.key(k.code) {
+            Flow::Handled | Flow::Close => return Loop::Continue,
+            Flow::Submit(line) => {
+                self.log(format!("said \"{line}\""));
+                return Loop::Continue;
             }
-        } else if self.settings.open {
-            if let Some(a) = input::lookup(input::SETTINGS, k.code) {
-                self.settings_action(a);
-            }
-        } else if let Some(a) = input::lookup(input::SCENE, k.code) {
-            return self.scene_action(a);
+            Flow::Pass => {}
         }
-        Flow::Continue
+        match focused.as_str() {
+            "settings" => {
+                if let Some(a) = input::lookup(input::SETTINGS, k.code) {
+                    self.settings_action(a);
+                }
+            }
+            "worldmap" => {
+                if let Some(a) = input::lookup(input::WORLDMAP, k.code) {
+                    self.worldmap_action(a);
+                }
+            }
+            _ => {}
+        }
+        Loop::Continue
     }
 
-    fn scene_action(&mut self, a: Action) -> Flow {
+    fn scene_action(&mut self, a: Action) -> Loop {
         let (sw, sh) = (self.sw, self.sh);
         match a {
-            Action::Quit => return Flow::Quit,
-            Action::OpenSettings => self.settings.open = true,
-            Action::OpenWorldMap => {
-                self.wmap.cursor = self.world.player().map(|e| (e.mx, e.my)).unwrap_or((0, 0));
-                self.wmap.open = true;
-            }
+            Action::Quit => return Loop::Quit,
+            Action::Toggle(name) => self.toggle(name),
             Action::Walk(dx, dy) => self.walk((dx, dy)),
             Action::Pan(dx, dy) => self.cam.pan(dx, dy),
             Action::Centre => {
@@ -125,19 +161,28 @@ impl App {
             Action::RotateQuarter(steps) => self.cam.rotate(steps, sw, sh),
             Action::RotateDegrees(deg) => self.cam.rotate_by(deg.to_radians(), sw, sh),
             Action::Zoom(steps) => self.cam.zoom_by(steps, sw, sh),
-            Action::Cycle(key) => self.settings.cycle(key, 1),
+            Action::Cycle(key) => {
+                self.settings.cycle(key, 1);
+                if key == "weather" {
+                    let row = self.settings.find(key).expect("the loader checks every required row exists");
+                    self.log(format!("weather set to {}", self.settings.label(row)));
+                }
+            }
             Action::StepSeason(q) => self.world.step_season(q),
             Action::StepHour(h) => self.world.step_hour(h),
             Action::Campfire => self.light_campfire(),
-            Action::ClearFires => self.world.lights.clear(),
+            Action::ClearFires => {
+                self.world.lights.clear();
+                self.log("put the fires out");
+            }
             _ => {}
         }
-        Flow::Continue
+        Loop::Continue
     }
 
     fn settings_action(&mut self, a: Action) {
         match a {
-            Action::Close => self.settings.open = false,
+            Action::Close => self.frames.set_open("settings", false),
             Action::CursorMove(dir) => self.settings.move_cursor(dir),
             Action::Adjust(dir) => self.settings.cycle_row(self.settings.cursor, dir),
             _ => {}
@@ -146,13 +191,14 @@ impl App {
 
     fn worldmap_action(&mut self, a: Action) {
         match a {
-            Action::Close => self.wmap.open = false,
+            Action::Close => self.frames.set_open("worldmap", false),
             Action::CursorStep(dx, dy) => self.wmap.move_cursor(dx, dy),
             Action::Extent(dir) => self.wmap.step_extent(dir),
             Action::Teleport => {
                 let (tx, ty) = self.wmap.teleport(&self.map, &mut self.world);
                 self.cam.look_at(tx, ty, &self.map, self.sw, self.sh);
-                self.wmap.open = false;
+                self.frames.set_open("worldmap", false);
+                self.log(format!("teleported to {tx}, {ty}"));
             }
             _ => {}
         }
@@ -164,14 +210,20 @@ impl App {
     /// east.
     fn walk(&mut self, dir: (i32, i32)) {
         let (dx, dy) = self.cam.walk_step(self.settings.screen_space(), dir.0, dir.1);
-        self.world.try_move(&self.map, dx, dy);
+        if self.world.try_move(&self.map, dx, dy) {
+            if let Some((mx, my)) = self.world.player().map(|p| (p.mx, p.my)) {
+                self.log(format!("walked to {mx}, {my}"));
+            }
+        }
         self.cam.follow(&self.world, &self.map, self.sw, self.sh);
     }
 
     /// Light a campfire on the tile at the screen centre.
     fn light_campfire(&mut self) {
         let (mx, my) = self.cam.center_tile(&self.map, self.sw, self.sh);
-        self.world.light_campfire(&self.map, mx, my);
+        if self.world.light_campfire(&self.map, mx, my) {
+            self.log(format!("lit a campfire at {mx}, {my}"));
+        }
     }
 }
 
@@ -230,7 +282,7 @@ fn main() -> std::io::Result<()> {
         while event::poll(frame.saturating_sub(now.elapsed()))? {
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    if let Flow::Quit = app.handle_key(k) {
+                    if let Loop::Quit = app.handle_key(k) {
                         return Ok(());
                     }
                 }

@@ -4,11 +4,12 @@
 use crossterm::event::KeyCode;
 
 /// What a key does. Scene actions come first, then the settings popover's,
-/// then the world map's.
+/// then the world map's, then the ones every focused frame shares.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
-    OpenSettings,
-    OpenWorldMap,
+    /// Open or close the frame of this name (ADR-005); the row in
+    /// `assets/ui.toml` carries the same key, which a test checks.
+    Toggle(&'static str),
     Quit,
     /// Move the player by a screen (or map) direction.
     Walk(i32, i32),
@@ -47,8 +48,8 @@ use Action::*;
 use KeyCode::{Char, Down, Enter, Esc, Left, Right, Tab, Up};
 
 pub const SCENE: &[Binding] = &[
-    Binding { keys: &[(Tab, OpenSettings), (Char('o'), OpenSettings)], label: "tab", help: "settings" },
-    Binding { keys: &[(Char('m'), OpenWorldMap)], label: "m", help: "world map" },
+    Binding { keys: &[(Tab, Toggle("settings")), (Char('o'), Toggle("settings"))], label: "tab", help: "settings" },
+    Binding { keys: &[(Char('m'), Toggle("worldmap"))], label: "m", help: "world map" },
     Binding {
         keys: &[
             (Char('w'), Walk(0, -1)),
@@ -80,6 +81,10 @@ pub const SCENE: &[Binding] = &[
     Binding { keys: &[(Char('f'), Campfire)], label: "f", help: "fire" },
     Binding { keys: &[(Char('F'), ClearFires)], label: "F", help: "clear" },
     Binding { keys: &[(Char('H'), Cycle("hud"))], label: "H", help: "hud" },
+    Binding { keys: &[(Char('i'), Toggle("inventory"))], label: "i", help: "inventory" },
+    Binding { keys: &[(Char('I'), Toggle("stats"))], label: "I", help: "stats" },
+    Binding { keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
+    Binding { keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
     Binding { keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
 ];
 
@@ -117,6 +122,13 @@ pub const WORLDMAP: &[Binding] = &[
     Binding { keys: &[(Esc, Close), (Char('m'), Close), (Char('q'), Close)], label: "m/esc", help: "close" },
 ];
 
+/// Keys every focused frame shares (ADR-005). A frame's own content sees
+/// the key first, so a prompt collects characters before these apply.
+pub const FRAME: &[Binding] = &[
+    Binding { keys: &[(Up, CursorMove(-1)), (Char('k'), CursorMove(-1)), (Down, CursorMove(1)), (Char('j'), CursorMove(1))], label: "up/down", help: "scroll" },
+    Binding { keys: &[(Esc, Close)], label: "esc", help: "close" },
+];
+
 /// The action a key triggers in a mode.
 pub fn lookup(table: &[Binding], key: KeyCode) -> Option<Action> {
     table.iter().flat_map(|b| b.keys.iter()).find(|(k, _)| *k == key).map(|&(_, a)| a)
@@ -135,7 +147,7 @@ mod tests {
 
     #[test]
     fn keys_are_unique_within_a_mode() {
-        for (name, table) in [("scene", SCENE), ("settings", SETTINGS), ("worldmap", WORLDMAP)] {
+        for (name, table) in [("scene", SCENE), ("settings", SETTINGS), ("worldmap", WORLDMAP), ("frame", FRAME)] {
             let keys: Vec<KeyCode> = table.iter().flat_map(|b| b.keys.iter().map(|(k, _)| *k)).collect();
             for (i, k) in keys.iter().enumerate() {
                 assert!(!keys[..i].contains(k), "{name}: {k:?} bound twice");
@@ -146,7 +158,7 @@ mod tests {
     #[test]
     fn lookup_finds_aliases() {
         assert_eq!(lookup(SCENE, Char('k')), Some(Walk(0, -1)));
-        assert_eq!(lookup(SCENE, Tab), Some(OpenSettings));
+        assert_eq!(lookup(SCENE, Tab), Some(Toggle("settings")));
         assert_eq!(lookup(SCENE, Char('x')), None);
         assert_eq!(lookup(WORLDMAP, Char('t')), Some(Teleport));
     }
@@ -156,5 +168,17 @@ mod tests {
         assert!(help_line(SCENE, "  ").starts_with(" tab settings  m world map  "));
         assert!(help_line(SCENE, "  ").ends_with("  q quit "));
         assert_eq!(help_line(SETTINGS, "   "), " up/down select   left/right change   esc close ");
+        assert_eq!(help_line(FRAME, "  "), " up/down scroll  esc close ");
+        // The bottom row of a 120-column frame shows only this much, so
+        // entries added after it do not change the golden frames.
+        let scene = help_line(SCENE, "  ");
+        assert!(scene.len() > 120, "the scene help line already runs past 120 columns");
+        assert_eq!(
+            &scene[..120],
+            " tab settings  m world map  wasd/hjkl walk  arrows pan  c centre  r/R ( ) rotate  z/Z zoom  v fill  g glyphs  [ ] season"
+        );
+        for frame in ["inventory", "stats", "history", "conversation"] {
+            assert!(SCENE.iter().flat_map(|b| b.keys).any(|&(_, a)| a == Toggle(frame)), "{frame} has no toggle key");
+        }
     }
 }

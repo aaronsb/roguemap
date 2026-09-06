@@ -1,0 +1,137 @@
+# Overlay frames (ADR-005). One row per rectangle drawn over the scene.
+#
+# anchor      top_left top top_right left centre right bottom_left bottom
+#             bottom_right full
+# size        cols and rows are whole cells, a fraction of the screen, or
+#             "fill" (the whole axis) or "auto" (what the content asks
+#             for); min_cols and min_rows drop the frame when they do not
+#             fit
+# border      none line double chrome
+# background  none, opaque, or { tint = 0.0..1.0 }; only opaque frames
+#             hide the ones below them
+# z           draw order, lowest first; the focused frame draws last
+# priority    which frame survives when two overlap
+# show        always, zoomed_out, zoomed_in, on_key, never, or
+#             { min_columns = N }
+# key         toggle key, bound to Toggle(name) in input.rs
+# content     the content kind code supplies; the frame's name by default
+
+[[frame]]
+name = "hud-top"
+description = "The status bar on the top row: heading, zoom, season, clock, weather, glyph set, light count and the tile under the player."
+content = "hud"
+anchor = "top"
+border = "none"
+z = 10
+priority = 20
+show = "always"
+background = "none"
+size = { cols = "fill", rows = 1 }
+
+[[frame]]
+name = "hud-help"
+description = "The generated scene key help on the bottom row."
+content = "help"
+anchor = "bottom"
+border = "none"
+z = 10
+priority = 20
+show = "always"
+background = "none"
+size = { cols = "fill", rows = 1 }
+
+[[frame]]
+name = "settings"
+description = "The modal settings window, one row per entry in settings.toml, sized to its own table."
+title = "settings"
+content = "settings"
+anchor = "centre"
+border = "line"
+z = 60
+priority = 80
+key = "tab"
+show = "on_key"
+background = "opaque"
+size = { cols = "auto", rows = "auto", min_cols = 20, min_rows = 5 }
+
+[[frame]]
+name = "worldmap"
+description = "The full-screen world map: biomes plotted top-down with a cursor for teleporting."
+content = "worldmap"
+anchor = "full"
+border = "none"
+z = 90
+priority = 90
+key = "m"
+show = "on_key"
+background = "opaque"
+size = { cols = "fill", rows = "fill" }
+
+[[frame]]
+name = "inset"
+description = "The second view of ADR-004 at the other end of the zoom scale; the content is a stub, so the frame never shows yet."
+title = "inset"
+content = "inset"
+anchor = "bottom_right"
+border = "chrome"
+z = 40
+priority = 40
+show = "never"
+background = "opaque"
+size = { cols = 0.25, rows = 0.3, min_cols = 20, min_rows = 8 }
+
+[[frame]]
+name = "inventory"
+description = "What the character carries; empty until there are items to carry."
+title = "inventory"
+content = "inventory"
+anchor = "left"
+border = "line"
+z = 50
+priority = 60
+key = "i"
+show = "on_key"
+background = "opaque"
+size = { cols = 0.22, rows = 0.6, min_cols = 24, min_rows = 8 }
+
+[[frame]]
+name = "stats"
+description = "Where the character stands and what the world is doing there: position, biome, temperature, height, time and weather."
+title = "stats"
+content = "stats"
+anchor = "right"
+border = "line"
+z = 50
+priority = 65
+key = "I"
+show = "on_key"
+background = "opaque"
+size = { cols = 0.22, rows = 0.6, min_cols = 24, min_rows = 8 }
+
+[[frame]]
+name = "history"
+description = "The last fifty things that happened: moves, campfires, teleports, weather changes and what was said."
+title = "history"
+content = "history"
+anchor = "centre"
+border = "line"
+z = 50
+priority = 55
+key = "L"
+show = "on_key"
+background = "opaque"
+size = { cols = 0.4, rows = 0.4, min_cols = 30, min_rows = 8 }
+
+[[frame]]
+name = "conversation"
+description = "Wrapped talk with a prompt line; what is typed is echoed here and logged in the history."
+title = "conversation"
+content = "conversation"
+anchor = "bottom"
+border = "line"
+z = 55
+priority = 70
+key = "C"
+show = "on_key"
+background = "opaque"
+size = { cols = 0.5, rows = 0.3, min_cols = 30, min_rows = 6 }

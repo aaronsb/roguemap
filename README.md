@@ -45,8 +45,8 @@ the help line at the bottom of the screen.
 
 | Key | Action |
 |---|---|
-| `Tab` or `o` | open the settings window |
-| `m` | open the world map |
+| `Tab` or `o` | the settings window |
+| `m` | the world map |
 | `w a s d` or `h j k l` | walk the player; the camera follows |
 | arrows | pan by one tile |
 | `c` | centre on the player |
@@ -62,13 +62,50 @@ the help line at the bottom of the screen.
 | `f` | light a campfire at the screen centre |
 | `F` | put out all fires |
 | `H` | toggle the HUD |
+| `i` | the inventory |
+| `I` | the stats pane |
+| `L` | the history log |
+| `C` | the conversation prompt |
 | `q` or `Esc` | quit |
+
+`Tab`, `m`, `i`, `I`, `L` and `C` each toggle a frame (see below): the same
+key opens and closes it, and `Esc` closes the focused frame and gives the
+keys back to the scene.
 
 `Ctrl-C` quits from any mode. In the world map, arrows or `w a s d` /
 `h j k l` move the cursor, `z` / `Z` change the extent, `Enter` or `t`
 teleports, and `m`, `Esc` or `q` close it. In the settings window, up and
 down (or `k` / `j`) pick a row, left and right (or `h` / `l`, `Enter`,
-space) change it, and `Esc`, `Tab` or `q` close it.
+space) change it, and `Esc`, `Tab` or `q` close it. In a list or text
+frame, up and down (or `k` / `j`) scroll and select, and `Esc` closes;
+in the conversation, typing goes to the prompt and `Enter` says it.
+
+## Frames
+
+Everything drawn over the scene is a frame: a rectangle with an anchor, a
+size, a border, a background, a draw order, a priority and a rule for when
+it shows. The rows live in `assets/ui.toml` and the content kinds live in
+`src/ui.rs` ([ADR-005](docs/adr/ADR-005-overlay-frames.md)). At most one
+frame is focused; it takes the keys first and draws last, and `Esc`
+returns focus to the scene. Where two frames collide the higher priority
+wins, so a small screen keeps the panes that matter; a frame whose minimum
+size does not fit is dropped.
+
+| Frame | Key | Where | What |
+|---|---|---|---|
+| hud-top | | top row | status: heading, zoom, season, clock, weather, glyph set, lights, the tile under the player |
+| hud-help | | bottom row | the generated key help |
+| settings | `Tab` or `o` | centre | the settings table, sized to itself |
+| worldmap | `m` | full screen | biomes plotted top-down, with a teleport cursor |
+| inset | | bottom right | the second view of [ADR-004](docs/adr/ADR-004-world-scale.md); a stub, so it never shows yet |
+| inventory | `i` | left | what the character carries (empty for now) |
+| stats | `I` | right | position, biome, temperature, height, time, weather |
+| history | `L` | centre | the last fifty events: moves, campfires, teleports, weather changes, what was said |
+| conversation | `C` | bottom | wrapped text with a prompt; what is said is echoed and logged |
+
+`ui.toml` names each frame's toggle key and `src/input.rs` binds it to
+`Toggle(name)`; a test keeps the two in step. `roguemap --snap` takes
+`open=name,name` to render frames headless.
 
 ## Settings
 
@@ -95,8 +132,9 @@ mirrors it (a test keeps the two in step).
 ## Assets
 
 Everything that describes a thing in the world (biomes, species, materials,
-props, building kinds, creatures, surfaces, lights, settings rows, glyph
-sets and hand-drawn sprites) is a TOML or text file under `assets/`,
+props, building kinds, creatures, surfaces, lights, settings rows, overlay
+frames, glyph sets and hand-drawn sprites) is a TOML or text file under
+`assets/`,
 embedded into the binary at build time. Set `ROGUEMAP_ASSETS=<dir>` to load
 the same layout from disk instead, with no rebuild; a missing directory or a
 bad row is an error naming the file and row. `make assets-export` writes

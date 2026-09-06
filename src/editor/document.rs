@@ -30,6 +30,9 @@ pub enum FileKind {
     Surfaces,
     Lights,
     Settings,
+    /// The overlay frames of ADR-005. Held so the set round-trips and
+    /// validates; the editor has no pane for them yet.
+    Ui,
     Tileset,
 }
 
@@ -45,6 +48,7 @@ impl FileKind {
             p if p == TABLES[6] => FileKind::Surfaces,
             p if p == TABLES[7] => FileKind::Lights,
             p if p == TABLES[8] => FileKind::Settings,
+            p if p == TABLES[9] => FileKind::Ui,
             p if p.starts_with("tilesets/") && p.ends_with(".toml") => FileKind::Tileset,
             _ => return None,
         })
@@ -63,6 +67,7 @@ impl FileKind {
             FileKind::Surfaces => render_as::<SurfacesFile>(root),
             FileKind::Lights => render_as::<LightsFile>(root),
             FileKind::Settings => render_as::<SettingsFile>(root),
+            FileKind::Ui => render_as::<UiFile>(root),
             FileKind::Tileset => render_as::<TilesetFile>(root),
         }
     }
@@ -81,6 +86,7 @@ impl FileKind {
             (FileKind::Surfaces, _) => check_as::<DensityRow>(row),
             (FileKind::Lights, _) => check_as::<LightRow>(row),
             (FileKind::Settings, _) => check_as::<SettingRow>(row),
+            (FileKind::Ui, _) => check_as::<FrameRow>(row),
             (FileKind::Tileset, _) => check_as::<TilesetFile>(row),
         }
     }
@@ -674,7 +680,10 @@ mod tests {
         let theirs = a.to_files();
         for (path, text) in &theirs {
             let mine = ours.iter().find(|(p, _)| p == path).map(|(_, t)| t).unwrap_or_else(|| panic!("{path} missing"));
-            assert_eq!(mine, text, "{path}");
+            // The editor keeps a file's leading comment block and renders
+            // the rest exactly as the loader's own export does.
+            let head = d.files.iter().find(|f| &f.path == path).map(|f| f.head.as_str()).unwrap_or("");
+            assert_eq!(mine, &format!("{head}{text}"), "{path}");
         }
         assert!(d.validate().is_ok());
     }

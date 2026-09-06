@@ -3,6 +3,7 @@
 
 use crate::biome;
 use crate::canvas::{Canvas, Rgb};
+use crate::frame::Rect;
 use crate::input::{self, WORLDMAP};
 use crate::map::{Map, ALPINE_Z, SEA};
 use crate::palette::{Palette, ROCK, SAND};
@@ -15,7 +16,6 @@ pub const SCALES: [i32; 3] = [1, 4, 16];
 pub const SCALE_NAMES: [&str; 3] = ["small", "medium", "large"];
 
 pub struct WorldMap {
-    pub open: bool,
     pub scale: usize,
     /// Cursor in map coordinates.
     pub cursor: (i32, i32),
@@ -29,7 +29,7 @@ impl Default for WorldMap {
 
 impl WorldMap {
     pub fn new() -> WorldMap {
-        WorldMap { open: false, scale: 1, cursor: (0, 0) }
+        WorldMap { scale: 1, cursor: (0, 0) }
     }
 
     pub fn stride(&self) -> (i32, i32) {
@@ -87,18 +87,18 @@ impl WorldMap {
         col.scale(lift).lerp(plot.snow(), world.snow_at(c.temp))
     }
 
-    /// Draw the map over the whole canvas.
-    pub fn draw(&self, cv: &mut Canvas, map: &Map, world: &World, player: Option<(i32, i32)>) {
-        self.plot(cv, map, world, player);
-        Self::crosshair(cv);
-        self.header(cv, map);
-        Self::legend(cv, map, world);
+    /// Draw the map over the frame's rectangle.
+    pub fn draw(&self, cv: &mut Canvas, rect: Rect, map: &Map, world: &World, player: Option<(i32, i32)>) {
+        self.plot(cv, rect, map, world, player);
+        Self::crosshair(cv, rect);
+        self.header(cv, rect, map);
+        Self::legend(cv, rect, map, world);
     }
 
     /// Biome colours per cell, averaged over a 2x2 sub-sample at the coarse
     /// extents so they do not alias, with the player marked.
-    fn plot(&self, cv: &mut Canvas, map: &Map, world: &World, player: Option<(i32, i32)>) {
-        let (w, h) = (cv.w, cv.h);
+    fn plot(&self, cv: &mut Canvas, rect: Rect, map: &Map, world: &World, player: Option<(i32, i32)>) {
+        let (w, h) = (rect.w, rect.h);
         let (sx, sy) = self.stride();
         let (cx, cy) = self.cursor;
         let x0 = cx - (w / 2) * sx;
@@ -122,18 +122,18 @@ impl WorldMap {
                     let avg = |f: fn(&Rgb) -> u8| (cs.iter().map(|c| f(c) as u32).sum::<u32>() / 4) as u8;
                     Rgb(avg(|c| c.0), avg(|c| c.1), avg(|c| c.2))
                 };
-                cv.put(col, row, ' ', c, c);
+                cv.put(rect.x + col, rect.y + row, ' ', c, c);
             }
         }
         if let Some((px, py)) = player {
             let (col, row) = ((px - x0) / sx, (py - y0) / sy);
-            cv.glyph(col, row, '@', Rgb(255, 255, 255));
+            cv.glyph(rect.x + col, rect.y + row, '@', Rgb(255, 255, 255));
         }
     }
 
     /// Crosshair at the cursor, which is always the screen centre.
-    fn crosshair(cv: &mut Canvas) {
-        let (ccol, crow) = (cv.w / 2, cv.h / 2);
+    fn crosshair(cv: &mut Canvas, rect: Rect) {
+        let (ccol, crow) = (rect.x + rect.w / 2, rect.y + rect.h / 2);
         let white = Rgb(255, 255, 255);
         for d in 2..5 {
             cv.glyph(ccol - d, crow, '─', white);
@@ -145,7 +145,7 @@ impl WorldMap {
     }
 
     /// Extent, cursor position and the climate under it.
-    fn header(&self, cv: &mut Canvas, map: &Map) {
+    fn header(&self, cv: &mut Canvas, rect: Rect, map: &Map) {
         let (sx, sy) = self.stride();
         let (cx, cy) = self.cursor;
         let assets = &map.assets;
@@ -167,23 +167,23 @@ impl WorldMap {
             lead,
             assets.materials[b.material].name
         );
-        cv.text(0, 0, &header, CHROME.text, CHROME.bar);
+        cv.text(rect.x, rect.y, &header, CHROME.text, CHROME.bar);
     }
 
     /// Biome swatches along the bottom row, then the key hints.
-    fn legend(cv: &mut Canvas, map: &Map, world: &World) {
-        let (w, h) = (cv.w, cv.h);
+    fn legend(cv: &mut Canvas, rect: Rect, map: &Map, world: &World) {
+        let (w, y) = (rect.w, rect.y + rect.h - 1);
         let mut x = 0;
         for b in &map.assets.biomes {
             let sw = biome::ground_color(b, world.season);
-            cv.put(x, h - 1, ' ', sw, sw);
-            cv.put(x + 1, h - 1, ' ', sw, sw);
+            cv.put(rect.x + x, y, ' ', sw, sw);
+            cv.put(rect.x + x + 1, y, ' ', sw, sw);
             let label = format!(" {} ", b.koppen);
-            cv.text(x + 2, h - 1, &label, CHROME.legend, CHROME.bar);
+            cv.text(rect.x + x + 2, y, &label, CHROME.legend, CHROME.bar);
             x += 2 + label.len() as i32;
         }
         let hint = input::help_line(WORLDMAP, "  ");
-        cv.text((w - hint.len() as i32).max(x), h - 1, &hint, CHROME.dim, CHROME.bar);
+        cv.text(rect.x + (w - hint.len() as i32).max(x), y, &hint, CHROME.dim, CHROME.bar);
     }
 }
 

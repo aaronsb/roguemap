@@ -39,7 +39,9 @@ when exactness matters.
   frame buffer and Scene as the per-frame context. Do not add parameters
   to the passes; extend Scene.
 - Settings are one keyed table; keybindings are one table in input.rs;
-  help lines are generated from it.
+  help lines are generated from it. Everything drawn over the scene is a
+  frame: a row in assets/ui.toml plus a content kind in src/ui.rs, laid
+  out by src/frame.rs (docs/adr/ADR-005). Add rows, not draw calls.
 
 ## Look
 

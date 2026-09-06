@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::biome::{Cover, Form, SizeClass};
 use crate::blocks::{Ground, Roof};
 use crate::canvas::Rgb;
+use crate::frame::{Anchor, Background, Border, Show, Size};
 use crate::map::Terrain;
 use crate::volume::Shape;
 
@@ -533,6 +534,45 @@ pub struct SettingRow {
     /// must agree, which a test checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shortcut: Option<char>,
+}
+
+// ui.toml
+
+/// The overlay frames of ADR-005, one row per frame.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiFile {
+    pub frame: Vec<FrameRow>,
+}
+
+/// A frame: where it goes, how it is framed, when it shows and which key
+/// toggles it. Fields that may serialise as a table come last.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FrameRow {
+    pub name: String,
+    #[serde(flatten)]
+    pub identity: IdentityRow,
+    /// Shown in the top border; blank for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// Content kind code supplies; the frame's own name by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    pub anchor: Anchor,
+    pub border: Border,
+    /// Draw order; focused frames draw last.
+    #[serde(default)]
+    pub z: i32,
+    /// Which frames survive when they collide.
+    #[serde(default)]
+    pub priority: i32,
+    /// Toggle key: `"tab"`, `"esc"`, `"enter"`, `"space"` or one
+    /// character. `input.rs` must bind it to `Toggle(name)`, which a test
+    /// checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub show: Show,
+    pub background: Background,
+    pub size: Size,
 }
 
 // tilesets/*.toml

@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::assets::Assets;
 use crate::camera::Camera;
 use crate::canvas::Canvas;
+use crate::frame::FrameCtx;
 use crate::map::Map;
 use crate::render::{Renderer, Scene};
 use crate::settings::Settings;
@@ -52,7 +53,8 @@ impl SnapArgs {
 /// storm that many days first), glyphs (petscii|ascii), rot, deg, zoom,
 /// size, fill (1 for an unbounded world), cx, cy (tile to centre on),
 /// popover (1), fire (1 to place a campfire at centre), player (1), hud
-/// (0|1), worldmap (1) with scale, frames (N, to time rendering).
+/// (0|1), worldmap (1) with scale, open (frame names of ui.toml, comma
+/// separated), frames (N, to time rendering).
 pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> Canvas {
     let a = SnapArgs::parse(args);
     let (sw, sh) = (w as i32, h as i32);
@@ -67,8 +69,17 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     settings.set("hud", (a.num("hud", 1.0) <= 0.5) as usize);
     let glyphs = a.text("glyphs").unwrap_or("petscii");
     settings.set("glyphs", settings.items[settings.find("glyphs").unwrap()].values.iter().position(|v| v == glyphs).unwrap_or(0));
-    settings.open = a.flag("popover");
     let opts = settings.apply(&mut map, &mut world);
+    let mut frames = ui::frames(&assets);
+    let hud = settings.get("hud") == 0;
+    frames.set_open("hud-top", hud);
+    frames.set_open("hud-help", hud);
+    frames.set_open("settings", a.flag("popover"));
+    frames.set_open("worldmap", a.flag("worldmap"));
+    // open=name,name opens any other frame of ui.toml.
+    for name in a.text("open").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+        frames.set_open(name, true);
+    }
     let ts = &tilesets[settings.get("glyphs")];
 
     let mut cv = Canvas::new(w, h);
@@ -109,27 +120,24 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     }
     let t = a.num("t", 0.0);
     // frames=N renders N extra frames and prints the average time per frame.
-    let frames = a.num("frames", 0.0) as usize;
-    if frames > 0 {
+    let repeats = a.num("frames", 0.0) as usize;
+    if repeats > 0 {
         let start = Instant::now();
-        for i in 0..frames {
+        for i in 0..repeats {
             renderer.draw(&mut cv, &Scene::new(&map, ts, &world, &cam, t + i as f32 * 0.04), &opts);
         }
-        eprintln!("{:.2} ms/frame", start.elapsed().as_secs_f32() * 1000.0 / frames as f32);
+        eprintln!("{:.2} ms/frame", start.elapsed().as_secs_f32() * 1000.0 / repeats as f32);
     }
-    if a.flag("worldmap") {
-        let mut wm = WorldMap::new();
-        wm.scale = a.num("scale", 1.0) as usize;
-        wm.cursor = (cx, cy);
-        wm.draw(&mut cv, &map, &world, world.player().map(|e| (e.mx, e.my)));
-    } else {
+    let mut wmap = WorldMap::new();
+    wmap.scale = a.num("scale", 1.0) as usize;
+    wmap.cursor = (cx, cy);
+    let mut lights = 0;
+    if !frames.is_open("worldmap") {
         renderer.draw(&mut cv, &Scene::new(&map, ts, &world, &cam, t), &opts);
-        if settings.get("hud") == 0 {
-            ui::hud(&mut cv, &map, ts, &world, &cam, world.lights.len() + renderer.frame_light_count());
-        }
-        if settings.open {
-            ui::popover(&mut cv, &settings);
-        }
+        lights = world.lights.len() + renderer.frame_light_count();
     }
+    let ctx = FrameCtx { map: &map, world: &world, cam: &cam, ts, settings: &settings, wmap: &wmap, lights, focused: false };
+    frames.update(&ctx);
+    frames.draw(&mut cv, &ctx);
     cv
 }

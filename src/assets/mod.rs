@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::biome::{Biome, Block, Creature, MaterialRule, Prop, Species, KOPPEN_CODES};
 use crate::biome::{Material, MaterialRule::Local};
+use crate::frame::{parse_key, FrameSpec};
 use crate::palette::{Density, Palette, Season, Surface, SurfaceColors, Surfaces, SEASON_NAMES, SURFACE_NAMES};
 use crate::properties::{Conditions, Hooks, Identity, Physical};
 use crate::settings::{SettingItem, REQUIRED_SETTINGS};
@@ -29,7 +30,8 @@ mod embedded {
 }
 
 /// The table files every asset set must have, in load order.
-pub const TABLES: [&str; 9] = ["biomes.toml", "species.toml", "materials.toml", "props.toml", "blocks.toml", "creatures.toml", "surfaces.toml", "lights.toml", "settings.toml"];
+pub const TABLES: [&str; 10] =
+    ["biomes.toml", "species.toml", "materials.toml", "props.toml", "blocks.toml", "creatures.toml", "surfaces.toml", "lights.toml", "settings.toml", "ui.toml"];
 
 /// Where a set of assets came from.
 #[derive(Clone, Debug, PartialEq)]
@@ -152,6 +154,7 @@ pub struct Raw {
     pub surfaces: SurfacesFile,
     pub lights: LightsFile,
     pub settings: SettingsFile,
+    pub ui: UiFile,
     /// (relative path, file).
     pub tilesets: Vec<(String, TilesetFile)>,
 }
@@ -168,6 +171,8 @@ pub struct Assets {
     pub surfaces: Surfaces,
     pub lights: Vec<LightSpec>,
     pub settings: Vec<SettingItem>,
+    /// Overlay frames (ADR-005).
+    pub frames: Vec<FrameSpec>,
     pub tilesets: Vec<TilesetSpec>,
     pub art: ArtIndex,
     /// Köppen code to biome index.
@@ -370,6 +375,7 @@ impl Assets {
             surfaces: parse(TABLES[6], text(TABLES[6])?)?,
             lights: parse(TABLES[7], text(TABLES[7])?)?,
             settings: parse(TABLES[8], text(TABLES[8])?)?,
+            ui: parse(TABLES[9], text(TABLES[9])?)?,
             tilesets: {
                 let mut v = Vec::new();
                 for (p, t) in &files {
@@ -383,7 +389,7 @@ impl Assets {
         };
         for (p, _) in &files {
             if p.ends_with(".toml") && !TABLES.contains(&p.as_str()) && !p.starts_with("tilesets/") {
-                return Err(AssetError::file(p, "not an asset table; the tables are the nine top-level files and tilesets/*.toml"));
+                return Err(AssetError::file(p, format!("not an asset table; the tables are {} and tilesets/*.toml", TABLES.join(", "))));
             }
         }
         let mut art = ArtIndex::default();
@@ -764,6 +770,40 @@ impl Assets {
             });
         }
 
+        // ui frames
+        let ctx = Ctx { file: TABLES[9], table: "frame" };
+        let frame_names: Vec<&str> = raw.ui.frame.iter().map(|f| f.name.as_str()).collect();
+        unique(&ctx, &frame_names)?;
+        let mut frames = Vec::new();
+        for (i, f) in raw.ui.frame.iter().enumerate() {
+            described(&ctx, i, &f.name, &f.identity)?;
+            let content = f.content.clone().unwrap_or_else(|| f.name.clone());
+            if !crate::ui::CONTENT_KINDS.contains(&content.as_str()) {
+                return Err(ctx.row(i, &f.name, format!("unknown content kind {content:?}; code supplies {}", crate::ui::CONTENT_KINDS.join(", "))));
+            }
+            let key = match &f.key {
+                None => None,
+                Some(k) => Some(parse_key(k).ok_or_else(|| ctx.row(i, &f.name, format!("unknown key {k:?}; name a key as \"tab\", \"esc\", \"enter\", \"space\" or one character")))?),
+            };
+            if f.size.min_cols < 0 || f.size.min_rows < 0 {
+                return Err(ctx.row(i, &f.name, "minimum size is negative"));
+            }
+            frames.push(FrameSpec {
+                name: f.name.clone(),
+                identity: Identity::from_row(&f.identity, "ui"),
+                title: f.title.clone(),
+                content,
+                anchor: f.anchor,
+                size: f.size,
+                border: f.border,
+                background: f.background,
+                z: f.z,
+                priority: f.priority,
+                show: f.show,
+                key,
+            });
+        }
+
         // tilesets
         if raw.tilesets.is_empty() {
             return Err(AssetError::file("tilesets/", "no tilesets/*.toml found; at least one glyph set is needed"));
@@ -781,7 +821,7 @@ impl Assets {
         }
         let tilesets = raw.tilesets.iter().map(|(_, t)| t.clone()).collect();
 
-        Ok(Assets { biomes, species, materials, props, blocks, creatures, surfaces, lights, settings, tilesets, art, koppen, source, raw, files })
+        Ok(Assets { biomes, species, materials, props, blocks, creatures, surfaces, lights, settings, frames, tilesets, art, koppen, source, raw, files })
     }
 
     /// The files this set was loaded from, as (relative path, contents).
@@ -816,6 +856,7 @@ impl Assets {
             (TABLES[6].to_string(), ser(&self.raw.surfaces)),
             (TABLES[7].to_string(), ser(&self.raw.lights)),
             (TABLES[8].to_string(), ser(&self.raw.settings)),
+            (TABLES[9].to_string(), ser(&self.raw.ui)),
         ];
         for (p, t) in &self.raw.tilesets {
             out.push((p.clone(), ser(t)));
@@ -851,6 +892,10 @@ impl Assets {
 
     pub fn setting(&self, key: &str) -> Option<&SettingItem> {
         self.settings.iter().find(|s| s.key == key)
+    }
+
+    pub fn frame(&self, name: &str) -> Option<&FrameSpec> {
+        self.frames.iter().find(|f| f.name == name)
     }
 }
 
@@ -919,6 +964,7 @@ mod tests {
         assert_eq!(a.creatures[0].name, "player");
         assert_eq!(a.tilesets.len(), 2);
         assert_eq!(a.settings.len(), 10);
+        assert_eq!(a.frames.len(), 9);
         let fire = a.light("campfire").unwrap();
         assert!(fire.radius > 0.0 && fire.intensity > 0.0);
         let fire_ix = a.lights.iter().position(|l| l.name == "campfire");
@@ -1080,6 +1126,20 @@ mod tests {
         let e = replace_in("settings.toml", "key = \"clock\"", "key = \"timer\"").unwrap_err();
         assert!(e.msg.contains("\"clock\" is missing"), "{e}");
 
+        let e = replace_in("ui.toml", "content = \"worldmap\"", "content = \"atlas\"").unwrap_err();
+        assert_eq!(e.row, Some(("frame".to_string(), 3, "worldmap".to_string())));
+        assert!(e.msg.contains("unknown content kind \"atlas\""), "{e}");
+
+        let e = replace_in("ui.toml", "key = \"tab\"", "key = \"shift-f4\"").unwrap_err();
+        assert!(e.msg.contains("unknown key"), "{e}");
+
+        let e = replace_in("ui.toml", "anchor = \"full\"", "anchor = \"middle\"").unwrap_err();
+        assert_eq!(e.file, "ui.toml");
+        assert!(e.msg.contains("middle"), "{e}");
+
+        let e = replace_in("ui.toml", "name = \"stats\"", "name = \"inventory\"").unwrap_err();
+        assert!(e.msg.contains("duplicate name"), "{e}");
+
         let e = replace_in("art/player/tiny.txt", "@", "\t@").unwrap_err();
         assert_eq!((e.file.as_str(), e.line), ("art/player/tiny.txt", Some(2)));
 
@@ -1199,6 +1259,7 @@ mod tests {
         assert_eq!(a.surfaces, b.surfaces);
         assert_eq!(a.lights, b.lights);
         assert_eq!(a.settings, b.settings);
+        assert_eq!(a.frames, b.frames);
         assert_eq!(a.tilesets, b.tilesets);
         assert_eq!(a.art, b.art);
         assert_eq!(a.koppen, b.koppen);
