@@ -171,7 +171,7 @@ impl Map {
         let forest = fbm(x as f32 * 0.08, y as f32 * 0.08, self.seed ^ 0xF0, 3);
         let density = biome.tree_density * crate::noise::smoothstep(0.3, 0.7, forest);
         let mut species = 0u8;
-        let tree = if terrain == Terrain::Grass && z >= SEA + 1 && !biome.species.is_empty() && (hv % 1000) as f32 / 1000.0 < density {
+        let tree = if terrain == Terrain::Grass && z > SEA && !biome.species.is_empty() && (hv % 1000) as f32 / 1000.0 < density {
             let total: u32 = biome.species.iter().map(|&(_, w)| w as u32).sum();
             let mut pick = ((hv >> 16) % total.max(1) as u64) as u32;
             for &(sp, w) in biome.species {
@@ -189,7 +189,7 @@ impl Map {
         let settle = fbm(x as f32 * 0.05 + 7.0, y as f32 * 0.05, self.seed ^ 0xB1, 2);
         let building = if tree.is_none()
             && matches!(terrain, Terrain::Grass | Terrain::Dirt | Terrain::Sand)
-            && z >= SEA + 1
+            && z > SEA
             && settle > 0.64
             && (hv >> 40) % 100 < 14
         {

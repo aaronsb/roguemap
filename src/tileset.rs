@@ -12,6 +12,9 @@ use crate::noise::hash;
 /// cells, 2x1 reads as a 45-degree diamond, 3x1 about 1.5:1, the rest 2:1.
 pub const ZOOMS: [(i32, i32); 7] = [(2, 1), (3, 1), (4, 1), (6, 2), (8, 2), (12, 3), (16, 4)];
 
+/// Tree sprites indexed by zoom, then form, then variant.
+type TreeLod = Vec<Vec<Vec<Sprite>>>;
+
 /// A billboard sprite: rows top to bottom. `center` is the column index that
 /// sits over the tile centre; the last `trunk_rows` rows use trunk colours.
 #[derive(Clone, Debug)]
@@ -127,7 +130,7 @@ fn pine(art: &Art, n: usize, seed: u64) -> Sprite {
         s.push(art.pine_l);
         for c in 0..w.saturating_sub(2) {
             let h = hash(r as i64, c as i64, seed);
-            s.push(art.pine_fill[(h % 5 == 0) as usize]);
+            s.push(art.pine_fill[h.is_multiple_of(5) as usize]);
         }
         s.push(art.pine_r);
         rows.push(s);
@@ -181,11 +184,11 @@ fn cactus(art: &Art, n: usize, seed: u64) -> Sprite {
     for row in grid.iter_mut() {
         row[3] = art.cactus;
     }
-    let arm = |grid: &mut Vec<Vec<char>>, col: usize, dir: i32, at: usize, len: usize| {
-        let elbow = (3 as i32 + dir) as usize;
+    let arm = |grid: &mut [Vec<char>], col: usize, dir: i32, at: usize, len: usize| {
+        let elbow = (3_i32 + dir) as usize;
         grid[at][elbow] = art.cactus;
-        for r in at.saturating_sub(len)..=at {
-            grid[r][col] = art.cactus;
+        for row in grid.iter_mut().take(at + 1).skip(at.saturating_sub(len)) {
+            row[col] = art.cactus;
         }
     };
     if n >= 4 {
@@ -309,7 +312,7 @@ pub struct Tileset {
     pub rain: char,
     pub snowflake: [char; 2],
     /// Tree sprites per zoom level, per form, four variants each.
-    tree_lod: Vec<Vec<Vec<Sprite>>>,
+    tree_lod: TreeLod,
     /// House sprites per zoom level, four variants each.
     house_lod: Vec<Vec<Sprite>>,
     player_lod: Vec<Sprite>,
@@ -330,7 +333,7 @@ impl Tileset {
         &self.player_lod[zoom % ZOOMS.len()]
     }
 
-    fn build(art: &Art) -> (Vec<Vec<Vec<Sprite>>>, Vec<Vec<Sprite>>, Vec<Sprite>) {
+    fn build(art: &Art) -> (TreeLod, Vec<Vec<Sprite>>, Vec<Sprite>) {
         let trees = ZOOMS.iter().map(|&(hw, _)| FORMS.iter().map(|&f| trees_for(art, f, hw)).collect()).collect();
         let houses = ZOOMS.iter().map(|&(hw, _)| (0..4).map(|v| house(art, hw, v)).collect()).collect();
         let players = ZOOMS.iter().map(|&(hw, _)| player_for(hw)).collect();

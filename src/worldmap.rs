@@ -106,8 +106,9 @@ impl WorldMap {
         let temp = map.temperature(cx, cy, z);
         let precip = map.precipitation(cx, cy);
         let b = &BIOMES[biome::classify(temp, precip)];
+        let lead = b.species.first().map(|&(sp, _)| biome::SPECIES[sp].name).unwrap_or("none");
         let header = format!(
-            " world map  {}  1 cell = {}x{} tiles  cursor {},{}  {} ({})  {:.0}C  precip {:.0}  z{} ",
+            " world map  {}  1 cell = {}x{} tiles  cursor {},{}  {} ({})  {:.0}C  precip {:.0}  z{}  trees: {}  builds: {} ",
             SCALE_NAMES[self.scale % SCALES.len()],
             sx,
             sy,
@@ -117,7 +118,9 @@ impl WorldMap {
             b.koppen,
             temp,
             precip,
-            z
+            z,
+            lead,
+            biome::MATERIALS[b.material].name
         );
         cv.text(0, 0, &header, Rgb(220, 220, 230), Rgb(30, 32, 44));
         let mut x = 0;

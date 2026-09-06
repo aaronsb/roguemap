@@ -56,11 +56,14 @@ pub struct Camera {
     pub zoom: usize,
     pub hw: i32,
     pub hh: i32,
+    /// Height of the point the screen centre was last aimed at, so zoom and
+    /// rotation pivot about it.
+    pub focus_z: f32,
 }
 
 impl Camera {
     pub fn new() -> Camera {
-        Camera { angle: FRAC_PI_4, ox: 0.0, oy: 0.0, zoom: 0, hw: ZOOMS[0].0, hh: ZOOMS[0].1 }
+        Camera { angle: FRAC_PI_4, ox: 0.0, oy: 0.0, zoom: 0, hw: ZOOMS[0].0, hh: ZOOMS[0].1, focus_z: SEA as f32 }
     }
 
     /// Largest zoom at which the whole map fits the screen, else the smallest.
@@ -76,7 +79,7 @@ impl Camera {
         self.hw as f32 * SQRT_2
     }
 
-    fn b(&self) -> f32 {
+    pub fn b(&self) -> f32 {
         self.hh as f32 * SQRT_2
     }
 
@@ -147,6 +150,7 @@ impl Camera {
     pub fn look_at_point(&mut self, x: f32, y: f32, z: f32, sw: i32, sh: i32) {
         self.ox = 0.0;
         self.oy = 0.0;
+        self.focus_z = z;
         let (sx, sy) = self.project(x, y, z);
         self.ox = (sw as f32 / 2.0 - sx).round();
         self.oy = (sh as f32 / 2.0 - sy).round();
@@ -160,19 +164,21 @@ impl Camera {
 
     /// Switch tile size, keeping whatever is at the screen centre there.
     pub fn set_zoom(&mut self, zoom: usize, map: &Map, sw: i32, sh: i32) {
-        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, SEA as f32);
+        let z = self.focus_z;
+        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, z);
         self.zoom = zoom % ZOOMS.len();
         self.hw = ZOOMS[self.zoom].0;
         self.hh = ZOOMS[self.zoom].1;
         let _ = map;
-        self.look_at_point(x, y, SEA as f32, sw, sh);
+        self.look_at_point(x, y, z, sw, sh);
     }
 
     /// Turn by an angle about whatever is at the screen centre.
     pub fn rotate_by(&mut self, radians: f32, sw: i32, sh: i32) {
-        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, SEA as f32);
+        let z = self.focus_z;
+        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, z);
         self.angle = (self.angle + radians).rem_euclid(2.0 * std::f32::consts::PI);
-        self.look_at_point(x, y, SEA as f32, sw, sh);
+        self.look_at_point(x, y, z, sw, sh);
     }
 
     /// Rotate by quarter turns.
@@ -261,6 +267,7 @@ impl Renderer {
     }
 
     /// Draw one frame into `cv`.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(&mut self, cv: &mut Canvas, map: &Map, ts: &Tileset, world: &World, cam: &Camera, settings: &Settings, t: f32) {
         let pal = Palette::for_season(world.season);
         let chop = world.choppiness();
@@ -285,25 +292,56 @@ impl Renderer {
 
     /// Walk down the height column under a screen position. Lowering the
     /// level moves the ground point away from the camera, so a column is
-    /// entered through its front face.
+    /// entered through its front face. Levels are subdivided so the ground
+    /// point never moves more than half a tile between samples.
     fn ray(map: &Map, cam: &Camera, sx: f32, sy: f32) -> Option<Hit> {
-        // Nothing stands above the ceiling of the chunks the walk crosses.
+        // Nothing stands above the ceiling of the chunks the walk can cross;
+        // the segment is shorter than a chunk, so its bounding corners cover
+        // every chunk it touches.
         let (x0, y0) = cam.unproject(sx, sy, 0.0);
         let (x1, y1) = cam.unproject(sx, sy, MAX_Z as f32);
-        let top = map.ceiling(x0.floor() as i32, y0.floor() as i32).max(map.ceiling(x1.floor() as i32, y1.floor() as i32)).min(MAX_Z);
-        for z in (0..=top).rev() {
-            let (x, y) = cam.unproject(sx, sy, z as f32);
+        let clamp = |x: f32, y: f32| -> (i32, i32) {
+            let (mut mx, mut my) = (x.floor() as i32, y.floor() as i32);
+            if map.bounded {
+                mx = mx.clamp(0, map.w as i32 - 1);
+                my = my.clamp(0, map.h as i32 - 1);
+            }
+            (mx, my)
+        };
+        let mut top = 0;
+        for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+            let (mx, my) = clamp(x, y);
+            top = top.max(map.ceiling(mx, my));
+        }
+        let top = top.min(MAX_Z);
+        let steps = (2.0 / cam.b()).ceil().max(1.0) as i32;
+        let (s, c) = cam.angle.sin_cos();
+        let mut i = top * steps;
+        while i >= 0 {
+            let zf = i as f32 / steps as f32;
+            i -= 1;
+            let (x, y) = cam.unproject(sx, sy, zf);
             let (mx, my) = (x.floor() as i32, y.floor() as i32);
             let Some(tile) = map.get(mx, my) else { continue };
             let dz = tile.draw_z();
-            if dz == z {
+            let dzf = dz as f32;
+            if dzf < zf {
+                continue;
+            }
+            let z = zf.floor() as i32;
+            if (dzf - zf).abs() < 1e-4 {
                 return Some(Hit { tile, mx, my, x, y, z, face: FACE_TOP, below: 0 });
             }
-            if dz > z {
-                let (px, py) = cam.unproject(sx, sy, dz as f32);
-                let face = if (px - (mx as f32 + 0.5)).abs() > (py - (my as f32 + 0.5)).abs() { FACE_RIGHT } else { FACE_LEFT };
-                return Some(Hit { tile, mx, my, x, y, z, face, below: dz - z });
-            }
+            // Entered through a side: the slab crossed last along the ray is
+            // the face, then the axis face is mapped to the screen side it
+            // shows on for this angle.
+            let (px, py) = cam.unproject(sx, sy, dzf);
+            let tx = ((px - (mx as f32 + 0.5)).abs() - 0.5) / s.abs().max(1e-6);
+            let ty = ((py - (my as f32 + 0.5)).abs() - 0.5) / c.abs().max(1e-6);
+            let x_face = tx > ty;
+            let face = if (s * c > 0.0) == x_face { FACE_RIGHT } else { FACE_LEFT };
+            let below = (dzf - zf).ceil().max(1.0) as i32;
+            return Some(Hit { tile, mx, my, x, y, z, face, below });
         }
         None
     }
@@ -380,30 +418,41 @@ impl Renderer {
             for x in 0..w {
                 let i = (y * w + x) as usize;
                 let id = self.ids[i];
+                // Only boundaries between visibly different colours are worth
+                // supersampling; seams inside a meadow are not.
+                let here = self.g[i].albedo;
                 let edge = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
                     let (nx, ny) = (x + dx, y + dy);
-                    nx >= 0 && ny >= 0 && nx < w && ny < h && self.ids[(ny * w + nx) as usize] != id
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        return false;
+                    }
+                    let n = (ny * w + nx) as usize;
+                    self.ids[n] != id && color_dist(self.g[n].albedo, here) >= 24
                 });
                 if !edge {
                     continue;
                 }
                 let mut cols = [Rgb(0, 0, 0); 6];
-                let mut any = false;
+                let mut first: Option<Hit> = None;
                 for j in 0..3 {
                     for k in 0..2 {
                         let sx = x as f32 + (k as f32 + 0.5) / 2.0;
                         let sy = y as f32 + (j as f32 + 0.5) / 3.0;
                         cols[j * 2 + k] = match Self::ray(map, cam, sx, sy) {
                             Some(hh) => {
-                                any = true;
+                                first.get_or_insert(hh);
                                 Self::hit_color(&hh, pal, world)
                             }
                             None => world.sky(),
                         };
                     }
                 }
-                if !any {
-                    continue;
+                let Some(hh) = first else { continue };
+                // A cell whose centre missed but whose edge touches terrain
+                // takes that terrain's position and lighting.
+                if self.g[i].depth == SKY_DEPTH {
+                    let albedo = Self::hit_color(&hh, pal, world);
+                    self.g[i] = GCell { albedo, ch: ' ', glyph: albedo, wx: hh.x, wy: hh.y, wz: hh.z as f32, face: hh.face, lit: true, depth: hh.x * fx + hh.y * fy };
                 }
                 // Two-colour quantisation: the first sample and its farthest.
                 let a = cols[0];
@@ -524,7 +573,9 @@ impl Renderer {
                 y1 = y1.max(y);
             }
         }
-        (x0.floor() as i32 - 2, y0.floor() as i32 - 2, x1.ceil() as i32 + 2, y1.ceil() as i32 + 2)
+        // Widest sprite art is about 16 columns either side of its tile.
+        let m = (16.0 / cam.a()).ceil() as i32 + 2;
+        (x0.floor() as i32 - m, y0.floor() as i32 - m, x1.ceil() as i32 + m, y1.ceil() as i32 + m)
     }
 
     /// Trees, buildings and entities, back to front with a depth test.
@@ -554,7 +605,10 @@ impl Renderer {
             if let Some(v) = tile.tree {
                 let sp = &SPECIES[tile.species as usize % SPECIES.len()];
                 let set = ts.trees(cam.zoom, sp.form);
-                let sprite = &set[v as usize % set.len()];
+                // Variants come in a smaller pair then a larger pair; species
+                // scale chooses the pair.
+                let pair = if sp.scale < 0.9 { 0 } else if sp.scale > 1.2 { 2 } else { (v as usize / 2 % 2) * 2 };
+                let sprite = &set[(pair + v as usize % 2) % set.len()];
                 let snow = world.snow_at(tile.temp as f32) * 0.7;
                 let colors = SpriteColors {
                     bg: biome::seasonal(&sp.canopy, world.season).lerp(pal.snow, snow),
@@ -625,7 +679,7 @@ impl Renderer {
         for l in &world.lights {
             let _ = map;
             let (sx, sy) = cam.project_tile(l.mx, l.my, l.z);
-            let depth = (l.mx as f32 + 1.0) * fx.abs() + (l.my as f32 + 1.0) * fy.abs();
+            let depth = (l.mx as f32 + 0.5) * fx + (l.my as f32 + 0.5) * fy + 0.5 * (fx.abs() + fy.abs());
             let frame = ((t * 9.0) as usize + (l.mx as usize)) % 3;
             let flick = 0.8 + 0.2 * (t * 17.0 + l.mx as f32).sin();
             let hot = Rgb((255.0 * flick) as u8, (190.0 * flick) as u8, (70.0 * flick) as u8);
@@ -687,10 +741,10 @@ impl Renderer {
         for y in 0..self.h {
             for x in 0..self.w {
                 let h = hash(x as i64, y as i64, 0xBEEF);
-                let (ch, glyph) = if h % 89 == 0 {
+                let (ch, glyph) = if h.is_multiple_of(89) {
                     let tw = 0.55 + 0.45 * (t * 1.7 + (h >> 20) as f32 * 0.01).sin();
                     let b = (tw * fade * 235.0) as u8;
-                    (ts.star[((h >> 8) % 5 == 0) as usize], sky.lerp(Rgb(b, b, b.saturating_add(15)), fade))
+                    (ts.star[(h >> 8).is_multiple_of(5) as usize], sky.lerp(Rgb(b, b, b.saturating_add(15)), fade))
                 } else {
                     (' ', sky)
                 };
@@ -826,7 +880,7 @@ impl Renderer {
                 let drift = (t * 0.9 + (hv >> 40) as f32 * 0.01).sin() * 2.5 + t * wind * 6.0 * across;
                 let x = ((x0 + drift).rem_euclid(w as f32)) as i32;
                 let y = ((y0 + t * speed) % h as f32) as i32;
-                let ch = ts.snowflake[((hv >> 16) % 3 == 0) as usize];
+                let ch = ts.snowflake[(hv >> 16).is_multiple_of(3) as usize];
                 cv.glyph(x, y, ch, Rgb(235, 240, 250));
             }
         } else {
