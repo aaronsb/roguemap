@@ -936,9 +936,253 @@ impl ArtFile {
     }
 }
 
+/// The property catalogue (docs/properties.md) and this file read back as
+/// data, so a test can hold one against the other. Test-only, and used by
+/// the editor's field descriptors too (`editor::fields`).
+#[cfg(test)]
+pub mod catalogue {
+    use std::collections::BTreeMap;
+
+    /// This file's own source, parsed for the row structs below.
+    const SCHEMA: &str = include_str!("schema.rs");
+    /// The catalogue's source, parsed for its field tables.
+    const DOC: &str = include_str!("../../docs/properties.md");
+
+    /// The tables the catalogue covers, as its Tables column names them,
+    /// with the row struct each is made of.
+    pub const TABLES: [(&str, &str); 9] = [
+        ("biomes", "BiomeRow"),
+        ("species", "SpeciesRow"),
+        ("materials", "MaterialRow"),
+        ("props", "PropRow"),
+        ("blocks", "BlockRow"),
+        ("creatures", "CreatureRow"),
+        ("seasons", "SeasonRow"),
+        ("surfaces", "SurfaceRow"),
+        ("lights", "LightRow"),
+    ];
+
+    /// The four tables that describe a thing standing in the world; the
+    /// catalogue's *all placeables*.
+    pub const PLACEABLES: [&str; 4] = ["props", "species", "blocks", "creatures"];
+
+    /// One declared field of a row struct.
+    #[derive(Clone)]
+    pub struct SchemaField {
+        pub name: String,
+        pub ty: String,
+        /// `#[serde(flatten)]`: the field's own type contributes its fields
+        /// to this row rather than a key of its own.
+        flatten: bool,
+        /// `#[serde(alias = "...")]`: an older spelling files may use.
+        alias: Option<String>,
+        /// Whether a row may leave it out: an `Option` or a serde default.
+        pub optional: bool,
+    }
+
+    /// Every struct in this file with the fields it declares, in order.
+    /// A plain source parse: the structs are one field per line and none
+    /// nests braces, so nothing cleverer earns its keep.
+    fn structs() -> BTreeMap<String, Vec<SchemaField>> {
+        let mut out: BTreeMap<String, Vec<SchemaField>> = BTreeMap::new();
+        let mut open: Option<(String, Vec<SchemaField>)> = None;
+        let (mut flatten, mut alias, mut defaulted) = (false, None, false);
+        for line in SCHEMA.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("pub struct ") {
+                let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                open = Some((name, Vec::new()));
+                (flatten, alias, defaulted) = (false, None, false);
+            } else if t == "}" {
+                if let Some((name, fields)) = open.take() {
+                    out.insert(name, fields);
+                }
+            } else if let Some((_, fields)) = open.as_mut() {
+                if t.starts_with("#[serde") {
+                    flatten |= t.contains("flatten");
+                    defaulted |= t.contains("default");
+                    if let Some(rest) = t.split_once("alias = \"") {
+                        alias = rest.1.split('"').next().map(str::to_string);
+                    }
+                } else if let Some(decl) = t.strip_prefix("pub ") {
+                    if let Some((name, ty)) = decl.split_once(": ") {
+                        let ty = ty.trim_end_matches(',').to_string();
+                        let optional = defaulted || ty.starts_with("Option<");
+                        fields.push(SchemaField { name: name.to_string(), ty, flatten, alias: alias.take(), optional });
+                        (flatten, defaulted) = (false, false);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The keys a row of this struct may carry under their own names: its
+    /// fields and the fields of every struct it flattens in. Aliases are
+    /// spellings of these, not keys of their own, and are left out.
+    pub fn keys(row_struct: &str) -> Vec<String> {
+        let all = structs();
+        let mut out = Vec::new();
+        collect(&all, row_struct, &mut out);
+        out
+    }
+
+    fn collect(all: &BTreeMap<String, Vec<SchemaField>>, row_struct: &str, out: &mut Vec<String>) {
+        let fields = all.get(row_struct).unwrap_or_else(|| panic!("{row_struct} is not a struct in schema.rs"));
+        for f in fields {
+            if f.flatten {
+                collect(all, &f.ty, out);
+            } else {
+                out.push(f.name.clone());
+            }
+        }
+    }
+
+    /// The field a struct carries a key under, which may be a dotted path
+    /// into the structs its fields name (`roles.cover.grass`). `None` when
+    /// no such key exists.
+    pub fn key(row_struct: &str, path: &str) -> Option<SchemaField> {
+        let all = structs();
+        let mut here = row_struct.to_string();
+        let mut parts = path.split('.').peekable();
+        while let Some(seg) = parts.next() {
+            let mut found = None;
+            let mut stack = vec![here.clone()];
+            while let Some(s) = stack.pop() {
+                for f in all.get(&s)? {
+                    if f.flatten {
+                        stack.push(f.ty.clone());
+                    } else if f.name == seg || f.alias.as_deref() == Some(seg) {
+                        found = Some(f.clone());
+                    }
+                }
+            }
+            let f = found?;
+            if parts.peek().is_none() {
+                return Some(f);
+            }
+            here = f.ty;
+        }
+        None
+    }
+
+    /// Whether a struct carries a key at all.
+    pub fn has_key(row_struct: &str, path: &str) -> bool {
+        key(row_struct, path).is_some()
+    }
+
+    /// One row of a field table in the catalogue: the properties it names,
+    /// the tables they belong to, what a row that leaves them out gets,
+    /// and the line it stands on.
+    pub struct DocRow {
+        pub properties: Vec<String>,
+        pub tables: Vec<String>,
+        pub default: String,
+        pub line: usize,
+    }
+
+    /// Every field table in docs/properties.md, read back. A table is one
+    /// whose first column is `Property`; the creature table has no Tables
+    /// column and means creatures, and the instance table, whose first
+    /// column is `Instance field`, is not a row format and is skipped.
+    pub fn rows() -> Vec<DocRow> {
+        let mut out = Vec::new();
+        let mut header: Option<Vec<String>> = None;
+        for (i, line) in DOC.lines().enumerate() {
+            let t = line.trim();
+            if !t.starts_with('|') {
+                header = None;
+                continue;
+            }
+            let cells: Vec<String> = t.trim_matches('|').split('|').map(|c| c.trim().to_string()).collect();
+            if cells.iter().all(|c| c.chars().all(|ch| ch == '-' || ch == ':') && !c.is_empty()) {
+                continue;
+            }
+            let Some(cols) = header.as_ref() else {
+                header = Some(cells);
+                continue;
+            };
+            if cols.first().map(String::as_str) != Some("Property") {
+                continue;
+            }
+            let column = |name: &str| cols.iter().position(|c| c == name).and_then(|i| cells.get(i)).map(String::as_str);
+            let properties = cells[0].split(',').map(|p| p.trim().trim_matches('`').to_string()).collect();
+            let mut tables = Vec::new();
+            for token in column("Tables").unwrap_or("creatures").split(',') {
+                match token.trim() {
+                    "all" => tables.extend(TABLES.iter().map(|(t, _)| t.to_string())),
+                    "all placeables" => tables.extend(PLACEABLES.iter().map(|t| t.to_string())),
+                    t if TABLES.iter().any(|(name, _)| *name == t) => tables.push(t.to_string()),
+                    other => panic!("docs/properties.md line {}: {other:?} is not a table this catalogue covers", i + 1),
+                }
+            }
+            let default = column("Default").unwrap_or_default().to_string();
+            out.push(DocRow { properties, tables, default, line: i + 1 });
+        }
+        out
+    }
+
+    /// The row struct a table's rows are made of.
+    pub fn row_struct(table: &str) -> &'static str {
+        TABLES.iter().find(|(name, _)| *name == table).map(|(_, s)| *s).unwrap_or_else(|| panic!("no row struct for {table}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The catalogue is the reference for what a row may carry, so every
+    /// property it names must be a field of that table's row struct.
+    #[test]
+    fn every_catalogued_property_is_a_field_of_its_tables() {
+        for row in catalogue::rows() {
+            for property in &row.properties {
+                for table in &row.tables {
+                    let s = catalogue::row_struct(table);
+                    assert!(catalogue::has_key(s, property), "docs/properties.md line {}: {table} rows have no {property:?} ({s} in schema.rs does not declare it)", row.line);
+                }
+            }
+        }
+    }
+
+    /// And the other way for the tables the catalogue is the whole story
+    /// for: a field a placeable or a light may carry is catalogued
+    /// somewhere. Which tables a shared group serves is prose, so the
+    /// property need not be catalogued for this table in particular.
+    /// And the Default column is the other half of the claim: a property
+    /// the catalogue calls *required* is one the row struct gives no
+    /// default, and a property it gives a default for is one a row may
+    /// leave out. A cell that qualifies the word (`required for props`)
+    /// says the answer differs by table and is left to the prose.
+    #[test]
+    fn required_in_the_catalogue_is_required_in_the_schema() {
+        for row in catalogue::rows() {
+            for property in &row.properties {
+                for table in &row.tables {
+                    let s = catalogue::row_struct(table);
+                    let Some(field) = catalogue::key(s, property) else { continue };
+                    let at = format!("docs/properties.md line {}: {table}.{property}", row.line);
+                    if row.default == "required" {
+                        assert!(!field.optional, "{at} is catalogued as required but {s} gives it a default");
+                    } else if !row.default.contains("required") {
+                        assert!(field.optional, "{at} is catalogued with the default {:?} but {s} makes it required", row.default);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_placeable_field_is_catalogued() {
+        let rows = catalogue::rows();
+        for table in catalogue::PLACEABLES.iter().chain(["lights"].iter()) {
+            let s = catalogue::row_struct(table);
+            for key in catalogue::keys(s) {
+                assert!(rows.iter().any(|r| r.properties.contains(&key)), "{table}: {s}.{key} is not in docs/properties.md");
+            }
+        }
+    }
 
     #[test]
     fn art_parses_header_and_pads_rows() {

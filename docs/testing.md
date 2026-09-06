@@ -122,6 +122,18 @@ is one command.
 
 ## Data
 
+- **The catalogue and the schema agree.** `src/assets/schema.rs` reads
+  docs/properties.md's field tables back as data: every property the
+  catalogue names is a field of the row struct behind each table it lists;
+  a property whose default is *required* is one no row struct gives a
+  default, and one with a default is one a row may leave out; and for the
+  tables the catalogue is the whole story for (props, species, blocks,
+  creatures, lights) every field of the row struct is catalogued. The
+  editor's descriptors are held against the same structs, names and
+  required flags alike (`src/editor/fields.rs`), since a save renders a
+  row through its row struct and would silently drop a field the schema
+  has never heard of. So a property is added to the doc, the schema and
+  the editor together, or to none of them.
 - Every table loads from the embedded assets with no error.
 - Every cross-reference resolves: biome species and materials; prop art,
   covers, terrains and lights; block materials, terrains and lights;
