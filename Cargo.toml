@@ -1,0 +1,11 @@
+[package]
+name = "roguemap"
+version = "0.1.0"
+edition = "2021"
+description = "Isometric height-mapped terrain renderer for the terminal"
+
+[dependencies]
+crossterm = "0.29"
+
+[profile.release]
+opt-level = 3
