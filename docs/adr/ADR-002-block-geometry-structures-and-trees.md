@@ -1,6 +1,6 @@
 # ADR-002: Block geometry for structures and trees
 
-Status: Proposed
+Status: Accepted (implemented 2026-09-06; see Implementation notes)
 Date: 2026-09-06
 Deciders: @aaronsb, @claude
 
@@ -201,6 +201,49 @@ about 0.3 ms. Estimate: 3-4 ms removed, 1-2 ms added in the worst forest
 or town view, so every golden view lands under 10 ms at 168x71. The gate
 is the measurement; the knobs in order are bisection count, volume tests
 only at `hw >= 6`, and skipping AA supersampling on canopy seams.
+
+## Implementation notes
+
+Built as decided, with these departures, each for a reason found on the
+way; `docs/structures.md` describes what stands:
+
+- The walk marches the continuous height field (this landed after the ADR
+  was written), so there are no integer columns: a stack's base is the
+  tile's smooth height, walls run down into the ground and `flatten` is a
+  level pad at that height rather than `draw_z`. `HeightGrid` was extended
+  into the per-frame grid instead of a new `FrameGrid`.
+- Sizes are metres with a 2 m tile (owner's decision during the build):
+  `size = [w, d, h]` on every placeable row, `level_height` defaulting to
+  the block's height, `pitch` as metres per metre, species volumes derived
+  from `size` by shape with `radius`/`height`/`trunk`/`trunk_radius` as
+  overrides. One unit still draws as one row; ADR-004 will scale rows per
+  metre by zoom, so trees are tall at the close zooms today.
+- Walls are entered through the footprint edge, so `below` is not needed;
+  the wall's face and the position along the merged run give the window
+  and door bands. A window is about a cell and a half wide at every zoom
+  and the band defaults to the upper half of a level, which is one row of
+  windows per level at one row per metre.
+- Trunks, normal shading and outline glyphs are on at every zoom with
+  volumes (2 and up), not only from zoom 4: crowns are tens of cells wide
+  at zoom 2 once sizes are metres, and flat colour loses their form.
+- Sextant supersampling of crown seams is skipped below zoom 4 (the third
+  cost knob): in a forest at zoom 2 it cost 16 ms of a 25 ms frame. The
+  sub-rays of a supersampled cell start no higher than the cell's and its
+  neighbours' hits plus four metres. Zoom 2 in the forest went from 24 ms
+  to 13 ms; every zoom is under 16 ms at 168x71.
+- Tree footprints are registered with a 0.4 tile margin so a walk step
+  cannot cross an unregistered volume, and each tile's list is sorted
+  tallest first so the walk stops testing once the rest are below its
+  segment; the columns of the previous sample's tile (and the corner tiles
+  of a diagonal step) are tested too.
+- Cast shadows (from `docs/structures.md`, not this ADR) are a height mask:
+  each sample holds the highest blocked sun ray, occluders never stamp
+  their own footprint, and the lookup is a fifth of a tile along the sun
+  ray, so sunlit faces are not shadowed by their own column.
+- `Hit.z` is gone; `h` is the surface height, and the kind is in `ids`
+  bits 5-7 as decided. Bridges (`deck`) are parsed and validated but not
+  drawn; roads, fields and walls have rows but the generator places only
+  houses, towers, barns and fields until the settlement system.
 
 ## Consequences
 

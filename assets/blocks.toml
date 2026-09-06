@@ -1,10 +1,114 @@
 [[block]]
 name = "house"
-description = "A small dwelling with a gable roof, a door and, when wide enough, windows that glow at night. Built of the local material."
+description = "A small dwelling with a gable roof, a door on an open side and windows that glow at night. Built of the local material; two houses side by side make one longer house."
 category = "dwelling"
 settle_min = 0.64
 chance = 14
 terrain = ["grass", "dirt", "sand"]
+size = [2.0, 2.0, 3.0]
+levels = [1, 2]
+roof = "gable"
+pitch = 1.0
+max_rise = 2.0
 material = "by_biome"
+merge = true
+ground = "flatten"
+windows = [0.5, 1.0]
+window_pitch = 1.0
+door = true
+max_levels = 3
 light = "window"
 tags = ["flammable", "wooden"]
+
+[[block]]
+name = "tower"
+description = "A tall square tower of three levels under a low hipped cap, built of stone wherever it stands. Watchtowers and keeps are stacks of it."
+category = "dwelling"
+settle_min = 0.82
+chance = 2
+terrain = ["grass", "dirt", "rock"]
+size = [2.0, 2.0, 4.0]
+levels = [3, 3]
+roof = "hip"
+pitch = 0.6
+max_rise = 1.5
+material = "stone"
+merge = true
+ground = "flatten"
+windows = [0.5, 1.0]
+window_pitch = 2.0
+door = true
+max_levels = 5
+tags = ["stone"]
+
+[[block]]
+name = "barn"
+description = "A long, tall-roofed barn of one high level with a wide door and no windows. Built of the local material; barns in a row share one roof."
+category = "workplace"
+settle_min = 0.7
+chance = 4
+terrain = ["grass", "dirt"]
+size = [2.0, 2.0, 5.0]
+levels = [1, 1]
+roof = "gable"
+pitch = 1.2
+max_rise = 3.0
+material = "by_biome"
+merge = true
+ground = "flatten"
+windows = []
+window_pitch = 1.0
+door = true
+max_levels = 1
+tags = ["flammable", "wooden"]
+
+[[block]]
+name = "road"
+description = "A paved way: no height, the ground surfaced in the local material's wall colour with the dirt texture. Doors face an adjacent road."
+category = "way"
+terrain = ["grass", "dirt", "sand", "rock"]
+size = [2.0, 2.0, 0.1]
+levels = [0, 0]
+roof = "none"
+material = "by_biome"
+merge = true
+ground = "pave"
+windows = []
+door = false
+max_levels = 0
+passable = true
+tags = ["stone"]
+
+[[block]]
+name = "field"
+description = "Tilled ground: no height, the earth turned in rows beside the houses. Planted by the settlement system on flat grass."
+category = "workplace"
+settle_min = 0.6
+chance = 6
+terrain = ["grass"]
+size = [2.0, 2.0, 0.2]
+levels = [0, 0]
+roof = "none"
+material = "by_biome"
+merge = true
+ground = "till"
+windows = []
+door = false
+max_levels = 0
+passable = true
+
+[[block]]
+name = "wall"
+description = "A field wall or town wall one level high with a flat top, built of stone; a line of them is one wall. Placed by hand."
+category = "way"
+terrain = ["grass", "dirt", "sand", "rock", "snow"]
+size = [2.0, 2.0, 1.5]
+levels = [1, 1]
+roof = "flat"
+material = "stone"
+merge = true
+ground = "none"
+windows = []
+door = false
+max_levels = 2
+tags = ["stone"]

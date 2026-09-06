@@ -11,8 +11,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::biome::{Cover, Form, SizeClass};
+use crate::blocks::{Ground, Roof};
 use crate::canvas::Rgb;
 use crate::map::Terrain;
+use crate::volume::Shape;
 
 /// A colour that is either the same all year (one `[r, g, b]`) or given per
 /// season as `[spring, summer, autumn, winter]`.
@@ -51,6 +53,26 @@ fn two() -> f32 {
 
 fn by_biome() -> String {
     "by_biome".to_string()
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn one_and_a_half() -> f32 {
+    1.5
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn one_level() -> [u8; 2] {
+    [1, 1]
+}
+
+fn default_windows() -> Vec<f32> {
+    vec![0.5, 1.0]
 }
 
 #[allow(clippy::ptr_arg)]
@@ -201,18 +223,29 @@ pub struct SpeciesRow {
     pub name: String,
     #[serde(flatten)]
     pub identity: IdentityRow,
-    #[serde(alias = "shape")]
+    /// Glyph pool and tiny art: pine, broadleaf, scrub, cactus.
     pub form: Form,
     #[serde(default)]
     pub size_class: SizeClass,
+    /// Spread and height of a mature tree in metres: width, depth, height.
+    pub size: [f32; 3],
     pub canopy: Seasonal,
     pub canopy_glyph: Seasonal,
-    /// Canopy volume for the geometry renderer (ADR-002); from
-    /// `size_class` when absent.
+    /// Canopy volume for the geometry renderer (ADR-002): the shape is the
+    /// form's by default, and the dimensions, all in metres (crown radius,
+    /// crown height, trunk height and trunk radius, before the size class
+    /// and variant scale them), are derived from `size` by shape when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<Shape>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trunk: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trunk_radius: Option<f32>,
     /// Whether it drops leaves in autumn; deciduous (four-colour canopy)
     /// species do by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +290,8 @@ pub struct PropRow {
     pub identity: IdentityRow,
     /// Art name; the tier is picked by zoom.
     pub art: String,
+    /// Width, depth and height in metres.
+    pub size: [f32; 3],
     /// Black means the glyph is drawn over the ground with no background.
     #[serde(default)]
     pub color: Rgb,
@@ -287,22 +322,64 @@ pub struct BlocksFile {
     pub block: Vec<BlockRow>,
 }
 
-/// A building kind. ADR-002 adds the geometry fields; unknown fields are
-/// accepted so those files load here.
+/// A block kind: placement, geometry (ADR-002) and faces.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BlockRow {
     pub name: String,
     #[serde(flatten)]
     pub identity: IdentityRow,
-    /// Settlement field value a tile needs before one may stand on it.
+    /// Settlement field value a tile needs before one may stand on it;
+    /// above one, the kind is only ever placed by hand.
+    #[serde(default = "one")]
     pub settle_min: f32,
     /// Percentage of qualifying tiles that carry one.
+    #[serde(default)]
     pub chance: u64,
     pub terrain: Vec<Terrain>,
+    /// Width, depth and height in metres of one tile of the kind at one
+    /// level: the footprint is a tile, the height a level.
+    pub size: [f32; 3],
+    /// Levels a generated stack may have, `[min, max]`; zero for ground
+    /// kinds.
+    #[serde(default = "one_level")]
+    pub levels: [u8; 2],
+    /// Metres per level; the height in `size` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_height: Option<f32>,
+    /// Profile above the column top.
+    #[serde(default)]
+    pub roof: Roof,
+    /// Metres of rise per metre of run from the eaves, and the cap in
+    /// metres.
+    #[serde(default = "one")]
+    pub pitch: f32,
+    #[serde(default = "one_and_a_half")]
+    pub max_rise: f32,
     /// `"by_biome"` (or `"local"`) for the tile's local material, or a
     /// material name.
     #[serde(default = "by_biome")]
     pub material: String,
+    /// Whether same-kind neighbours share walls and roof.
+    #[serde(default = "yes")]
+    pub merge: bool,
+    /// What the tile top becomes.
+    #[serde(default)]
+    pub ground: Ground,
+    /// Band within a level, as fractions, where windows go; empty for none.
+    #[serde(default = "default_windows")]
+    pub windows: Vec<f32>,
+    /// Metres between window centres.
+    #[serde(default = "one")]
+    pub window_pitch: f32,
+    /// One door at ground level on an open face.
+    #[serde(default = "yes")]
+    pub door: bool,
+    /// Validation and editor cap on levels.
+    #[serde(default = "three")]
+    pub max_levels: u8,
+    /// Bridge: the top sits at the bank height over water.
+    #[serde(default)]
+    pub deck: bool,
     #[serde(flatten)]
     pub hooks: HooksRow,
     #[serde(flatten)]
@@ -508,8 +585,8 @@ pub struct TextureGlyphs {
     pub snow: [char; 2],
 }
 
-/// Glyph vocabulary the procedural sprite builders draw with, plus the art
-/// names of the one-glyph sprites for the smallest tiles.
+/// Glyph vocabulary the geometry is textured with, plus the art names of
+/// the one-glyph tree sprites for the smallest tiles.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ArtSpec {
     pub pine_l: char,
@@ -521,14 +598,9 @@ pub struct ArtSpec {
     /// Trunks of width 1, 2 and 4.
     pub trunk: [String; 3],
     pub cactus: char,
-    pub roof_l: char,
-    pub roof_r: char,
     pub roof_fill: char,
-    pub wall_fill: char,
     pub door: char,
     pub window: char,
-    /// Art name of the tiny house sprite (tier `tiny`).
-    pub tiny_house: String,
     /// Art names of the tiny tree sprites per form (tier `tiny`).
     pub tiny: TinyRefs,
 }

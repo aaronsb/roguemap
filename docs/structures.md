@@ -1,92 +1,180 @@
 # Structures as block geometry
 
-Buildings, roads, fields, walls and bridges are block geometry on the tile
-grid, not sprites. A tile carries a stack: a block kind and a level count.
+Buildings, roads, fields and walls are block geometry on the tile grid,
+not sprites. A tile carries a stack: a block kind and a level count.
 Stacking a block on a block makes it taller. Placing the same kind on
 neighbouring tiles makes one larger building, the way Townscaper works.
+Trees are volumes on the same ray walk. The decision is
+[ADR-002](adr/ADR-002-block-geometry-structures-and-trees.md); this note
+is what is built.
+
+Sizes are metres: a tile is 2 m square, a height unit is one metre and
+draws as one row today (ADR-004 will make rows per metre depend on zoom).
 
 ## Data
 
-`assets/blocks.toml` names each block kind:
+`assets/blocks.toml` names each block kind (`[[block]]`; the placement and
+identity properties are in [properties.md](properties.md)):
 
-| Field | Meaning |
-|---|---|
-| name | house, tower, barn, road, field, wall, bridge, dock, ... |
-| level_height | height units per level (a house level is about 2) |
-| roof | none, flat, gable, hip; gables ridge along the longer run |
-| material | fixed, or by biome (the material table decides colours) |
-| merge | whether same-kind neighbours share walls and roof |
-| ground | how the tile beneath changes: flatten, pave, till |
-| faces | glyph rows per level for walls: window bands, doors at ground on the open side |
-| light | a light spec for lit windows at night |
+| Field | Default | Meaning |
+|---|---|---|
+| name | required | house, tower, barn, road, field, wall |
+| size | required | `[w, d, h]` metres of one tile of the kind at one level: 2 by 2 by the level height |
+| levels | [1, 1] | levels the generator gives a stack, `[min, max]`; `[0, 0]` for ground kinds |
+| level_height | size's h | metres per level |
+| roof | flat | none, flat, gable, hip; gables ridge along the longer run |
+| pitch | 1.0 | metres of rise per metre of run from the eaves |
+| max_rise | 1.5 | cap on the rise, metres |
+| material | by_biome | colours from `materials.toml`: the tile's local material, or a named one |
+| merge | true | whether same-kind neighbours share walls and roof |
+| ground | flatten | what the tile beneath becomes: none, flatten (a pad at the tile's height), pave, till |
+| windows | [0.5, 1.0] | band within a level, as fractions of its height, where windows go; `[]` for none |
+| window_pitch | 1.0 | metres between window centres along a face |
+| door | true | one door at ground level on an open face |
+| light | none | a `lights.toml` row pushed per stack at night |
+| max_levels | 3 | validation and editor cap |
+| deck | false | reserved for bridges: the top at the bank height over water |
+| settle_min, chance | 1.0, 0 | the generator's rule: settlement field a tile needs, and the percentage of qualifying tiles that carry one; chance 0 means placed only by hand |
 
-A tile's structure is `Stack { kind, levels }`. Towns are painted by a
-settlement system (near water, on flat ground, by biome) or by hand in
-the editor: paint kinds on tiles, press again to stack.
+A tile's structure is `Stack { kind, levels }`. The generator places the
+first kind in table order whose rule passes, with more levels deeper into
+the settlement; `Map::set_stack` places or clears one by hand and lifts
+the chunk ceiling. Towns and roads wait for the settlement system.
 
 ## Geometry
 
-The ray walk treats a stack as a column whose top is the terrain height
-plus levels times level height. Above the terrain top the walk tests the
-structure before the ground: the column's sides are walls with the block's
-material and face glyphs, and the top is the roof. A roof is a height
-profile inside the tile, so a gable rises to a ridge and the walk finds the
-sloped surface at sub-tile resolution the same way it finds terrain detail.
+Once per frame the renderer builds a grid over the tiles in view
+(`src/grid.rs`): each tile's smooth height, its tile, its stack resolved
+into a column, and the tree volumes whose footprint touches it. The ray
+walk (`src/raster.rs`) reads only the grid.
 
-Adjacency decides what is drawn. Where two merged tiles touch, the shared
-wall is not a face and the roof profile continues across the seam. The
-end walls of a run get the gable; the long sides get the eaves. A road
-block has no height and paves the ground; a field block tills it; a bridge
-block spans water at the bank height.
+A stack is a column over its tile from the ground to the eaves at `base +
+levels * level_height`, where `base` is the tile's smooth height. Between
+two samples of the walk the segment of the ray is tested against the
+column (`src/blocks.rs`): the ground path is clipped to the tile's
+footprint; if the ray is under the roof surface where it enters, the hit
+is a wall on the face entered, otherwise the roof crossing is found by
+bisection. The roof is a height profile above the eaves, so a gable rises
+to a ridge and the walk finds the slope at sub-tile resolution. Walls run
+down into the ground, so a house on a slope has a taller downhill wall;
+`ground = flatten` makes the ground under the tile a level pad at the
+tile's height so the door sits at one height.
 
-## Level of detail
+The profiles, with `d` the distance in tiles to the nearest edge of the
+merged run across the ridge (`d_a` along it):
 
-At the overview a stack is its roof colour on a taller column, which the
-existing renderer already draws. At mid zooms window bands and doors
-appear as face glyphs. At the closest zooms props and creatures stand in
-the streets. Nothing is placed per detail; the block kind and the
-adjacency rules produce all of it.
+- flat: no rise
+- gable: `min(pitch * 2 d, max_rise)`, ridge along the longer run
+- hip: `min(pitch * 2 min(d, d_a), max_rise)`
 
-## Order of work
+## Adjacency
 
-1. The asset pass moves today's house sprite and material rules into
-   tables; the block table starts with house, road and field.
-2. The rasteriser gains the structure test above the terrain top and
-   flat roofs, then gable and hip profiles.
-3. Adjacency merging and face glyph bands.
-4. The settlement system paints towns; the editor paints by hand.
+Tiles merge when 4-adjacent with the same kind and level count, a level
+above the ground, and a kind that merges. Runs are counted per axis
+through each tile over merged tiles, so the profile continues across the
+seam and the end tiles of a run carry the gable ends. The ridge follows the
+longer run; on a tie the run's first tile's seed decides; L-shapes give a
+cross-gable at the corner. A face is open when the neighbour across it is
+not merged with this tile; shared faces are never met by the walk because
+the roof is continuous across them. A taller merged neighbour shows its
+wall above a shorter one's roof by itself, since the walk meets the taller
+column first.
+
+Ground kinds have no column: `pave` colours the top with the material's
+wall colour and the dirt texture pair, `till` draws the dirt glyph in
+alternating rows.
+
+## Faces and glyphs
+
+- Wall: the material's wall colour, shaded toward or away from the sun by
+  the face's normal, with the screen side the face points to so the light
+  pass shades it as it does cliffs; the cliff glyph in the wall glyph
+  colour. From zoom 4, windows: in the kind's band of each level, where the
+  position along the face (counted along the merged run) falls on the
+  window pitch, the tileset's `window` glyph, in the light's colour at
+  night. The door: the tileset's `door` glyph in the ground half of the
+  ground level, centred on the door face, which is the open face toward an
+  adjacent road, else the first open face in `(+y, +x, -y, -x)` rotated by
+  the tile's seed.
+- Roof: the material's roof colour, snow-covered by the kind's
+  `snow_cover`, shaded by the slope's normal so the two sides of a gable
+  differ; from zoom 4 the `roof_fill` glyph at 35% density.
+- Lit windows: at night every stack in view whose kind names a light
+  pushes one light at its tile, scaled by how dark the sky is.
 
 ## Trees as volumes
 
-The same walk renders trees as geometry. A species names a trunk column
-and a canopy shape: a cone for conifers, an ellipsoid for broadleaf, a low
-dome for scrub, a column with arms for cactus, with a size class. A ray at
-a given height tests the canopies whose footprint covers its ground point,
-so a tree occludes correctly at every angle, crowns in a dense stand merge
-into one mass, and the crown's normal shades it toward the sun. Glyph
-texture goes on the surface the walk finds, so the foliage character of
-each glyph set survives. An L-system species produces branch and leaf
-volumes for the walk instead of rows of characters.
+A species names a canopy shape and a size (`species.toml`): `size = [w,
+d, h]` is a mature tree's spread and height in metres, and `shape` is
+cone (conifers), ellipsoid (broadleaf), dome (scrub) or cactus (a column
+with two arms at the closest zoom), the form's shape by default. The
+crown radius is half the spread; the shape says how much of the height is
+trunk (a quarter for a cone, four tenths for an ellipsoid, none for a
+dome or cactus); a row may give `radius`, `height`, `trunk` and
+`trunk_radius` in metres instead. The size class scales a species (small
+0.8, mixed 1, large 1.15) and the tile's variant scales each tree (0.8 to
+1.1); the trunk is jittered within its tile by the tile's seed.
 
-At the overview a tree stays a one-glyph column. Billboards remain for
-creatures and small props, which face the camera anyway.
+Each volume is registered on every tile its footprint touches, tallest
+first. A ray segment tests the volumes of its sample's tile until their
+tops fall below the segment; every shape is a quadratic in `z` along the
+ray's ground path, so the crossing is a closed-form root, and the trunk is
+a thin cylinder. A gust shears the crown along the wind by height, which
+keeps the path linear. So a tree occludes correctly at every angle, crowns
+in a dense stand merge into one mass, and the crown's normal shades it
+toward the sun. Glyph texture goes on the surface the walk finds: the
+form's pool from the tileset (`pine_fill`, `round_mid`, `cactus`) at 30%
+density, 45% at the closest zoom, with the set's outline glyphs
+(`pine_l`/`pine_r`, `round_mid` ends) where the crown turns away
+sideways, and the trunk glyph on the trunk. At the two smallest zooms a
+tree stays the one-glyph billboard from `art/tiny`.
 
 ## Cast shadows
 
-Terrain steps, stacks and canopies cast shadows on the ground and on each
-other. Once per frame a shadow mask is built in map space over the visible
-bounds at four samples per tile: each occluder projects its footprint
-along the sun vector onto the ground. A column of height h above the
-surface it shadows sweeps a parallelogram of length h over the tangent of
-the sun's elevation, in the azimuth the cloud shadows already use; a
-canopy projects an ellipse offset the same way; a stack is a column plus
-its roof outline. The light pass multiplies direct sun by one minus the
-mask value at the surface point, sampled bilinearly for soft edges, and
-leaves ambient light alone, so shadowed ground stays readable.
+Once per frame a mask is built in map space over the visible tiles
+(`src/shadow.rs`) at four samples per tile, holding the height of the
+highest sun ray any occluder blocks over each ground point; a surface
+point below that height is in shadow. Every occluder is a disc swept along
+the sun's ground direction, the one the cloud shadows use, by its height
+times the shadow length per unit of height (`World::shadow_per_unit`:
+half the cotangent of the sun's elevation, capped at 1.8 tiles per metre
+as the cloud shadows are capped, so dawn and dusk stretch shadows without
+covering the map; sweeps stop at 12 tiles). Terrain casts where the
+ground drops faster than the sun's ray along that direction; a stack is a
+disc over its footprint swept from the eaves plus half the roof peak; a
+canopy a disc of its radius swept from its base. An occluder never stamps
+its own footprint, and the light pass looks the mask up a fifth of a tile
+along the sun ray from the surface point, so a sunlit wall or the near
+side of a crown stays lit while the away side is dark from its normal.
 
-Shadow length is capped as cloud shadows are, so dawn and dusk stretch
-shadows without covering the map. At night there is no direct sun and the
-mask is skipped. Level of detail: at the two smallest zooms only terrain
-and stacks cast; from the middle zooms canopies cast too; at the closest
-zooms props with height cast short shadows. Cost is one rasterised
-footprint per occluder in view plus one mask lookup per lit cell.
+The light pass multiplies direct sun by one minus the mask value at the
+surface point, sampled bilinearly and tightened at the middle of the
+blend, and leaves ambient light alone, so shadowed ground stays readable.
+At night there is no sun and the mask is skipped. Terrain and stacks cast
+at every zoom; canopies from zoom 2, where trees are volumes. Props do not
+cast yet.
+
+## Level of detail
+
+| zoom (half width) | structures | trees | shadows |
+|---|---|---|---|
+| 0-1 (2-3) | column to the eaves, flat, material colours, no glyph bands | one-glyph billboard | terrain, stacks |
+| 2-3 (4-6) | profiles on, no window or door glyphs, 4 bisections | volumes with normal shading, trunks, outline glyphs, 30% fill; crown seams not supersampled | + canopies |
+| 4-5 (8-12) | windows, doors, roof glyphs | crown seams supersampled | |
+| 6 (16) | 5 bisections, door two cells wide | cactus arms, 45% fill | |
+
+Nothing is placed per detail; the block kind, the species and the
+adjacency rules produce all of it. Measured at 168x71 in the snapshot
+timing (`frames=20`, seed 7, the filled world at the origin), every zoom
+draws in 9 to 14 ms.
+
+## Order of work
+
+1. Done: the asset pass (block table with house, tower, barn, road, field,
+   wall; species volumes; sizes in metres).
+2. Done: the structure test above the terrain with flat, gable and hip
+   profiles; adjacency merging and face glyph bands; trees as volumes;
+   cast shadows.
+3. Next: the settlement system paints towns and roads; the editor paints
+   by hand through `Map::set_stack`; bridges (`deck`) and props casting
+   short shadows at the closest zooms; the scale pass (ADR-004).

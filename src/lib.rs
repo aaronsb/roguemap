@@ -6,9 +6,11 @@
 
 pub mod assets;
 pub mod biome;
+pub mod blocks;
 pub mod camera;
 pub mod canvas;
 pub mod editor;
+pub mod grid;
 pub mod input;
 pub mod lighting;
 pub mod map;
@@ -19,11 +21,13 @@ pub mod properties;
 pub mod raster;
 pub mod render;
 pub mod settings;
+pub mod shadow;
 pub mod snapshot;
 pub mod sprite;
 pub mod sprites;
 pub mod terminal;
 pub mod tileset;
 pub mod ui;
+pub mod volume;
 pub mod world;
 pub mod worldmap;

@@ -20,13 +20,21 @@ read by any system.
 
 | Property | Type | Default | Tables | Meaning |
 |---|---|---|---|---|
-| shape | enum | required for species and blocks | species, blocks | Procedural form: pine, broadleaf, scrub, cactus, later lsystem; for blocks the roof profile. |
-| art | string | none | props, creatures, blocks | Name of an art file set; tiers are chosen by zoom. Absent means procedural shape or no picture. |
-| size_class | small, mixed, large | mixed | species | Which sprite variant pair the row draws from. |
-| canopy | [radius, base, top] metres | from size | species | Canopy volume for the geometry renderer (ADR-002): radius, height of the canopy base above ground, height of its top. Defaults derive from `size`. |
+| form | enum | required | species | Glyph pool and one-glyph sprite: pine, broadleaf, scrub, cactus, later lsystem. |
+| shape | enum | by form | species | Canopy volume for the geometry renderer (ADR-002): cone, ellipsoid, dome, cactus. |
+| roof | enum | flat | blocks | Profile above the column: none, flat, gable, hip. |
+| art | string | none | props, creatures | Name of an art file set; tiers are chosen by zoom. Absent means no picture. |
+| size | [w, d, h] metres | required | props, species, blocks (creatures with the scale pass) | Real extent: width, depth, height. A block's is one tile at one level (a house level [2, 2, 3]); a species' is a mature tree's spread and height (an oak [10, 10, 18]); a boulder [1.2, 1.0, 0.8]. The scale pass (ADR-004) will derive rows and columns at each zoom from it; today the volumes and footprints follow from it. |
+| size_class | small, mixed, large | mixed | species | Scales the species' size: 0.8, 1, 1.15. |
+| radius, height, trunk, trunk_radius | metres | from size by shape | species | Crown radius and height, trunk height and radius, when a row wants other proportions than its shape derives. |
 | color, glyph_color | rgb | required | props, lights | Fill and glyph colours; seasonal tables use four values. |
 | canopy, canopy_glyph | rgb x4 | required | species | Spring, summer, autumn, winter colours. |
-| material | name or rule | biome | blocks | Wall and roof colours by material; `local` takes the tile's material. |
+| material | name or rule | by_biome | blocks | Wall and roof colours by material; `by_biome` (or `local`) takes the tile's material. |
+| pitch, max_rise | metres per metre, metres | 1.0, 1.5 | blocks | Roof rise per metre of run from the eaves, and its cap. |
+| merge | bool | true | blocks | Whether same-kind neighbours share walls and roof. |
+| ground | enum | flatten | blocks | What the tile top becomes: none, flatten, pave, till. |
+| windows, window_pitch | fraction pair, metres | [0.5, 1.0], 1.0 | blocks | Band within a level where windows go (empty for none) and the spacing along a face. |
+| door | bool | true | blocks | One door at ground level on an open face, toward a road when there is one. |
 | seasonal | bool | true | species, biomes | Whether colours follow the seasons. |
 | snow_cover | 0..1 | 1 | props, species, blocks | How much accumulated snow shows on it; a smooth boulder holds less than a roof. |
 
@@ -69,16 +77,17 @@ occupied, asleep, carrying.
 | density | 0..1 | required for props | props | Chance per placement cell where the rules pass. |
 | cluster | 0..1 | 0 | props, species | Tendency to appear beside its own kind; 0 is independent, 1 is only in groups. |
 | spacing | tiles | 0 | blocks, creatures | Minimum distance from another of the same kind. |
-| footprint | w x h tiles | 1x1 | blocks | Tiles occupied; merges with same-kind neighbours per ADR-002. |
+| levels | count pair | [1, 1] | blocks | Levels the generator gives a stack, `[min, max]`; `[0, 0]` for ground kinds. |
+| settle_min, chance | 0..1, percent | 1.0, 0 | blocks | The generator's rule: settlement field a tile needs, and the share of qualifying tiles that carry one. |
 
 ## Physical
 
 | Property | Type | Default | Tables | Meaning |
 |---|---|---|---|---|
-| size | [w, d, h] metres | required | all placeables | Real extent: width, depth and height. Every prop, tree, block, creature and vehicle has one, natural or built. The renderer derives rows and columns at each zoom from it, art tiers scale to fit it, and footprint, occlusion and cast shadows follow from it. A boulder is [1.2, 1.0, 0.8]; an oak [10, 10, 18]; a person [0.6, 0.4, 2.0]; a house level [8, 6, 3]. |
 | passable | bool | props true, blocks false, trees false | props, species, blocks | Whether a creature may enter the tile. |
 | blocks_sight | bool | false | props, species, blocks | Whether it stops line of sight (reserved). |
-| levels, level_height | count, height units | 1, 2 | blocks | Stack height; a stack of two is twice as tall. |
+| level_height | metres | size's height | blocks | Metres per level; a stack of two is twice as tall. |
+| max_levels, deck | count, bool | 3, false | blocks | Validation cap on levels; `deck` is reserved for bridges. |
 | mass | kg | 0 | props, creatures | Reserved for physics and pushing. |
 | hardness | 0..1 | 1 | props, blocks | Resistance to damage and to being harvested. |
 
@@ -149,7 +158,9 @@ placing them.
 - Names are lower case with spaces; references are by name, never by index.
 - Colours are `[r, g, b]` integers 0..255 in tables and 0..1 floats in lights.
 - Distances and heights are metres; anything stored discretely is
-  centimetres. A tile is 2 m, the person 2 m, a house level 3 m (ADR-004).
+  centimetres. A tile is 2 m, the person 2 m, a house level 3 m, a tower
+  level 4 m, a barn 5 m (ADR-004). A height unit draws as one row until the
+  scale pass.
 - Lists of pairs keep authoring order, since hash-driven picks read them
   in order.
 - Every row has a description. The editor shows it beside the preview and

@@ -33,13 +33,9 @@ round_mid = ["▐", "▓", "▌"]
 round_bot = ["▝", "▀", "▘"]
 trunk = ["▌", "▐▌", "▐██▌"]
 cactus = "▌"
-roof_l = "◢"
-roof_r = "◣"
 roof_fill = "▒"
-wall_fill = " "
 door = "▐"
 window = "□"
-tiny_house = "petscii/house"
 
 [art.tiny]
 pine = "petscii/pine"

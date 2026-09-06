@@ -1,13 +1,17 @@
 # roguemap
 
 An isometric, height-mapped terrain renderer for the terminal. Terrain is
-drawn by inverse projection: every screen cell walks down the height column
-under it until it meets a tile top or a cliff face, so the camera can sit at
-any angle. Cells on a boundary between two surfaces are supersampled 2x3 and
-drawn with a sextant glyph and two colours. Sprites are billboards drawn
-back to front with a depth test. A lighting pass then applies ambient sky
-light, a sun shadowed by drifting clouds, and point lights such as
-campfires. Seasons are
+drawn by inverse projection: every screen cell walks down the continuous
+height field under it, testing the buildings and trees in view on the way,
+until it meets a surface, so the camera can sit at any angle. Buildings are
+block geometry (a kind and a level count per tile, merging with same-kind
+neighbours under one roof) and trees are volumes (cones, ellipsoids, domes,
+cacti) on the same walk; creatures and small props are billboards drawn
+back to front with a depth test. Cells on a boundary between two surfaces
+are supersampled 2x3 and drawn with a sextant glyph and two colours. A
+lighting pass then applies ambient sky light, a sun shadowed by drifting
+clouds and by the shadows the terrain, buildings and crowns cast, and point
+lights such as campfires. Seasons are
 palette swaps on the unlit colour. Glyphs come from a switchable tileset:
 plain ASCII, or PETSCII-style shapes from the Unicode Symbols for Legacy
 Computing block.
@@ -204,12 +208,30 @@ tangent of the sun's elevation. Precipitation is drawn beneath the layer.
 The header names the biome, temperature and height under the cursor; `Enter`
 teleports the player there.
 
+## Structures and trees
+
+Buildings, roads, fields and walls are block geometry: `assets/blocks.toml`
+names each kind's size, levels, roof profile (flat, gable or hip), material
+rule, faces and light, and a tile carries a stack of one kind. Same-kind
+neighbours merge into one building whose roof continues across the seam
+and whose gable rides the longer run; walls get window rows and a door on
+an open face, and lit windows are lights at night. Trees are volumes from
+`assets/species.toml`: a size in metres and a canopy shape, tested by the
+ray walk so crowns occlude correctly at any angle and merge in a dense
+stand. Terrain steps, buildings and crowns cast shadows along the sun's
+direction, the one the cloud shadows use. The note is
+[docs/structures.md](docs/structures.md); the decision
+[ADR-002](docs/adr/ADR-002-block-geometry-structures-and-trees.md). Sizes
+in every table are metres, with a 2 m tile.
+
 ## Level of detail
 
-Every zoom level carries its own sprite tier. Trees are generated
-procedurally per tier: a single glyph at 2x1, a small pine at 4x1, layered
-conifers and broadleaf canopies twenty-odd cells wide at 16x4. The player is
-`@` at the overview and a nine-row figure at the largest zoom.
+Every zoom level carries its own sprite tier for the player and props. A
+tree is a single glyph at the two smallest zooms and a volume from 4x1 up,
+with the set's outline glyphs and normal shading; buildings are flat
+columns at the overview and gain roof profiles, then windows and doors, as
+the zoom grows. The player is `@` at the overview and a nine-row figure at
+the largest zoom.
 
 ## Headless snapshots
 

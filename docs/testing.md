@@ -39,6 +39,30 @@ is one command.
   (`Map::synthetic`, `Tile::flat`, test-only) whose tiles come from a
   closure instead of the noise fields, with the height grid built for the
   view as `draw` builds it.
+- **Geometry.** A stack on a flat plain is met as a roof over its tile
+  centre between the eaves and the peak, and as a wall at its near corner
+  below the eaves, at zooms 2, 4 and 6; a pine is met on its flank facing
+  the camera half way up, and ground four tiles from its trunk is ground;
+  at the overview the column still stands but no volumes are built.
+- **Roof profiles and runs** (`src/blocks.rs`). A gable is flat at the
+  eaves and peaks at the ridge, continues across a merged run without a
+  step and caps at `max_rise`; a hip rises from every edge; flat stays
+  flat. Runs are labelled per axis with the longer run carrying the ridge
+  and a tie decided by the first tile's seed; merging needs the same kind
+  and levels and a kind that merges; the door goes toward a road, else
+  round the open faces by seed. A column meets a vertical ray on its ridge
+  and slope, a path coming in under the eaves as a wall on the face
+  entered, and a path coming in above as the roof crossing.
+- **Volumes** (`src/volume.rs`). A vertical ray meets an ellipsoid's top
+  and the trunk below it and nothing beyond the radius; a slanting ray
+  finds the nearer crossing in its segment on the surface; cones and
+  domes taper, cacti have caps and arms; wind shear leans the crown and
+  not the trunk.
+- **Shadow mask** (`src/shadow.rs`). A single tower at 15:00 shades the
+  ground down-sun for its height times the per-unit length (half a tile
+  per metre), not beyond, not on the sun side and not sideways; a point
+  above the ray is lit and the roof is not in its own shadow; at night
+  there is no mask.
 - **Antialiasing.** The sextant map is a bijection onto U+1FB00..U+1FB3B
   plus the two half blocks; quantising six identical colours yields no
   glyph; two colours split three and three yield the expected pattern.
@@ -75,13 +99,22 @@ is one command.
 - Every placeable row has a non-empty description and a category.
 - Numeric ranges: densities and fractions in 0..1, radii and reaches
   non-negative, colours in range, seasonal tables have four entries.
+- Geometry rows: sizes are positive in every dimension and required;
+  volume overrides are positive and shapes named; block levels rise and
+  stay within `max_levels`, window bands are rising pairs within a level
+  or empty, the window pitch is positive, chance is a percentage, and
+  `level_height` defaults to the size's height. Species volumes come from
+  their size by shape: half the spread is the radius, crown and trunk make
+  the height, a bush has no trunk.
 - Weighted lists are non-empty wherever a biome's tree density is
   positive, and every roll picks a listed species.
 - Export then reload gives identical resolved tables.
 - Sprite invariants over every zoom, form and art: four variants, rows one
   width, centre inside the width, base rows within the row count.
 - Map: a tile is the same whether generated bounded or unbounded and
-  regardless of chunk order; the chunk ceiling bounds every tile; climate
+  regardless of chunk order; the chunk ceiling bounds every tile with its
+  stack and crown; a placed stack overrides the generator, lifts the
+  ceiling and is applied when its chunk is generated later; climate
   classification covers each Köppen class at a known temperature and
   precipitation.
 

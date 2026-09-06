@@ -133,13 +133,26 @@ impl World {
     /// Cloud base altitude in height units (rows at 1x zoom).
     pub const CLOUD_ALTITUDE: f32 = 10.0;
 
-    /// Ground offset in tiles from a cloud to its shadow: the sun's azimuth
-    /// times the altitude over the tangent of its elevation, capped.
-    pub fn shadow_shift(&self) -> (f32, f32) {
+    /// Tiles of shadow per unit of height: half the cotangent of the sun's
+    /// elevation, capped so dawn and dusk stretch shadows without covering
+    /// the map. Cloud and cast shadows both use it.
+    pub fn shadow_per_unit(&self) -> f32 {
         let elev = self.elevation().max(0.08);
-        let len = (Self::CLOUD_ALTITUDE * 0.5 * (1.0 - elev * elev).sqrt() / elev).min(18.0);
-        // Sun to the south-east in map space; shadows fall north-west.
-        (-len * 0.7, -len * 0.7)
+        (0.5 * (1.0 - elev * elev).sqrt() / elev).min(1.8)
+    }
+
+    /// Unit ground direction shadows fall along: the sun stands to the
+    /// south-east in map space, so shadows fall north-west.
+    pub fn shadow_dir(&self) -> (f32, f32) {
+        (-std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2)
+    }
+
+    /// Ground offset in tiles from a cloud to its shadow: the shadow
+    /// direction times the altitude times the length per unit.
+    pub fn shadow_shift(&self) -> (f32, f32) {
+        let len = Self::CLOUD_ALTITUDE * self.shadow_per_unit();
+        let (ux, uy) = self.shadow_dir();
+        (len * ux, len * uy)
     }
 
     pub fn new(seed: u64) -> World {
@@ -413,7 +426,8 @@ mod tests {
     use crate::assets::test_assets;
     use crate::camera::Camera;
     use crate::canvas::Canvas;
-    use crate::map::{Structure, Tile};
+    use crate::blocks::Stack;
+    use crate::map::Tile;
     use crate::render::{RenderOptions, Renderer, Scene};
     use crate::tileset::Tileset;
 
@@ -480,7 +494,7 @@ mod tests {
         let map = Map::synthetic(16, 16, assets, 0, |x, y| {
             let mut t = Tile::flat(5);
             if (x, y) == (8, 8) {
-                t.building = Some(Structure { kind: 0, variant: 1 });
+                t.stack = Some(Stack { kind: 0, levels: 1 });
             }
             t
         });

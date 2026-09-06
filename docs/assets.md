@@ -13,10 +13,12 @@ properties a row may carry, with types and defaults, are catalogued in
 assets/
   biomes.toml       climate classes: Köppen code, ground colour, cover kind,
                     weighted species, material
-  species.toml      trees: form, size class, seasonal canopy colours
+  species.toml      trees: form, size class, size and canopy shape in
+                    metres, seasonal canopy colours
   materials.toml    wall and roof colours by material
-  props.toml        ground props: art, colours, placement rules
-  blocks.toml       building kinds: placement rule, material rule, light
+  props.toml        ground props: art, size, colours, placement rules
+  blocks.toml       block kinds: size, levels, roof profile, material rule,
+                    merging, faces, light, placement rule (ADR-002)
   creatures.toml    creatures: art, colours, walkable terrain; the player
                     is the first row
   surfaces.toml     the four seasonal palettes, the plain-surface texture
@@ -31,7 +33,7 @@ assets/
   art/
     player/*.txt    hand-drawn sprites, one file per tier
     props/<name>/*.txt
-    tiny/<tileset>/*.txt   one-glyph trees and houses per glyph set
+    tiny/<tileset>/*.txt   one-glyph trees per glyph set
 ```
 
 Every file under `assets/` is embedded into the binary by `build.rs`, so
@@ -59,6 +61,9 @@ lists in order, so reordering rows changes the world.
   the file and row.
 - Seasonal colours are one `[r, g, b]` for evergreens or four, in the
   order spring, summer, autumn, winter.
+- Sizes are metres: every placeable row carries `size = [w, d, h]`
+  (width, depth, height), and the block and species geometry fields are
+  metres too. A tile is 2 m square; a height unit is a metre.
 - Every row may carry `description`, `category` and `aliases`. Placeable
   rows (props, species, blocks, creatures, lights) must have a non-empty
   description.
@@ -108,20 +113,22 @@ At each zoom a sprite uses the tier with the largest first zoom at or below
 it, so a `small` file plus a `large min_zoom=5` file gives the props their
 two looks, and the player's four files give four. Art is referenced from
 the tables by name: `art = "boulder"` in `props.toml`, `art = "player"` in
-`creatures.toml`, and the `[art.tiny]` and `tiny_house` entries of a
-tileset name the one-glyph sprites for the smallest tiles.
+`creatures.toml`, and the `[art.tiny]` entries of a tileset name the
+one-glyph tree sprites for the two smallest zooms.
 
-Procedural shapes (pines, broadleaf, scrub, cactus, houses) are named by
-form in the tables instead of drawn; the generator builds a tier per zoom
-from the tileset's `[art]` vocabulary.
+Buildings and trees have no art: they are block geometry and volumes on
+the ray walk (docs/structures.md, ADR-002), textured with the tileset's
+`[art]` vocabulary (`pine_fill`, `round_mid`, `cactus`, `trunk`,
+`roof_fill`, `door`, `window`).
 
 ## Schema and validation
 
 Each table has a Rust struct that is its schema: the raw row structs in
 `src/assets/schema.rs` are the file format, and the resolved structs
 (`Biome`, `Species`, `Prop`, ...) hold indices in place of names. Loading
-resolves every reference, checks the ranges in the catalogue, and requires
-what the engine relies on: every Köppen code the classifier emits has a
+resolves every reference, checks the ranges in the catalogue (sizes
+positive, block levels within `max_levels`, window bands rising within a
+level, volume overrides positive), and requires what the engine relies on: every Köppen code the classifier emits has a
 biome, the four seasons and four surfaces are in order, the ten settings
 keys exist and every `glyphs` value has a tileset, a `stone` material, a
 `campfire` prop with a light, and `player` as the first creature. A

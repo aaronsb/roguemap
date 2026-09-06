@@ -856,7 +856,7 @@ impl Editor {
                 r.star.to_vec(),
                 r.snowflake.to_vec(),
                 r.flame.to_vec(),
-                vec![r.rain, a.pine_l, a.pine_r, a.cactus, a.roof_l, a.roof_r, a.roof_fill, a.wall_fill, a.door, a.window],
+                vec![r.rain, a.pine_l, a.pine_r, a.cactus, a.roof_fill, a.door, a.window],
                 a.pine_fill.to_vec(),
                 a.round_top.to_vec(),
                 a.round_mid.to_vec(),

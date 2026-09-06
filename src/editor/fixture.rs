@@ -7,7 +7,8 @@ use std::rc::Rc;
 
 use super::fields::TableKind;
 use crate::assets::{Assets, Tier};
-use crate::map::{FixtureSpec, Flora, Map, Structure, Terrain, SEA};
+use crate::blocks::Stack;
+use crate::map::{FixtureSpec, Flora, Map, Terrain, SEA};
 use crate::world::{Entity, PlacedProp, World, WEATHER_PRESETS};
 
 /// Side of the fixture map in tiles; the subject sits at the centre.
@@ -64,7 +65,8 @@ pub struct PreviewSettings {
     pub weather: Option<usize>,
     /// Block footprint, into `PATTERNS`.
     pub pattern: usize,
-    /// Tree sprite variant, 0..=3.
+    /// Tree variant, 0..=3; for blocks, which level count in the kind's
+    /// range.
     pub variant: u8,
     pub animate: bool,
     /// The one tier shown on small screens.
@@ -169,7 +171,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                 }
             }
             let mut t = centre;
-            t.building = Some(Structure { kind: house, variant: 1 });
+            t.stack = Some(Stack { kind: house, levels: 1 });
             map.set_tile(cx, cy, t);
             let trees: Vec<&str> = b.species.iter().filter_map(|(i, _)| assets.species.get(*i).map(|sp| sp.name.as_str())).collect();
             let material = assets.materials.get(b.material).map(|m| m.name.as_str()).unwrap_or("?");
@@ -183,16 +185,20 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             for (dx, dy) in PATTERNS[2].1 {
                 let mut t = map.get(cx + dx, cy + dy).expect("inside the fixture");
                 t.material = subject.row as u8;
-                t.building = Some(Structure { kind: house, variant: ((dx + dy) % 2) as u8 });
+                t.stack = Some(Stack { kind: house, levels: 1 });
                 map.set_tile(cx + dx, cy + dy, t);
             }
             caption = format!("showing a 2x2 house built of {}", assets.materials[subject.row].name);
         }
         TableKind::Blocks if subject.row < assets.blocks.len() => {
             let (name, offsets) = PATTERNS[s.pattern % PATTERNS.len()];
-            for (i, (dx, dy)) in offsets.iter().enumerate() {
+            // The variant picks the level count within the kind's range, so
+            // every tile of the pattern merges into one building.
+            let [lo, hi] = assets.blocks[subject.row].levels;
+            let levels = lo + (s.variant % (hi - lo + 1));
+            for (dx, dy) in offsets.iter() {
                 let mut t = map.get(cx + dx, cy + dy).expect("inside the fixture");
-                t.building = Some(Structure { kind: subject.row as u8, variant: ((s.variant as usize + i) % 4) as u8 });
+                t.stack = Some(Stack { kind: subject.row as u8, levels });
                 map.set_tile(cx + dx, cy + dy, t);
             }
             caption = format!("showing {} in pattern {name}", assets.blocks[subject.row].name);
@@ -215,7 +221,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
         }
         TableKind::Art => {
             // Preview through whatever references the art: a prop, a
-            // creature, or a tileset's tiny tree or house.
+            // creature, or a tileset's tiny tree.
             let names: Vec<&str> = assets.art.names();
             let name = names.get(subject.row).copied().unwrap_or("");
             if let Some(pi) = assets.props.iter().position(|p| p.art == name) {
@@ -236,11 +242,6 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                         f.glyphs = assets.setting("glyphs").and_then(|g| g.values.iter().position(|v| *v == t.name));
                         return f;
                     }
-                }
-                if t.art.tiny_house == name && !assets.blocks.is_empty() {
-                    let mut f = build(assets, Subject { kind: TableKind::Blocks, row: house as usize }, s);
-                    f.glyphs = assets.setting("glyphs").and_then(|g| g.values.iter().position(|v| *v == t.name));
-                    return f;
                 }
             }
         }
@@ -271,8 +272,9 @@ mod tests {
         assert_eq!(f.map.get(f.cx, f.cy).unwrap().tree.map(|t| t.species as usize), Some(oak));
         assert!(f.map.is_fixture());
         let f = build(&a, Subject { kind: TableKind::Blocks, row: 0 }, &PreviewSettings { pattern: 2, ..s.clone() });
-        assert!(f.map.get(f.cx + 1, f.cy + 1).unwrap().building.is_some());
-        assert!(f.map.get(f.cx - 1, f.cy).unwrap().building.is_none());
+        assert_eq!(f.map.get(f.cx + 1, f.cy + 1).unwrap().stack.map(|st| st.kind), Some(0));
+        assert!(f.map.get(f.cx - 1, f.cy).unwrap().stack.is_none());
+        assert_eq!(f.map.get(f.cx, f.cy).unwrap().stack, f.map.get(f.cx + 1, f.cy + 1).unwrap().stack, "one level count across the pattern, so it merges");
         let f = build(&a, Subject { kind: TableKind::Props, row: 0 }, &s);
         assert_eq!(f.world.placed.len(), 4);
         assert!(f.world.placed.iter().all(|p| p.x.floor() as i32 == f.cx && p.y.floor() as i32 == f.cy));

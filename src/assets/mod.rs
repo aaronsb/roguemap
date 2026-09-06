@@ -226,6 +226,14 @@ fn non_negative(ctx: &Ctx, i: usize, row: &str, field: &str, v: Option<f32>) -> 
     }
 }
 
+/// A `size = [w, d, h]` in metres must be positive in every dimension.
+fn sized(ctx: &Ctx, i: usize, row: &str, size: [f32; 3]) -> Result<(), AssetError> {
+    if size.iter().any(|v| v.is_nan() || *v <= 0.0) {
+        return Err(ctx.row(i, row, format!("size {size:?} must be positive in width, depth and height (metres)")));
+    }
+    Ok(())
+}
+
 fn described(ctx: &Ctx, i: usize, row: &str, id: &IdentityRow) -> Result<(), AssetError> {
     if id.description.trim().is_empty() {
         return Err(ctx.row(i, row, "missing description"));
@@ -441,20 +449,29 @@ impl Assets {
         let mut species = Vec::new();
         for (i, s) in raw.species.species.iter().enumerate() {
             described(&ctx, i, &s.name, &s.identity)?;
+            sized(&ctx, i, &s.name, s.size)?;
             check_hooks(&ctx, i, &s.name, &s.hooks)?;
             check_physical(&ctx, i, &s.name, &s.physical)?;
             check_conditions(&ctx, i, &s.name, &s.conditions)?;
-            non_negative(&ctx, i, &s.name, "radius", s.radius)?;
-            non_negative(&ctx, i, &s.name, "height", s.height)?;
+            for (f, v) in [("radius", s.radius), ("height", s.height), ("trunk", s.trunk), ("trunk_radius", s.trunk_radius)] {
+                non_negative(&ctx, i, &s.name, f, v)?;
+            }
+            if s.radius == Some(0.0) || s.height == Some(0.0) {
+                return Err(ctx.row(i, &s.name, "radius and height must be positive: a canopy has some size"));
+            }
             species.push(Species {
                 name: s.name.clone(),
                 identity: Identity::from_row(&s.identity, "species"),
                 form: s.form,
                 size_class: s.size_class,
+                size: s.size,
                 canopy: s.canopy.expand(),
                 canopy_glyph: s.canopy_glyph.expand(),
+                shape: s.shape,
                 radius: s.radius,
                 height: s.height,
+                trunk: s.trunk,
+                trunk_radius: s.trunk_radius,
                 sheds: s.sheds.unwrap_or(matches!(s.canopy, Seasonal::Four(_))),
                 light: optional_reference(&ctx, i, &s.name, "light", &light_names, s.hooks.light.as_ref())?,
                 hooks: Hooks::from_row(&s.hooks),
@@ -518,6 +535,7 @@ impl Assets {
             if p.terrain.is_empty() {
                 return Err(ctx.row(i, &p.name, "terrain list is empty"));
             }
+            sized(&ctx, i, &p.name, p.size)?;
             unit(&ctx, i, &p.name, "density", Some(p.density))?;
             check_hooks(&ctx, i, &p.name, &p.hooks)?;
             check_physical(&ctx, i, &p.name, &p.physical)?;
@@ -526,6 +544,7 @@ impl Assets {
                 name: p.name.clone(),
                 identity: Identity::from_row(&p.identity, "props"),
                 art: p.art.clone(),
+                size: p.size,
                 color: p.color,
                 glyph: p.glyph,
                 density: p.density,
@@ -561,13 +580,48 @@ impl Assets {
                 "by_biome" | "local" => Local,
                 m => MaterialRule::Fixed(reference(&ctx, i, &b.name, "material", &material_names, m)?),
             };
+            if b.chance > 100 {
+                return Err(ctx.row(i, &b.name, format!("chance {} is a percentage", b.chance)));
+            }
+            sized(&ctx, i, &b.name, b.size)?;
+            let level_height = b.level_height.unwrap_or(b.size[2]);
+            for (f, v) in [("level_height", level_height), ("pitch", b.pitch), ("max_rise", b.max_rise)] {
+                non_negative(&ctx, i, &b.name, f, Some(v))?;
+            }
+            if b.window_pitch <= 0.0 {
+                return Err(ctx.row(i, &b.name, format!("window_pitch {} must be positive", b.window_pitch)));
+            }
+            let windows = match b.windows.as_slice() {
+                [] => None,
+                [lo, hi] if (0.0..=1.0).contains(lo) && (0.0..=1.0).contains(hi) && lo < hi => Some([*lo, *hi]),
+                _ => return Err(ctx.row(i, &b.name, format!("windows {:?} must be empty or a rising pair within 0..1", b.windows))),
+            };
+            if b.levels[0] > b.levels[1] || b.levels[1] > b.max_levels {
+                return Err(ctx.row(i, &b.name, format!("levels {:?} must rise and stay within max_levels {}", b.levels, b.max_levels)));
+            }
+            if b.levels[1] > 0 && level_height <= 0.0 {
+                return Err(ctx.row(i, &b.name, "a kind with levels needs a positive level_height"));
+            }
             blocks.push(Block {
                 name: b.name.clone(),
                 identity: Identity::from_row(&b.identity, "blocks"),
                 settle_min: b.settle_min,
                 chance: b.chance,
                 terrain: b.terrain.clone(),
+                size: b.size,
+                levels: b.levels,
+                level_height,
+                roof: b.roof,
+                pitch: b.pitch,
+                max_rise: b.max_rise,
                 material,
+                merge: b.merge,
+                ground: b.ground,
+                windows,
+                window_pitch: b.window_pitch,
+                door: b.door,
+                max_levels: b.max_levels,
+                deck: b.deck,
                 light: optional_reference(&ctx, i, &b.name, "light", &light_names, b.hooks.light.as_ref())?,
                 hooks: Hooks::from_row(&b.hooks),
                 physical: Physical::from_row(&b.physical, false, 0.0),
@@ -719,7 +773,7 @@ impl Assets {
             if tileset_names[..i].contains(&t.name.as_str()) {
                 return Err(ctx.row(i, &t.name, format!("duplicate tileset name {:?}", t.name)));
             }
-            for (field, name) in [("tiny_house", &t.art.tiny_house), ("tiny.pine", &t.art.tiny.pine), ("tiny.broadleaf", &t.art.tiny.broadleaf), ("tiny.scrub", &t.art.tiny.scrub), ("tiny.cactus", &t.art.tiny.cactus)] {
+            for (field, name) in [("tiny.pine", &t.art.tiny.pine), ("tiny.broadleaf", &t.art.tiny.broadleaf), ("tiny.scrub", &t.art.tiny.scrub), ("tiny.cactus", &t.art.tiny.cactus)] {
                 if art.get(name, Tier::Tiny).is_none() {
                     return Err(ctx.row(i, &t.name, format!("art.{field} {name:?} has no tiny tier")));
                 }
@@ -861,7 +915,7 @@ mod tests {
         assert_eq!(a.koppen.len(), 9);
         assert_eq!(a.species.len(), 9);
         assert_eq!(a.materials.len(), 3);
-        assert_eq!(a.blocks.len(), 1);
+        assert_eq!(a.blocks.len(), 6);
         assert_eq!(a.creatures[0].name, "player");
         assert_eq!(a.tilesets.len(), 2);
         assert_eq!(a.settings.len(), 10);
@@ -907,7 +961,6 @@ mod tests {
             assert!(c.light.is_none_or(|l| l < a.lights.len()), "{}", c.name);
         }
         for t in &a.tilesets {
-            assert!(a.art.get(&t.art.tiny_house, Tier::Tiny).is_some(), "{}", t.name);
             for name in [&t.art.tiny.pine, &t.art.tiny.broadleaf, &t.art.tiny.scrub, &t.art.tiny.cactus] {
                 assert!(a.art.get(name, Tier::Tiny).is_some(), "{}: {name}", t.name);
             }
@@ -1042,6 +1095,67 @@ mod tests {
         let files: Vec<(String, String)> = embedded::FILES.iter().filter(|(p, _)| *p != "lights.toml").map(|(p, t)| (p.to_string(), t.to_string())).collect();
         let e = Assets::from_strings(&files).unwrap_err();
         assert_eq!(e.to_string(), "lights.toml: missing");
+    }
+
+    #[test]
+    fn geometry_rows_are_validated() {
+        // Sizes are metres and must be positive in every dimension.
+        let e = replace_in("species.toml", "size = [10.0, 10.0, 18.0]", "size = [10.0, 0.0, 18.0]").unwrap_err();
+        assert_eq!(e.row.as_ref().map(|r| r.2.as_str()), Some("oak"));
+        assert!(e.msg.contains("size") && e.msg.contains("metres"), "{e}");
+        let e = replace_in("blocks.toml", "size = [2.0, 2.0, 3.0]", "size = [2.0, 2.0, -3.0]").unwrap_err();
+        assert_eq!(e.row.as_ref().map(|r| r.2.as_str()), Some("house"));
+        let e = replace_in("props.toml", "size = [1.2, 1.0, 0.8]", "size = [1.2, 1.0, 0.0]").unwrap_err();
+        assert_eq!(e.row.as_ref().map(|r| r.2.as_str()), Some("boulder"));
+        // A size is required.
+        let e = replace_in("species.toml", "size = [10.0, 10.0, 18.0]\n", "").unwrap_err();
+        assert!(e.msg.contains("size"), "{e}");
+        // Volume overrides must be positive; a zero crown is no crown.
+        let e = replace_in("species.toml", "shape = \"ellipsoid\"", "shape = \"ellipsoid\"\nradius = 0.0").unwrap_err();
+        assert!(e.msg.contains("radius"), "{e}");
+        let e = replace_in("species.toml", "shape = \"ellipsoid\"", "shape = \"blob\"").unwrap_err();
+        assert!(e.msg.contains("blob"), "{e}");
+        // Blocks: levels rise and stay within max_levels; the window band is
+        // a rising pair within a level; roof names are checked.
+        let e = replace_in("blocks.toml", "levels = [1, 2]", "levels = [2, 1]").unwrap_err();
+        assert!(e.msg.contains("levels"), "{e}");
+        let e = replace_in("blocks.toml", "levels = [1, 2]", "levels = [1, 4]").unwrap_err();
+        assert!(e.msg.contains("max_levels"), "{e}");
+        let e = replace_in("blocks.toml", "windows = [0.5, 1.0]", "windows = [0.9, 0.2]").unwrap_err();
+        assert!(e.msg.contains("windows"), "{e}");
+        let e = replace_in("blocks.toml", "windows = [0.5, 1.0]", "windows = [0.5]").unwrap_err();
+        assert!(e.msg.contains("windows"), "{e}");
+        let e = replace_in("blocks.toml", "roof = \"gable\"", "roof = \"dome\"").unwrap_err();
+        assert!(e.msg.contains("dome"), "{e}");
+        let e = replace_in("blocks.toml", "window_pitch = 1.0", "window_pitch = 0.0").unwrap_err();
+        assert!(e.msg.contains("window_pitch"), "{e}");
+        let e = replace_in("blocks.toml", "chance = 14", "chance = 140").unwrap_err();
+        assert!(e.msg.contains("percentage"), "{e}");
+        // Windows may be turned off, and level_height defaults to the size.
+        let a = replace_in("blocks.toml", "windows = [0.5, 1.0]", "windows = []").unwrap();
+        assert_eq!(a.block("house").unwrap().windows, None);
+        assert_eq!(a.block("house").unwrap().level_height, 3.0);
+        let a = replace_in("blocks.toml", "size = [2.0, 2.0, 3.0]", "size = [2.0, 2.0, 3.0]\nlevel_height = 2.5").unwrap();
+        assert_eq!(a.block("house").unwrap().level_height, 2.5);
+    }
+
+    #[test]
+    fn species_volumes_come_from_their_size_by_shape() {
+        let a = Assets::embedded().unwrap();
+        let oak = a.species.iter().find(|s| s.name == "oak").unwrap();
+        let (shape, d) = oak.volume();
+        assert_eq!(shape, crate::volume::Shape::Ellipsoid);
+        assert_eq!(d.radius, 5.0, "half the spread");
+        assert!((d.height + d.trunk - 18.0).abs() < 1e-5, "crown and trunk make the height");
+        assert!(d.trunk_radius > 0.0);
+        let bush = a.species.iter().find(|s| s.name == "juniper").unwrap();
+        let (shape, d) = bush.volume();
+        assert_eq!((shape, d.trunk, d.trunk_radius), (crate::volume::Shape::Dome, 0.0, 0.0), "a bush sits on the ground");
+        assert_eq!(d.height, 2.5);
+        for s in &a.species {
+            let (_, d) = s.volume();
+            assert!(d.radius > 0.0 && d.height > 0.0, "{}", s.name);
+        }
     }
 
     #[test]

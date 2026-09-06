@@ -1,6 +1,7 @@
 //! Deferred lighting: every cell is lit from ambient sky light, the sun
-//! shadowed by drifting clouds, and the point lights, then written to the
-//! canvas.
+//! shadowed by drifting clouds and by the cast shadow mask, and the point
+//! lights, then written to the canvas. Lit windows join the frame's lights
+//! here from the stacks in view.
 
 use crate::canvas::{Canvas, Rgb};
 use crate::render::{Renderer, Scene};
@@ -46,6 +47,31 @@ pub(crate) fn knee(v: f32) -> f32 {
 }
 
 impl Renderer {
+    /// Lit windows: one light per stack in view whose kind names one, at
+    /// night, scaled by how dark the sky is.
+    pub(crate) fn stack_lights(&mut self, sc: &Scene) {
+        let (assets, world, cam) = (sc.assets, sc.world, sc.cam);
+        let night = 1.0 - world.skylight();
+        if night <= 0.05 {
+            return;
+        }
+        let grid = self.heights.as_ref().expect("height grid built for the frame");
+        let margin = 20.0;
+        for (mx, my, _, g) in grid.cells() {
+            let Some(st) = g.stack else { continue };
+            let b = &assets.blocks[st.kind as usize % assets.blocks.len()];
+            let Some(li) = b.light else { continue };
+            if st.levels == 0 {
+                continue;
+            }
+            let (sx, sy) = cam.project(mx as f32 + 0.5, my as f32 + 0.5, g.zs);
+            if sx < -margin || sx > self.w as f32 + margin || sy < -margin || sy > self.h as f32 + margin {
+                continue;
+            }
+            self.frame_lights.push(assets.lights[li].at(mx, my, (g.base + 1.0).round() as i32, night));
+        }
+    }
+
     pub(crate) fn light_pass(&self, cv: &mut Canvas, sc: &Scene) {
         let (world, t) = (sc.world, sc.t);
         let amb = world.ambient();
@@ -66,7 +92,8 @@ impl Renderer {
                 l = [l[0] * amb_face, l[1] * amb_face, l[2] * amb_face];
                 if sunny {
                     let shadow = world.cloud_shadow(g.wx, g.wy);
-                    let s = fk * (1.0 - 0.72 * shadow);
+                    let cast = self.shadow.as_ref().map(|m| m.at_surface(g.wx, g.wy, g.wz)).unwrap_or(0.0);
+                    let s = fk * (1.0 - 0.72 * shadow) * (1.0 - 0.6 * cast);
                     l = [l[0] + sun[0] * s, l[1] + sun[1] * s, l[2] + sun[2] * s];
                 }
                 let pl = point_light_at(g.wx, g.wy, g.wz, &lights, t);

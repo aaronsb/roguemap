@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::assets::Assets;
 use crate::biome::{self, Biome, Block, Material, Species};
+use crate::blocks::Stack;
 use crate::noise::{fbm, hash};
+use crate::volume::{size_scale, variant_scale};
 
 /// Tiles below this height are water; the water surface is drawn at this level.
 pub const SEA: i32 = 3;
@@ -18,6 +20,10 @@ pub const SEA: i32 = 3;
 /// it and buildings up there are built of stone.
 pub const ALPINE_Z: i32 = 12;
 pub const MAX_Z: i32 = 14;
+/// Side of a tile in metres. Every size in the tables is in metres; a
+/// height unit is one metre and draws as one row (ADR-004 will make rows
+/// per metre depend on zoom).
+pub const TILE_METRES: f32 = 2.0;
 
 const CHUNK: i32 = 32;
 /// Water bodies larger than this are treated as open water.
@@ -63,16 +69,7 @@ impl Flora {
     }
 }
 
-/// A building standing on a tile.
-#[derive(Clone, Copy, Debug)]
-pub struct Structure {
-    /// Index into the block table.
-    pub kind: u8,
-    /// Sprite variant, 0..=3.
-    pub variant: u8,
-}
-
-impl Structure {
+impl Stack {
     pub fn kind<'a>(&self, assets: &'a Assets) -> &'a Block {
         &assets.blocks[self.kind as usize % assets.blocks.len()]
     }
@@ -91,7 +88,8 @@ pub struct Tile {
     pub body_size: u16,
     /// Index into the biome table.
     pub biome: u8,
-    pub building: Option<Structure>,
+    /// The block geometry stacked here, if any (ADR-002).
+    pub stack: Option<Stack>,
     /// Index into the material table: what is built here is made of this.
     pub material: u8,
     /// Annual mean temperature, degrees Celsius.
@@ -119,6 +117,24 @@ impl Tile {
 
     pub fn material<'a>(&self, assets: &'a Assets) -> &'a Material {
         &assets.materials[self.material as usize % assets.materials.len()]
+    }
+
+    /// Highest solid over the tile: the terrain top, the stack's column
+    /// and roof, or the tree's crown.
+    pub fn top(&self, assets: &Assets) -> f32 {
+        let ground = self.hf.max(SEA as f32);
+        let mut top = ground;
+        if let Some(st) = self.stack {
+            let b = st.kind(assets);
+            top = top.max(ground + st.levels as f32 * b.level_height + b.max_rise);
+        }
+        if let Some(f) = self.tree {
+            let sp = f.species(assets);
+            let (_, d) = sp.volume();
+            let s = size_scale(sp.size_class) * variant_scale(f.variant);
+            top = top.max(ground + 0.5 + (d.trunk + d.height) * s);
+        }
+        top
     }
 }
 
@@ -167,9 +183,12 @@ pub struct Map {
     /// fixture's; the generator is bypassed.
     fixture: Option<FixtureSpec>,
     chunks: RefCell<HashMap<(i32, i32), Chunk>>,
+    /// Stacks placed by hand or by the settlement system, over the
+    /// generated ones.
+    stacks: RefCell<HashMap<(i32, i32), Option<Stack>>>,
 }
 
-/// A generated block of tiles with its tallest drawn height.
+/// A generated block of tiles with the ceiling over everything in it.
 struct Chunk {
     tiles: Vec<Tile>,
     max_z: i32,
@@ -205,7 +224,7 @@ fn material_for(terrain: Terrain, z: i32, biome: &Biome, stone: usize) -> usize 
 impl Map {
     pub fn new(w: usize, h: usize, seed: u64, assets: Rc<Assets>) -> Map {
         let stone = assets.material_index("stone").expect("the loader requires a stone material");
-        Map { w, h, seed, bounded: true, assets, stone, fixture: None, chunks: RefCell::new(HashMap::new()) }
+        Map { w, h, seed, bounded: true, assets, stone, fixture: None, chunks: RefCell::new(HashMap::new()), stacks: RefCell::new(HashMap::new()) }
     }
 
     /// A bounded flat map from a fixture spec; see `FixtureSpec`.
@@ -230,7 +249,7 @@ impl Map {
         let mut chunks = self.chunks.borrow_mut();
         let chunk = chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1));
         chunk.tiles[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize] = tile;
-        chunk.max_z = chunk.max_z.max(tile.draw_z());
+        chunk.max_z = chunk.max_z.max(tile.top(&self.assets).ceil() as i32);
     }
 
     /// Whether a position exists on this map.
@@ -264,13 +283,29 @@ impl Map {
         Some(self.with_chunk(x, y, |c| c.tiles[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize]))
     }
 
-    /// Tallest drawn height in the chunk containing a position, generating
-    /// it if needed; zero outside a bounded map.
+    /// Ceiling over everything in the chunk containing a position (terrain,
+    /// stacks and crowns), generating it if needed; zero outside a bounded
+    /// map.
     pub fn ceiling(&self, x: i32, y: i32) -> i32 {
         if !self.contains(x, y) {
             return 0;
         }
         self.with_chunk(x, y, |c| c.max_z)
+    }
+
+    /// Place or clear a stack on a tile, over what the generator put there,
+    /// and lift the chunk's ceiling for it. Off the map nothing happens.
+    pub fn set_stack(&self, x: i32, y: i32, stack: Option<Stack>) {
+        if !self.contains(x, y) {
+            return;
+        }
+        self.stacks.borrow_mut().insert((x, y), stack);
+        let key = (x.div_euclid(CHUNK), y.div_euclid(CHUNK));
+        let mut chunks = self.chunks.borrow_mut();
+        let chunk = chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1));
+        let i = (y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize;
+        chunk.tiles[i].stack = stack;
+        chunk.max_z = chunk.max_z.max(chunk.tiles[i].top(&self.assets).ceil() as i32);
     }
 
     /// Nearest land tile to a position, searching outward in rings.
@@ -409,13 +444,19 @@ impl Map {
         Climate { hf, z, temp, precip, biome }
     }
 
-    /// Whether a building stands at a tile: the first block kind, in table
-    /// order, whose placement rule passes the settlement field.
-    fn place_building(&self, x: i32, y: i32, hv: u64, terrain: Terrain, z: i32) -> Option<Structure> {
+    /// The stack the generator puts on a tile: the first block kind, in
+    /// table order, whose placement rule passes the settlement field, with
+    /// more levels deeper into the settlement.
+    fn place_stack(&self, x: i32, y: i32, hv: u64, terrain: Terrain, z: i32) -> Option<Stack> {
         let settle = fbm(x as f32 * 0.05 + 7.0, y as f32 * 0.05, self.seed ^ 0xB1, 2);
         self.assets.blocks.iter().enumerate().find_map(|(i, kind)| {
-            if kind.terrain.contains(&terrain) && z > SEA && settle > kind.settle_min && (hv >> 40) % 100 < kind.chance {
-                Some(Structure { kind: i as u8, variant: ((hv >> 48) % 4) as u8 })
+            if kind.chance > 0 && kind.terrain.contains(&terrain) && z > SEA && settle > kind.settle_min && (hv >> 40) % 100 < kind.chance {
+                let [lo, hi] = kind.levels;
+                let span = (hi - lo) as u64 + 1;
+                let deep = ((settle - kind.settle_min) * 6.0).clamp(0.0, 1.0);
+                let roll = ((hv >> 48) % 100) as f32 / 100.0;
+                let extra = ((roll * (0.4 + deep)) * span as f32) as u64;
+                Some(Stack { kind: i as u8, levels: lo + extra.min(span - 1) as u8 })
             } else {
                 None
             }
@@ -434,7 +475,7 @@ impl Map {
                 seed: (hv >> 32) as u32,
                 body_size: 0,
                 biome: f.biome as u8,
-                building: None,
+                stack: None,
                 material: f.material as u8,
                 temp: f.temp,
                 near_water: false,
@@ -457,7 +498,7 @@ impl Map {
         } else {
             None
         };
-        let building = if tree.is_none() { self.place_building(x, y, hv, terrain, z) } else { None };
+        let stack = if tree.is_none() { self.place_stack(x, y, hv, terrain, z) } else { None };
 
         let grass = ((fbm(x as f32 * 0.15, y as f32 * 0.15, self.seed ^ 0xA7, 2) * 4.0) as u8).min(biome.grass);
         Tile {
@@ -468,7 +509,7 @@ impl Map {
             seed: (hv >> 32) as u32,
             body_size: 0,
             biome: climate.biome as u8,
-            building,
+            stack,
             material: material_for(terrain, z, biome, self.stone) as u8,
             temp: temp.round().clamp(-60.0, 60.0) as i8,
             near_water,
@@ -480,8 +521,20 @@ impl Map {
         let (x0, y0) = (cx * CHUNK, cy * CHUNK);
         let mut tiles: Vec<Tile> = (0..CHUNK * CHUNK).map(|i| self.tile(x0 + i % CHUNK, y0 + i / CHUNK)).collect();
         self.label_water_bodies(&mut tiles, x0, y0);
-        let max_z = tiles.iter().map(|t| t.draw_z()).max().unwrap_or(0);
-        Chunk { tiles, max_z }
+        let placed = self.stacks.borrow();
+        if !placed.is_empty() {
+            for (i, t) in tiles.iter_mut().enumerate() {
+                if let Some(st) = placed.get(&(x0 + i as i32 % CHUNK, y0 + i as i32 / CHUNK)) {
+                    t.stack = *st;
+                }
+            }
+        }
+        Chunk { max_z: Self::ceiling_of(&tiles, &self.assets), tiles }
+    }
+
+    /// The ceiling over a chunk's tiles.
+    fn ceiling_of(tiles: &[Tile], assets: &Assets) -> i32 {
+        tiles.iter().map(|t| t.top(assets).ceil() as i32).max().unwrap_or(0)
     }
 
     /// Flood-fill each water body touching the chunk, capped, and record the
@@ -538,7 +591,7 @@ impl Tile {
             seed: 0,
             body_size: 0,
             biome: 0,
-            building: None,
+            stack: None,
             material: 0,
             temp: 15,
             near_water: false,
@@ -558,7 +611,7 @@ impl Map {
             for cx in -radius..=radius {
                 let (x0, y0) = (cx * CHUNK, cy * CHUNK);
                 let tiles: Vec<Tile> = (0..CHUNK * CHUNK).map(|i| tile(x0 + i % CHUNK, y0 + i / CHUNK)).collect();
-                let max_z = tiles.iter().map(|t| t.draw_z()).max().unwrap_or(0);
+                let max_z = Map::ceiling_of(&tiles, &map.assets);
                 map.chunks.borrow_mut().insert((cx, cy), Chunk { tiles, max_z });
             }
         }
@@ -576,7 +629,7 @@ mod tests {
         let m = Map::synthetic(8, 8, test_assets(), 1, |x, y| Tile::flat(if (x, y) == (3, 4) { 9 } else { 2 }));
         assert_eq!(m.get(3, 4).unwrap().z, 9);
         assert_eq!(m.get(0, 0).unwrap().terrain, Terrain::Water);
-        assert_eq!(m.ceiling(0, 0), 9);
+        assert_eq!(m.ceiling(0, 0), 10, "the ceiling rounds the smooth height 9.5 up");
         assert!(m.get(8, 0).is_none());
     }
 
@@ -629,14 +682,43 @@ mod tests {
     }
 
     #[test]
-    fn ceiling_bounds_every_tile() {
-        let mut m = Map::new(8, 8, 3, test_assets());
+    fn ceiling_bounds_every_tile_with_its_stack_and_crown() {
+        let mut m = Map::new(8, 8, 7, test_assets());
         m.bounded = false;
+        let (mut stacks, mut trees) = (0, 0);
         for y in -40..40 {
             for x in -40..40 {
-                assert!(m.get(x, y).unwrap().draw_z() <= m.ceiling(x, y));
+                let t = m.get(x, y).unwrap();
+                assert!(t.draw_z() <= m.ceiling(x, y));
+                assert!(t.top(&m.assets) <= m.ceiling(x, y) as f32, "({x}, {y}): top {} over ceiling {}", t.top(&m.assets), m.ceiling(x, y));
+                stacks += t.stack.is_some() as u32;
+                trees += t.tree.is_some() as u32;
+                if let Some(st) = t.stack {
+                    assert!(t.top(&m.assets) >= t.hf.max(SEA as f32) + st.levels as f32 * st.kind(&m.assets).level_height, "a stack lifts the top");
+                }
             }
         }
+        assert!(stacks > 0 && trees > 0, "the sample holds stacks ({stacks}) and trees ({trees})");
+    }
+
+    #[test]
+    fn placed_stacks_override_the_generator_and_lift_the_ceiling() {
+        let m = Map::new(32, 32, 7, test_assets());
+        let (x, y) = m.nearest_land(16, 16);
+        let before = m.ceiling(x, y);
+        m.set_stack(x, y, Some(Stack { kind: 0, levels: 3 }));
+        let t = m.get(x, y).unwrap();
+        assert_eq!(t.stack, Some(Stack { kind: 0, levels: 3 }));
+        assert!(m.ceiling(x, y) >= before && m.ceiling(x, y) as f32 >= t.top(&m.assets));
+        m.set_stack(x, y, None);
+        assert_eq!(m.get(x, y).unwrap().stack, None);
+        // An override made before the chunk exists is applied when it is
+        // generated.
+        let far = Map::new(64, 64, 7, test_assets());
+        far.set_stack(40, 40, Some(Stack { kind: 0, levels: 2 }));
+        assert_eq!(far.get(40, 40).unwrap().stack, Some(Stack { kind: 0, levels: 2 }));
+        far.set_stack(-1, -1, Some(Stack { kind: 0, levels: 1 }));
+        assert!(far.get(-1, -1).is_none(), "off a bounded map nothing is placed");
     }
 
     #[test]
@@ -671,7 +753,7 @@ mod tests {
         for (x, y) in [(0, 0), (11, 11), (6, 6)] {
             let t = m.get(x, y).unwrap();
             assert_eq!((t.z, t.terrain, t.biome, t.material, t.temp, t.grass), (6, Terrain::Grass, 5, 1, 12, 2));
-            assert!(t.tree.is_none() && t.building.is_none());
+            assert!(t.tree.is_none() && t.stack.is_none());
             assert_eq!(t.hf, 6.5);
             assert_eq!(m.height(x, y), 6);
             assert_eq!(m.climate(x, y).biome, 5);
@@ -684,7 +766,7 @@ mod tests {
         t.z = 9;
         m.set_tile(6, 6, t);
         assert_eq!(m.get(6, 6).unwrap().tree.map(|f| f.species), Some(2));
-        assert_eq!(m.ceiling(6, 6), 9);
+        assert!(m.ceiling(6, 6) as f32 >= t.top(&m.assets), "the ceiling covers the placed tree's crown");
         m.set_tile(40, 40, t);
         assert!(m.get(40, 40).is_none());
     }

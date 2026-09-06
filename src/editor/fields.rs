@@ -116,6 +116,8 @@ pub enum Kind {
     Seasonal,
     /// `[r, g, b]` as 0..1 floats.
     Unit3,
+    /// An array of this many positive lengths in metres.
+    Metres(usize),
     EnumList(&'static [&'static str]),
     StrList,
     /// `[[name, weight], ...]` into another table.
@@ -148,6 +150,9 @@ pub const COVERS: [&str; 4] = ["grass", "dry", "moss", "bare"];
 pub const FORMS: [&str; 4] = ["pine", "broadleaf", "scrub", "cactus"];
 pub const SIZE_CLASSES: [&str; 3] = ["small", "mixed", "large"];
 pub const BEHAVIOURS: [&str; 6] = ["idle", "wander", "graze", "flee", "hunt", "patrol"];
+pub const SHAPES: [&str; 4] = ["cone", "ellipsoid", "dome", "cactus"];
+pub const ROOFS: [&str; 4] = ["none", "flat", "gable", "hip"];
+pub const GROUNDS: [&str; 4] = ["none", "flatten", "pave", "till"];
 
 const UNIT: Kind = Kind::F32 { min: 0.0, max: 1.0 };
 const NON_NEG: Kind = Kind::F32 { min: 0.0, max: f32::INFINITY };
@@ -205,22 +210,27 @@ const BIOME: [Field; 10] = [
     req("material", Kind::Ref { table: TableKind::Materials, extra: &[] }),
 ];
 
-const SPECIES: [Field; 8] = [
+const SPECIES: [Field; 12] = [
     req("name", Kind::Str),
     req("form", Kind::Enum(&FORMS)),
     opt("size_class", Kind::Enum(&SIZE_CLASSES)),
+    req("size", Kind::Metres(3)),
+    opt("shape", Kind::Enum(&SHAPES)),
     req("canopy", Kind::Seasonal),
     req("canopy_glyph", Kind::Seasonal),
     opt("radius", NON_NEG),
     opt("height", NON_NEG),
+    opt("trunk", NON_NEG),
+    opt("trunk_radius", NON_NEG),
     opt("sheds", Kind::Bool),
 ];
 
 const MATERIAL: [Field; 5] = [req("name", Kind::Str), req("wall", Kind::Rgb), req("wall_glyph", Kind::Rgb), req("roof", Kind::Rgb), req("roof_glyph", Kind::Rgb)];
 
-const PROP: [Field; 9] = [
+const PROP: [Field; 10] = [
     req("name", Kind::Str),
     req("art", Kind::Ref { table: TableKind::Art, extra: &[] }),
+    req("size", Kind::Metres(3)),
     opt("color", Kind::Rgb),
     req("glyph", Kind::Rgb),
     req("density", UNIT),
@@ -230,12 +240,25 @@ const PROP: [Field; 9] = [
     opt("min_zoom", Kind::U8 { max: 6 }),
 ];
 
-const BLOCK: [Field; 5] = [
+const BLOCK: [Field; 18] = [
     req("name", Kind::Str),
-    req("settle_min", UNIT),
-    req("chance", Kind::U64),
+    req("size", Kind::Metres(3)),
     req("terrain", Kind::EnumList(&TERRAINS)),
+    opt("levels", Kind::Any),
+    opt("level_height", NON_NEG),
+    opt("roof", Kind::Enum(&ROOFS)),
+    opt("pitch", NON_NEG),
+    opt("max_rise", NON_NEG),
     opt("material", Kind::Ref { table: TableKind::Materials, extra: &["by_biome"] }),
+    opt("merge", Kind::Bool),
+    opt("ground", Kind::Enum(&GROUNDS)),
+    opt("windows", Kind::Any),
+    opt("window_pitch", NON_NEG),
+    opt("door", Kind::Bool),
+    opt("max_levels", Kind::U8 { max: 255 }),
+    opt("deck", Kind::Bool),
+    opt("settle_min", UNIT),
+    opt("chance", Kind::U64),
 ];
 
 const CREATURE: [Field; 11] = [
@@ -285,7 +308,7 @@ const LIGHT: [Field; 7] = [
 
 const SETTING: [Field; 5] = [req("key", Kind::Str), req("label", Kind::Str), req("values", Kind::StrList), opt("default", Kind::U8 { max: 255 }), opt("shortcut", Kind::Glyph)];
 
-const TILESET: [Field; 35] = [
+const TILESET: [Field; 31] = [
     req("name", Kind::Str),
     req("antialias", Kind::Bool),
     req("roles.cover.grass", Kind::GlyphList(3)),
@@ -312,13 +335,9 @@ const TILESET: [Field; 35] = [
     req("art.round_bot", Kind::GlyphList(3)),
     req("art.trunk", Kind::StrList),
     req("art.cactus", Kind::Glyph),
-    req("art.roof_l", Kind::Glyph),
-    req("art.roof_r", Kind::Glyph),
     req("art.roof_fill", Kind::Glyph),
-    req("art.wall_fill", Kind::Glyph),
     req("art.door", Kind::Glyph),
     req("art.window", Kind::Glyph),
-    req("art.tiny_house", Kind::Ref { table: TableKind::Art, extra: &[] }),
     req("art.tiny.pine", Kind::Ref { table: TableKind::Art, extra: &[] }),
     req("art.tiny.broadleaf", Kind::Ref { table: TableKind::Art, extra: &[] }),
 ];
@@ -482,6 +501,21 @@ pub fn parse(kind: Kind, text: &str) -> Result<toml::Value, String> {
             toml::Value::String(t.to_string())
         }
         Kind::Ref { .. } => toml::Value::String(t.to_string()),
+        Kind::Metres(n) => {
+            let text = t.trim().trim_start_matches('[').trim_end_matches(']');
+            let mut items = Vec::new();
+            for s in text.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let v: f64 = s.parse().map_err(|_| format!("{s:?} is not a number"))?;
+                if v <= 0.0 {
+                    return Err(format!("{v} is not a positive length in metres"));
+                }
+                items.push(toml::Value::Float(v));
+            }
+            if items.len() != n {
+                return Err(format!("{} lengths given; {n} needed (metres)", items.len()));
+            }
+            toml::Value::Array(items)
+        }
         Kind::StrList | Kind::EnumList(_) | Kind::GlyphList(_) if !t.starts_with('[') => {
             let items: Vec<toml::Value> = t.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| toml::Value::String(s.trim_matches('"').to_string())).collect();
             check_list(kind, &items)?;
@@ -598,6 +632,10 @@ mod tests {
         assert!(parse(Kind::F32 { min: 0.0, max: 1.0 }, "1.5").unwrap_err().contains("0..1"));
         assert_eq!(parse(Kind::F32 { min: 0.0, max: 1.0 }, "0.5").unwrap(), toml::Value::Float(0.5));
         assert!(parse(Kind::Glyph, "ab").is_err());
+        assert_eq!(parse(Kind::Metres(3), "2, 2, 3").unwrap(), toml::Value::Array(vec![toml::Value::Float(2.0), toml::Value::Float(2.0), toml::Value::Float(3.0)]));
+        assert_eq!(parse(Kind::Metres(3), "[1.2, 1.0, 0.8]").unwrap(), toml::Value::Array(vec![toml::Value::Float(1.2), toml::Value::Float(1.0), toml::Value::Float(0.8)]));
+        assert!(parse(Kind::Metres(3), "2, 2").unwrap_err().contains("3 needed"));
+        assert!(parse(Kind::Metres(3), "2, 0, 3").unwrap_err().contains("positive"));
         assert_eq!(parse(Kind::Glyph, "▓").unwrap().as_str(), Some("▓"));
         assert!(parse(Kind::Enum(&FORMS), "bush").is_err());
         assert_eq!(parse(Kind::StrList, "flammable, wooden").unwrap().as_array().unwrap().len(), 2);

@@ -8,12 +8,15 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::blocks::{Ground, Roof};
 use crate::canvas::Rgb;
 use crate::map::Terrain;
 use crate::palette::season_blend;
 use crate::properties::{Conditions, Hooks, Identity, Physical};
+use crate::volume::{Dims, Shape};
 
-/// Shape a species is drawn with; the tileset builds sprites per form.
+/// Form a species is drawn with: its glyph pool and its one-glyph sprite
+/// at the smallest zooms. The canopy volume is `Shape`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Form {
@@ -69,12 +72,18 @@ pub struct Species {
     pub identity: Identity,
     pub form: Form,
     pub size_class: SizeClass,
+    /// Spread and height of a mature tree in metres.
+    pub size: [f32; 3],
     /// Canopy colour by season: spring, summer, autumn, winter.
     pub canopy: [Rgb; 4],
     pub canopy_glyph: [Rgb; 4],
-    /// Canopy volume for ADR-002; none means derived from `size_class`.
+    /// Canopy volume (ADR-002), dimensions in metres; absent values come
+    /// from the shape's defaults, and the shape from the form.
+    pub shape: Option<Shape>,
     pub radius: Option<f32>,
     pub height: Option<f32>,
+    pub trunk: Option<f32>,
+    pub trunk_radius: Option<f32>,
     /// Whether it drops leaves in autumn.
     pub sheds: bool,
     /// Index into the light table.
@@ -103,8 +112,8 @@ pub enum MaterialRule {
     Fixed(usize),
 }
 
-/// A kind of building: where it is placed, what it is made of and whether
-/// it glows at night. ADR-002 adds the geometry.
+/// A block kind: where it is placed, its column and roof, its faces, what
+/// it is made of and whether it glows at night (ADR-002).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
     pub name: String,
@@ -115,7 +124,27 @@ pub struct Block {
     pub chance: u64,
     /// Terrain kinds it stands on.
     pub terrain: Vec<Terrain>,
+    /// One tile of the kind at one level, in metres.
+    pub size: [f32; 3],
+    /// Levels a generated stack has, `[min, max]`.
+    pub levels: [u8; 2],
+    /// Metres per level; zero for ground kinds.
+    pub level_height: f32,
+    pub roof: Roof,
+    /// Metres of rise per metre of run, and its cap in metres.
+    pub pitch: f32,
+    pub max_rise: f32,
     pub material: MaterialRule,
+    /// Whether same-kind neighbours share walls and roof.
+    pub merge: bool,
+    pub ground: Ground,
+    /// Window band within a level, as fractions; none for no windows.
+    pub windows: Option<[f32; 2]>,
+    /// Metres between window centres.
+    pub window_pitch: f32,
+    pub door: bool,
+    pub max_levels: u8,
+    pub deck: bool,
     /// Index into the light table, pushed per building at night.
     pub light: Option<usize>,
     pub hooks: Hooks,
@@ -152,6 +181,8 @@ pub struct Prop {
     pub identity: Identity,
     /// Art name; the tier is picked by zoom.
     pub art: String,
+    /// Width, depth and height in metres.
+    pub size: [f32; 3],
     /// Background colour; black draws the glyph over the ground.
     pub color: Rgb,
     pub glyph: Rgb,
@@ -192,6 +223,24 @@ pub struct Creature {
     pub light: Option<usize>,
     pub hooks: Hooks,
     pub conditions: Conditions,
+}
+
+impl Species {
+    /// The canopy shape and its dimensions at size scale one: from `size`
+    /// by shape unless the row says otherwise.
+    pub fn volume(&self) -> (Shape, Dims) {
+        let shape = self.shape.unwrap_or_else(|| Shape::for_form(self.form));
+        let d = Dims::from_size(shape, self.size);
+        (
+            shape,
+            Dims {
+                radius: self.radius.unwrap_or(d.radius),
+                height: self.height.unwrap_or(d.height),
+                trunk: self.trunk.unwrap_or(d.trunk),
+                trunk_radius: self.trunk_radius.unwrap_or(d.trunk_radius),
+            },
+        )
+    }
 }
 
 /// The Köppen codes `classify` emits; the biome table must name each.

@@ -1,20 +1,24 @@
 //! The frame buffer the render passes share, and the order they run in.
 //!
-//! Terrain is drawn by inverse projection (raster.rs): every screen cell
-//! walks down the height column under it until it meets a tile top or a
-//! cliff face, so the camera can sit at any angle. Sprites (sprites.rs) are
-//! billboards drawn back to front with a depth test against the terrain.
-//! A lighting pass (lighting.rs) then lights every cell from ambient sky
-//! light, the sun shadowed by drifting clouds, and point lights; overlays
-//! (overlay.rs) add precipitation and the cloud layer.
+//! Terrain and geometry are drawn by inverse projection (raster.rs): every
+//! screen cell walks down the continuous height field under it, testing
+//! the structure columns and tree volumes in view (grid.rs, blocks.rs,
+//! volume.rs) until it meets a surface, so the camera can sit at any
+//! angle. Sprites (sprites.rs) are billboards for creatures, props and the
+//! one-glyph trees of the smallest zooms, drawn back to front with a depth
+//! test. A lighting pass (lighting.rs) then lights every cell from ambient
+//! sky light, the sun shadowed by drifting clouds and by the cast shadow
+//! mask (shadow.rs), and point lights; overlays (overlay.rs) add
+//! precipitation and the cloud layer.
 
 use crate::assets::Assets;
 use crate::camera::Camera;
 use crate::canvas::{Canvas, Rgb};
-use crate::map::{Map, Tile, MAX_Z};
+use crate::grid::HeightGrid;
+use crate::map::{Map, Tile};
 use crate::noise::hash;
 use crate::palette::Palette;
-use crate::raster::HeightGrid;
+use crate::shadow::ShadowMask;
 use crate::tileset::Tileset;
 use crate::world::{Light, World};
 
@@ -74,9 +78,21 @@ pub(crate) struct GCell {
 
 pub(crate) const SKY_DEPTH: f32 = -1.0e9;
 
-/// What a screen cell's ray met in the height column.
+/// What kind of surface a ray met.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HitKind {
+    Terrain = 0,
+    Wall = 1,
+    Roof = 2,
+    Canopy = 3,
+    Trunk = 4,
+}
+
+/// What a screen cell's ray met on its way down.
 #[derive(Clone, Copy)]
 pub(crate) struct Hit {
+    /// The tile the surface belongs to: the ground, the stack's tile or
+    /// the tree's.
     pub tile: Tile,
     pub mx: i32,
     pub my: i32,
@@ -84,12 +100,18 @@ pub(crate) struct Hit {
     pub y: f32,
     /// Surface height at the hit.
     pub h: f32,
-    pub z: i32,
     pub face: u8,
     /// Steepness bands for cliff shading, 0 on gentle ground.
     pub below: i32,
     /// Sun-facing factor of the surface, -1 away to 1 toward.
     pub sun: f32,
+    pub kind: HitKind,
+    /// For a wall, the column face entered; for a canopy or trunk, the
+    /// index of its volume in the frame grid.
+    pub which: u32,
+    /// Screen-horizontal component of the surface normal, for outline
+    /// glyphs on crowns.
+    pub nsx: f32,
 }
 
 pub struct Renderer {
@@ -99,6 +121,8 @@ pub struct Renderer {
     /// Per-cell surface identity from the centre sample, for edge detection.
     pub(crate) ids: Vec<u64>,
     pub(crate) heights: Option<HeightGrid>,
+    /// Cast shadows for the frame; none at night.
+    pub(crate) shadow: Option<ShadowMask>,
     /// Lights discovered while drawing this frame, such as lit windows.
     pub(crate) frame_lights: Vec<Light>,
 }
@@ -106,7 +130,7 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(w: i32, h: i32) -> Renderer {
         let sky = GCell { albedo: Rgb(0, 0, 0), ch: ' ', glyph: Rgb(0, 0, 0), wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth: SKY_DEPTH };
-        Renderer { w, h, g: vec![sky; (w * h) as usize], ids: vec![0; (w * h) as usize], heights: None, frame_lights: Vec::new() }
+        Renderer { w, h, g: vec![sky; (w * h) as usize], ids: vec![0; (w * h) as usize], heights: None, shadow: None, frame_lights: Vec::new() }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -132,7 +156,10 @@ impl Renderer {
         self.frame_lights.clear();
         self.sky_pass(sc);
         let (x0, y0, x1, y1) = self.visible_bounds(sc.cam);
-        self.heights = Some(HeightGrid::build(sc.map, x0, y0, x1, y1));
+        let grid = HeightGrid::build(sc, x0, y0, x1, y1);
+        self.shadow = ShadowMask::build(sc, &grid);
+        self.heights = Some(grid);
+        self.stack_lights(sc);
         self.terrain_pass(sc, opts.aa && sc.ts.antialias);
         self.sprite_pass(sc);
         self.prop_pass(sc);
@@ -171,7 +198,7 @@ impl Renderer {
         let corners = [(0.0, 0.0), (self.w as f32, 0.0), (0.0, self.h as f32), (self.w as f32, self.h as f32)];
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for &(sx, sy) in &corners {
-            for z in [0.0, (MAX_Z + 24) as f32] {
+            for z in [0.0, crate::grid::TOP_CAP] {
                 let (x, y) = cam.unproject(sx, sy, z);
                 x0 = x0.min(x);
                 y0 = y0.min(y);
@@ -179,8 +206,9 @@ impl Renderer {
                 y1 = y1.max(y);
             }
         }
-        // Widest sprite art is about 16 columns either side of its tile.
-        let m = (16.0 / cam.a()).ceil() as i32 + 2;
+        // Widest sprite art is about 16 columns either side of its tile,
+        // and a crown reaches a few tiles from its trunk.
+        let m = ((16.0 / cam.a()).ceil() as i32 + 2).max(5);
         (x0.floor() as i32 - m, y0.floor() as i32 - m, x1.ceil() as i32 + m, y1.ceil() as i32 + m)
     }
 }
