@@ -12,7 +12,7 @@ use crate::settings::{Settings, ITEMS};
 use crate::noise::{fbm, hash, smoothstep};
 use crate::palette::{Palette, SEASON_NAMES};
 use crate::tileset::{Sprite, Tileset, ZOOMS};
-use crate::world::{Light, Weather, World};
+use crate::world::{Light, World};
 
 /// Column span `[lo, lo + w)` of diamond row `dy` for a footprint, sampling
 /// the rhombus |x|/hw + |y|/hh <= 1 at row centres.
@@ -191,8 +191,11 @@ pub struct Renderer {
     pub show_hud: bool,
 }
 
-fn wind(x: f32, y: f32, t: f32) -> f32 {
-    (t * 1.8 + x * 0.09 + y * 0.18).sin() + 0.5 * (t * 0.6 - x * 0.05 + y * 0.11).sin()
+/// Grass lean field: a travelling wave whose speed and reach follow the wind.
+fn wind(x: f32, y: f32, t: f32, strength: f32) -> f32 {
+    let speed = 0.3 + 2.5 * strength;
+    let w = (t * speed + x * 0.09 + y * 0.18).sin() + 0.5 * (t * speed * 0.35 - x * 0.05 + y * 0.11).sin();
+    w * (0.25 + 0.75 * strength)
 }
 
 impl Renderer {
@@ -218,7 +221,7 @@ impl Renderer {
     pub fn draw(&mut self, cv: &mut Canvas, map: &Map, ts: &Tileset, world: &World, cam: &Camera, settings: &Settings, t: f32) {
         let pal_player = SpriteColors { bg: Rgb(52, 74, 150), fg: Rgb(240, 214, 176), trunk_bg: Rgb(52, 74, 150), trunk_fg: Rgb(240, 214, 176) };
         let pal = Palette::for_season(world.season);
-        let chop = world.choppiness(t);
+        let chop = world.choppiness();
         self.frame_lights.clear();
         let night = 1.0 - world.skylight();
         self.sky_pass(ts, world, t);
@@ -241,20 +244,21 @@ impl Renderer {
                 let Some(tile) = map.get(mx, my) else { continue };
                 let z = tile.draw_z();
                 let (sx, sy) = cam.project(vx, vy, z);
-                self.surface(map, &tile, mx, my, sx, sy, ts, &pal, cam, t, chop, world.season);
-                self.walls(map, &tile, vx, vy, mx, my, sx, sy, cam, &pal, ts, world.season);
+                self.surface(map, &tile, mx, my, sx, sy, ts, &pal, cam, t, chop, world);
+                self.walls(map, &tile, vx, vy, mx, my, sx, sy, cam, &pal, ts, world);
                 if let Some(v) = tile.tree {
                     let sp = &SPECIES[tile.species as usize % SPECIES.len()];
                     let set = ts.trees(cam.zoom, sp.form);
                     let sprite = &set[v as usize % set.len()];
-                    let snow = biome::snow_cover(tile.temp as f32, world.season) * 0.7;
+                    let snow = world.snow_at(tile.temp as f32) * 0.7;
                     let colors = SpriteColors {
                         bg: biome::seasonal(&sp.canopy, world.season).lerp(pal.snow, snow),
                         fg: biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph, snow * 0.5),
                         trunk_bg: pal.trunk,
                         trunk_fg: pal.trunk_glyph,
                     };
-                    self.sprite(sprite, &tile, mx, my, sx, sy, &colors, true, t);
+                    let gust = if cam.hw <= 2 { 0.0 } else { world.gust(mx as f32, my as f32, t) };
+                    self.sprite(sprite, &tile, mx, my, sx, sy, &colors, gust, t);
                 }
                 if let Some(v) = tile.building {
                     let mat_ix = if matches!(tile.terrain, Terrain::Rock) || tile.z >= crate::map::SNOW - 3 {
@@ -265,23 +269,23 @@ impl Renderer {
                     let mat = &MATERIALS[mat_ix];
                     let set = ts.houses(cam.zoom);
                     let sprite = &set[v as usize % set.len()];
-                    let snow = biome::snow_cover(tile.temp as f32, world.season) * 0.8;
+                    let snow = world.snow_at(tile.temp as f32) * 0.8;
                     let colors = SpriteColors { bg: mat.roof.lerp(pal.snow, snow), fg: mat.roof_glyph, trunk_bg: mat.wall, trunk_fg: mat.wall_glyph };
-                    self.sprite(sprite, &tile, mx, my, sx, sy, &colors, false, t);
+                    self.sprite(sprite, &tile, mx, my, sx, sy, &colors, 0.0, t);
                     if night > 0.05 {
                         self.frame_lights.push(Light { mx, my, z: tile.draw_z(), color: [1.0 * night, 0.75 * night, 0.4 * night], radius: 4.0, intensity: 0.8, flicker: false });
                     }
                 }
                 for e in &world.entities {
                     if e.mx == mx && e.my == my {
-                        self.sprite(ts.player(cam.zoom), &tile, mx, my, sx, sy, &pal_player, false, t);
+                        self.sprite(ts.player(cam.zoom), &tile, mx, my, sx, sy, &pal_player, 0.0, t);
                     }
                 }
             }
         }
         self.fires(map, world, cam, ts, t);
         self.light_pass(cv, world, t);
-        self.weather_pass(cv, ts, world, t);
+        self.weather_pass(cv, ts, world, map, cam, t);
         if self.show_hud {
             self.hud(cv, ts, world, cam, map);
         }
@@ -352,8 +356,9 @@ impl Renderer {
 
     /// Unlit surface colour: water by depth, ground by biome and season, and
     /// a snow blend wherever the seasonal temperature is below freezing.
-    fn base_color(tile: &crate::map::Tile, pal: &Palette, season: f32) -> Rgb {
-        let lift = 0.86 + tile.draw_z() as f32 * 0.018;
+    fn base_color(tile: &crate::map::Tile, pal: &Palette, world: &World) -> Rgb {
+        let season = world.season;
+        let lift = (0.86 + tile.draw_z() as f32 * 0.018) * (1.0 - 0.28 * world.wet_at(tile.temp as f32));
         let b = &BIOMES[tile.biome as usize % BIOMES.len()];
         let c = match tile.terrain {
             Terrain::Water => {
@@ -366,7 +371,7 @@ impl Renderer {
             Terrain::Rock => pal.rock.scale(lift),
             Terrain::Snow => pal.snow,
         };
-        c.lerp(pal.snow, biome::snow_cover(tile.temp as f32, season))
+        c.lerp(pal.snow, world.snow_at(tile.temp as f32))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -383,11 +388,12 @@ impl Renderer {
         cam: &Camera,
         t: f32,
         chop: f32,
-        season: f32,
+        world: &World,
     ) {
-        let base = Self::base_color(tile, pal, season);
-        let snow = biome::snow_cover(tile.temp as f32, season);
+        let base = Self::base_color(tile, pal, world);
+        let snow = world.snow_at(tile.temp as f32);
         let ground_glyph = BIOMES[tile.biome as usize % BIOMES.len()].ground_glyph.lerp(pal.snow_glyph, snow);
+        let wind_strength = if cam.hw <= 2 { 0.0 } else { world.weather.wind };
         // Wave visibility: weather roughness scaled by body size, so ponds lie flat.
         let wave = chop * smoothstep(6.0, 160.0, tile.body as f32);
         let z = tile.draw_z() as f32;
@@ -407,7 +413,7 @@ impl Renderer {
                 match tile.terrain {
                     Terrain::Grass => {
                         if r < tile.grass as f32 * 0.14 + 0.04 {
-                            let w = wind((x) as f32, (y) as f32, t);
+                            let w = wind(x as f32, y as f32, t, wind_strength);
                             ch = ts.grass[if w < -0.35 { 0 } else if w > 0.35 { 2 } else { 1 }];
                             let vary = 0.85 + ((hv >> 12) % 100) as f32 * 0.003;
                             glyph = ground_glyph.scale(vary);
@@ -457,7 +463,7 @@ impl Renderer {
     /// geometrically, and the height difference to it is drawn as wall rows.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
-    fn walls(&mut self, map: &Map, tile: &crate::map::Tile, vx: i32, vy: i32, mx: i32, my: i32, sx: i32, sy: i32, cam: &Camera, pal: &Palette, ts: &Tileset, season: f32) {
+    fn walls(&mut self, map: &Map, tile: &crate::map::Tile, vx: i32, vy: i32, mx: i32, my: i32, sx: i32, sy: i32, cam: &Camera, pal: &Palette, ts: &Tileset, world: &World) {
         let z = tile.draw_z();
         let (thw, thh) = (cam.hw, cam.hh);
         let right = z - self.view_z(map, cam, vx + 1, vy);
@@ -466,7 +472,7 @@ impl Renderer {
         if right <= 0 && left <= 0 && front <= 0 {
             return;
         }
-        let surface = Self::base_color(tile, pal, season);
+        let surface = Self::base_color(tile, pal, world);
         let (mx, my) = (mx as f32, my as f32);
         let (lo, w) = (-thh..thh).map(|dy| row_span(dy, thw, thh)).min_by_key(|&(lo, _)| lo).unwrap_or((0, 0));
         let max_w = (-thh..thh).map(|dy| row_span(dy, thw, thh).1).max().unwrap_or(0);
@@ -500,12 +506,12 @@ impl Renderer {
     }
 
     /// Draw a billboard anchored so its bottom row sits on the tile's centre
-    /// row. With `sway` the canopy leans with the wind, more at the top.
+    /// row. `gust` in 0..1 leans the canopy with the wind, more at the top.
     #[allow(clippy::too_many_arguments)]
-    fn sprite(&mut self, sp: &Sprite, tile: &crate::map::Tile, mx: i32, my: i32, sx: i32, sy: i32, col: &SpriteColors, sway: bool, t: f32) {
+    fn sprite(&mut self, sp: &Sprite, tile: &crate::map::Tile, mx: i32, my: i32, sx: i32, sy: i32, col: &SpriteColors, gust: f32, t: f32) {
         let n = sp.rows.len() as i32;
         let phase = (tile.seed % 628) as f32 * 0.01;
-        let lean = if sway { (t * 1.3 + phase).sin() * (1.0 + n as f32 * 0.08) } else { 0.0 };
+        let lean = if gust > 0.0 { (t * (0.8 + 1.2 * gust) + phase).sin() * gust * (1.0 + n as f32 * 0.08) } else { 0.0 };
         for (r, row) in sp.rows.iter().enumerate() {
             let r = r as i32;
             let height = n - 1 - r;
@@ -575,7 +581,8 @@ impl Renderer {
                 let amb_face = 0.75 + 0.25 * fk;
                 l = [l[0] * amb_face, l[1] * amb_face, l[2] * amb_face];
                 if sunny {
-                    let cloud = fbm(g.wx * 0.07 + t * 0.30, g.wy * 0.07 + t * 0.11, 0xC10D, 3);
+                    let (ox, oy) = world.cloud_offset;
+                    let cloud = fbm((g.wx + ox) * 0.07, (g.wy + oy) * 0.07, 0xC10D, 3);
                     let shadow = smoothstep(cloud_th, cloud_th + 0.10, cloud);
                     let s = fk * (1.0 - 0.72 * shadow);
                     l = [l[0] + sun[0] * s, l[1] + sun[1] * s, l[2] + sun[2] * s];
@@ -603,34 +610,41 @@ impl Renderer {
         }
     }
 
-    fn weather_pass(&self, cv: &mut Canvas, ts: &Tileset, world: &World, t: f32) {
+    /// Precipitation overlay: intensity from the weather, kind from the
+    /// temperature at the screen centre.
+    fn weather_pass(&self, cv: &mut Canvas, ts: &Tileset, world: &World, map: &Map, cam: &Camera, t: f32) {
         let (w, h) = (self.w, self.h);
-        match world.weather {
-            Weather::Clear => {}
-            Weather::Rain => {
-                let n = (w * h / 28).max(1);
-                for i in 0..n {
-                    let hv = hash(i as i64, 7, 0xA1);
-                    let speed = 26.0 + (hv % 10) as f32;
-                    let x = (hv % w as u64) as i32;
-                    let y0 = ((hv >> 24) % h as u64) as f32;
-                    let y = ((y0 + t * speed) % h as f32) as i32;
-                    cv.glyph(x, y, ts.rain, Rgb(150, 170, 205));
-                }
+        let p = world.weather.precip;
+        if p < 0.02 {
+            return;
+        }
+        let (mx, my) = cam.center_tile(map, w, h);
+        let temp = map.get(mx, my).map(|t| t.temp as f32).unwrap_or(10.0);
+        let wind = world.weather.wind;
+        let across = world.weather.wind_dir.cos();
+        if world.snowing_at(temp) {
+            let n = ((w * h) as f32 / 40.0 * p) as i32;
+            for i in 0..n {
+                let hv = hash(i as i64, 9, 0xA2);
+                let speed = 3.5 + (hv % 5) as f32 * 0.6;
+                let x0 = (hv % w as u64) as f32;
+                let y0 = ((hv >> 24) % h as u64) as f32;
+                let drift = (t * 0.9 + (hv >> 40) as f32 * 0.01).sin() * 2.5 + t * wind * 6.0 * across;
+                let x = ((x0 + drift).rem_euclid(w as f32)) as i32;
+                let y = ((y0 + t * speed) % h as f32) as i32;
+                let ch = ts.snowflake[((hv >> 16) % 3 == 0) as usize];
+                cv.glyph(x, y, ch, Rgb(235, 240, 250));
             }
-            Weather::Snow => {
-                let n = (w * h / 40).max(1);
-                for i in 0..n {
-                    let hv = hash(i as i64, 9, 0xA2);
-                    let speed = 3.5 + (hv % 5) as f32 * 0.6;
-                    let x0 = (hv % w as u64) as f32;
-                    let y0 = ((hv >> 24) % h as u64) as f32;
-                    let drift = (t * 0.9 + (hv >> 40) as f32 * 0.01).sin() * 2.5;
-                    let x = ((x0 + drift).rem_euclid(w as f32)) as i32;
-                    let y = ((y0 + t * speed) % h as f32) as i32;
-                    let ch = ts.snowflake[((hv >> 16) % 3 == 0) as usize];
-                    cv.glyph(x, y, ch, Rgb(235, 240, 250));
-                }
+        } else {
+            let n = ((w * h) as f32 / 28.0 * p) as i32;
+            for i in 0..n {
+                let hv = hash(i as i64, 7, 0xA1);
+                let speed = 26.0 + (hv % 10) as f32;
+                let x0 = (hv % w as u64) as f32;
+                let y0 = ((hv >> 24) % h as u64) as f32;
+                let x = ((x0 + t * wind * 8.0 * across).rem_euclid(w as f32)) as i32;
+                let y = ((y0 + t * speed) % h as f32) as i32;
+                cv.glyph(x, y, ts.rain, Rgb(150, 170, 205));
             }
         }
     }
@@ -646,6 +660,8 @@ impl Renderer {
                 format!("{} ({}) {}C z{}", b.name, b.koppen, t.temp, t.z)
             })
             .unwrap_or_default();
+        let wx = &world.weather;
+        let weather = format!("cloud {:.0}% wind {:.0}% precip {:.0}%", wx.cover * 100.0, wx.wind * 100.0, wx.precip * 100.0);
         let line = format!(
             " roguemap  rot {}  zoom {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
             cam.rot,
@@ -655,7 +671,7 @@ impl Renderer {
             world.tod.floor() as i32,
             ((world.tod.fract()) * 60.0) as i32,
             if world.auto_time { "" } else { " (paused)" },
-            world.weather.name(),
+            weather,
             ts.name,
             world.lights.len() + self.frame_lights.len(),
             here,

@@ -15,22 +15,21 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use settings::{Settings, CLOCK, GLYPHS, HUD, WEATHER, WORLD};
+use settings::{Settings, CLOCK, DAY_LENGTH, GLYPHS, HUD, WEATHER, WIND, WORLD};
 
 /// Push the settings table into the objects that act on it.
 fn apply(settings: &Settings, map: &mut map::Map, world: &mut world::World, renderer: &mut render::Renderer) {
     map.bounded = !settings.filled();
     world.auto_time = settings.get(CLOCK) == 0;
-    world.weather = match settings.get(WEATHER) {
-        1 => world::Weather::Rain,
-        2 => world::Weather::Snow,
-        _ => world::Weather::Clear,
-    };
+    world.weather_preset = settings.get(WEATHER).checked_sub(1);
+    world.wind_preset = settings.get(WIND).checked_sub(1);
+    world.day_secs = world::DAY_LENGTHS[settings.get(DAY_LENGTH)];
     renderer.show_hud = settings.get(HUD) == 0;
 }
 
 /// Headless mode: `--snap W H OUT [key=value...]` renders one frame and dumps it.
-/// Keys: seed, t, tod, season, weather (clear|rain|snow), glyphs (petscii|ascii),
+/// Keys: seed, t, tod, season, cover, wind, precip (0..1), simdays (run a
+/// storm that many days first), glyphs (petscii|ascii),
 /// rot, zoom, size, fill (1 for an unbounded world), cx, cy (tile to centre
 /// on), popover (1), fire (1 to place a campfire at centre), player (1), hud (0|1).
 fn snapshot(args: &[String]) -> std::io::Result<()> {
@@ -60,14 +59,25 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
     let zoom = kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| render::Camera::fitting_zoom(&map, w as i32, h as i32));
     cam.set_zoom(zoom, &map, w as i32, h as i32);
     cam.look_at(get("cx", map.w as f32 / 2.0) as i32, get("cy", map.h as f32 / 2.0) as i32, &map, w as i32, h as i32);
-    let mut world = world::World::new();
+    let mut world = world::World::new(seed);
     world.tod = get("tod", 13.0);
     world.season = get("season", 1.0);
-    world.weather = match kv.get("weather").map(|s| s.as_str()) {
-        Some("rain") => world::Weather::Rain,
-        Some("snow") => world::Weather::Snow,
-        _ => world::Weather::Clear,
-    };
+    world.weather.cover = get("cover", 0.3);
+    world.weather.wind = get("wind", 0.2);
+    world.weather.precip = get("precip", 0.0);
+    // Optionally run a storm for some days first to build accumulations.
+    let warm = get("simdays", 0.0);
+    if warm > 0.0 {
+        world.day_secs = 1.0;
+        world.weather_preset = Some(3);
+        let mut acc = 0.0;
+        while acc < warm {
+            world.tick(0.05);
+            acc += 0.05;
+        }
+        world.tod = get("tod", 13.0);
+        world.weather.precip = get("precip", 0.0);
+    }
     if get("player", 0.0) > 0.5 {
         world.entities.push(spawn(&map));
     }
@@ -152,7 +162,7 @@ fn main() -> std::io::Result<()> {
     let mut cam = render::Camera::new();
     cam.set_zoom(render::Camera::fitting_zoom(&map, sw, sh), &map, sw, sh);
     cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
-    let mut world = world::World::new();
+    let mut world = world::World::new(seed);
     world.entities.push(spawn(&map));
 
     let start = Instant::now();
@@ -162,7 +172,7 @@ fn main() -> std::io::Result<()> {
         let now = Instant::now();
         let dt = (now - last).as_secs_f32();
         last = now;
-        world.tick(dt, 120.0);
+        world.tick(dt);
         let t = start.elapsed().as_secs_f32();
 
         let (sw, sh) = (term.width(), term.height());

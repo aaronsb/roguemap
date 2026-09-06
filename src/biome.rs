@@ -169,7 +169,3 @@ pub fn seasonal_temp(annual: f32, season: f32) -> f32 {
     annual + 9.0 * ((season - 1.0) * std::f32::consts::FRAC_PI_2).cos()
 }
 
-/// Snow cover fraction from the seasonal temperature.
-pub fn snow_cover(annual: f32, season: f32) -> f32 {
-    crate::noise::smoothstep(1.0, -4.0, seasonal_temp(annual, season))
-}
