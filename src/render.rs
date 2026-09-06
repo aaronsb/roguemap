@@ -1,43 +1,24 @@
 //! Isometric rasteriser with a deferred lighting pass.
 //!
-//! Tiles are drawn back to front into a G-buffer holding unlit colour, glyph,
-//! world position and face. A second pass lights every cell from ambient sky
-//! light, the sun (shadowed by drifting clouds), and point lights, then a
-//! weather overlay adds precipitation.
+//! Terrain is drawn by inverse projection: every screen cell walks down the
+//! height column under it until it meets a tile top or a cliff face, so the
+//! camera can sit at any angle. Cells on a boundary between two surfaces
+//! are supersampled 2x3 and drawn with a sextant glyph and two colours.
+//! Sprites are billboards drawn back to front with a depth test against the
+//! terrain. A second pass lights every cell from ambient sky light, the sun
+//! shadowed by drifting clouds, and point lights; overlays add precipitation
+//! and the cloud layer.
+
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, SQRT_2};
 
 use crate::biome::{self, BIOMES, MATERIALS, SPECIES};
 use crate::canvas::{Canvas, Rgb};
-use crate::map::{Map, Terrain, MAX_Z, SEA};
-use crate::settings::{Settings, CLOUDS, ITEMS};
+use crate::map::{Map, Terrain, Tile, MAX_Z, SEA};
 use crate::noise::{fbm, hash, smoothstep};
 use crate::palette::{Palette, SEASON_NAMES};
+use crate::settings::{Settings, AA, CLOUDS, ITEMS};
 use crate::tileset::{Sprite, Tileset, ZOOMS};
 use crate::world::{Light, World};
-
-/// Column span `[lo, lo + w)` of diamond row `dy` for a footprint, sampling
-/// the rhombus |x|/hw + |y|/hh <= 1 at row centres.
-fn row_span(dy: i32, hw: i32, hh: i32) -> (i32, i32) {
-    let yc = dy as f32 + 0.5;
-    let w = (2.0 * hw as f32 * (1.0 - yc.abs() / hh as f32)).round().max(0.0) as i32;
-    (-(w / 2), w)
-}
-
-fn row_contains(dy: i32, dx: i32, hw: i32, hh: i32) -> bool {
-    let (lo, w) = row_span(dy, hw, hh);
-    dx >= lo && dx < lo + w
-}
-
-/// Bottom-most diamond row that contains column `dx`.
-fn col_bottom(dx: i32, hw: i32, hh: i32) -> Option<i32> {
-    (-hh..hh).rev().find(|&dy| row_contains(dy, dx, hw, hh))
-}
-
-/// Whether a neighbouring tile offset by `(ox, oy)` on screen covers the
-/// cell at `(dx, dy)` relative to this tile, at equal height.
-fn neighbour_covers(ox: i32, oy: i32, dx: i32, dy: i32, hw: i32, hh: i32) -> bool {
-    let r = dy - oy;
-    r >= -hh && r < hh && row_contains(r, dx - ox, hw, hh)
-}
 
 /// Background and glyph colours for a sprite's canopy and trunk parts.
 struct SpriteColors {
@@ -61,12 +42,17 @@ struct GCell {
     wz: f32,
     face: u8,
     lit: bool,
+    /// Distance toward the camera; larger is nearer.
+    depth: f32,
 }
 
+const SKY_DEPTH: f32 = -1.0e9;
+
 pub struct Camera {
-    pub rot: u8,
-    pub ox: i32,
-    pub oy: i32,
+    /// View angle in radians; pi/4 is the classic compass view.
+    pub angle: f32,
+    pub ox: f32,
+    pub oy: f32,
     pub zoom: usize,
     pub hw: i32,
     pub hh: i32,
@@ -74,7 +60,7 @@ pub struct Camera {
 
 impl Camera {
     pub fn new() -> Camera {
-        Camera { rot: 0, ox: 0, oy: 0, zoom: 0, hw: ZOOMS[0].0, hh: ZOOMS[0].1 }
+        Camera { angle: FRAC_PI_4, ox: 0.0, oy: 0.0, zoom: 0, hw: ZOOMS[0].0, hh: ZOOMS[0].1 }
     }
 
     /// Largest zoom at which the whole map fits the screen, else the smallest.
@@ -82,61 +68,47 @@ impl Camera {
         let n = map.w.max(map.h) as i32;
         ZOOMS
             .iter()
-            .rposition(|&(hw, hh)| 2 * n * hw <= sw && 2 * n * hh + crate::map::MAX_Z + 4 <= sh)
+            .rposition(|&(hw, hh)| 2 * n * hw <= sw && 2 * n * hh + MAX_Z + 4 <= sh)
             .unwrap_or(0)
     }
 
-    /// Switch tile size, keeping whatever is at the screen centre there.
-    pub fn set_zoom(&mut self, zoom: usize, map: &Map, sw: i32, sh: i32) {
-        let (mx, my) = self.center_tile(map, sw, sh);
-        self.zoom = zoom % ZOOMS.len();
-        self.hw = ZOOMS[self.zoom].0;
-        self.hh = ZOOMS[self.zoom].1;
-        self.look_at(mx, my, map, sw, sh);
+    fn a(&self) -> f32 {
+        self.hw as f32 * SQRT_2
     }
 
-    /// Map coordinates to view coordinates for the current rotation.
-    pub fn to_view(&self, mx: i32, my: i32, map: &Map) -> (i32, i32) {
-        let (w, h) = (map.w as i32, map.h as i32);
-        match self.rot & 3 {
-            0 => (mx, my),
-            1 => (my, w - 1 - mx),
-            2 => (w - 1 - mx, h - 1 - my),
-            _ => (h - 1 - my, mx),
-        }
+    fn b(&self) -> f32 {
+        self.hh as f32 * SQRT_2
     }
 
-    /// Rotate a small offset from view space back into map space.
-    fn offset_to_map(&self, u: f32, v: f32) -> (f32, f32) {
-        match self.rot & 3 {
-            0 => (u, v),
-            1 => (-v, u),
-            2 => (-u, -v),
-            _ => (v, -u),
-        }
+    /// Screen position of a world point.
+    pub fn project(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
+        let (s, c) = self.angle.sin_cos();
+        (self.a() * (x * c - y * s) + self.ox, self.b() * (x * s + y * c) - z + self.oy)
     }
 
-    pub fn view_dims(&self, map: &Map) -> (i32, i32) {
-        if self.rot & 1 == 0 {
-            (map.w as i32, map.h as i32)
-        } else {
-            (map.h as i32, map.w as i32)
-        }
+    /// Screen cell anchoring a tile: its centre projected and floored.
+    pub fn project_tile(&self, mx: i32, my: i32, z: i32) -> (i32, i32) {
+        let (sx, sy) = self.project(mx as f32 + 0.5, my as f32 + 0.5, z as f32);
+        (sx.floor() as i32, sy.floor() as i32)
     }
 
-    /// Screen position of a view-space tile at height `z`.
-    pub fn project(&self, vx: i32, vy: i32, z: i32) -> (i32, i32) {
-        ((vx - vy) * self.hw + self.ox, (vx + vy) * self.hh - z + self.oy)
+    /// World point at height `z` under a screen position.
+    pub fn unproject(&self, sx: f32, sy: f32, z: f32) -> (f32, f32) {
+        let (s, c) = self.angle.sin_cos();
+        let u = (sx - self.ox) / self.a();
+        let v = (sy - self.oy + z) / self.b();
+        (u * c + v * s, -u * s + v * c)
     }
 
-    /// Fractional map coordinates of the ground point under a screen cell.
-    pub fn unproject_map(&self, sx: f32, sy: f32, map: &Map) -> (f32, f32) {
-        let a = (sx - self.ox as f32) / self.hw as f32;
-        let b = (sy - self.oy as f32) / self.hh as f32;
-        let (vx, vy) = ((a + b) / 2.0, (b - a) / 2.0);
-        let (m0x, m0y) = self.view_to_map(0, 0, map);
-        let (dx, dy) = self.offset_to_map(vx, vy);
-        (m0x as f32 + dx, m0y as f32 + dy)
+    /// Ground point under a screen position.
+    pub fn unproject_map(&self, sx: f32, sy: f32, _map: &Map) -> (f32, f32) {
+        self.unproject(sx, sy, 0.0)
+    }
+
+    /// Unit vector pointing toward the camera in map space.
+    pub fn forward(&self) -> (f32, f32) {
+        let (s, c) = self.angle.sin_cos();
+        (s, c)
     }
 
     /// Virtual camera height in height units for parallax; higher when
@@ -149,63 +121,90 @@ impl Camera {
         }
     }
 
-    /// View-space tile under a screen point, ignoring height.
-    pub fn unproject(&self, sx: i32, sy: i32) -> (i32, i32) {
-        let a = (sx - self.ox) as f32 / self.hw as f32;
-        let b = (sy - self.oy) as f32 / self.hh as f32;
-        (((a + b) / 2.0).round() as i32, ((b - a) / 2.0).round() as i32)
-    }
-
-    /// Map tile nearest the centre of the screen.
+    /// Map tile nearest the centre of the screen at sea level.
     pub fn center_tile(&self, map: &Map, sw: i32, sh: i32) -> (i32, i32) {
-        let (mut vx, mut vy) = self.unproject(sw / 2, sh / 2);
+        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, SEA as f32);
+        let (mut mx, mut my) = (x.floor() as i32, y.floor() as i32);
         if map.bounded {
-            let (vw, vh) = self.view_dims(map);
-            vx = vx.clamp(0, vw - 1);
-            vy = vy.clamp(0, vh - 1);
+            mx = mx.clamp(0, map.w as i32 - 1);
+            my = my.clamp(0, map.h as i32 - 1);
         }
-        self.view_to_map(vx, vy, map)
+        (mx, my)
     }
 
-    /// Turn a step in view space into a step in map space.
-    pub fn view_delta_to_map(&self, dvx: i32, dvy: i32) -> (i32, i32) {
-        let (u, v) = self.offset_to_map(dvx as f32, dvy as f32);
-        (u as i32, v as i32)
+    /// Map step for a screen direction: the inverse projection of the
+    /// direction, scaled so its larger component is one tile, rounded.
+    pub fn screen_dir_to_map(&self, dx: i32, dy: i32) -> (i32, i32) {
+        let (s, c) = self.angle.sin_cos();
+        let u = dx as f32 / self.a();
+        let v = dy as f32 / self.b();
+        let (x, y) = (u * c + v * s, -u * s + v * c);
+        let m = x.abs().max(y.abs()).max(1e-6);
+        ((x / m).round() as i32, (y / m).round() as i32)
     }
 
-    pub fn view_to_map(&self, vx: i32, vy: i32, map: &Map) -> (i32, i32) {
-        let (w, h) = (map.w as i32, map.h as i32);
-        match self.rot & 3 {
-            0 => (vx, vy),
-            1 => (w - 1 - vy, vx),
-            2 => (w - 1 - vx, h - 1 - vy),
-            _ => (vy, h - 1 - vx),
-        }
+    /// Place a world point at the centre of the screen.
+    pub fn look_at_point(&mut self, x: f32, y: f32, z: f32, sw: i32, sh: i32) {
+        self.ox = 0.0;
+        self.oy = 0.0;
+        let (sx, sy) = self.project(x, y, z);
+        self.ox = (sw as f32 / 2.0 - sx).round();
+        self.oy = (sh as f32 / 2.0 - sy).round();
     }
 
     /// Place map tile `(mx, my)` at the centre of the screen.
     pub fn look_at(&mut self, mx: i32, my: i32, map: &Map, sw: i32, sh: i32) {
-        let (vx, vy) = self.to_view(mx, my, map);
         let z = map.get(mx, my).map(|t| t.draw_z()).unwrap_or(SEA);
-        self.ox = 0;
-        self.oy = 0;
-        let (sx, sy) = self.project(vx, vy, z);
-        self.ox = sw / 2 - sx;
-        self.oy = sh / 2 - sy;
+        self.look_at_point(mx as f32 + 0.5, my as f32 + 0.5, z as f32, sw, sh);
     }
 
-    /// Rotate by quarter turns about whatever is at the screen centre.
-    pub fn rotate(&mut self, steps: i32, map: &Map, sw: i32, sh: i32) {
-        let (mx, my) = self.center_tile(map, sw, sh);
-        self.rot = ((self.rot as i32 + steps).rem_euclid(4)) as u8;
-        self.look_at(mx, my, map, sw, sh);
+    /// Switch tile size, keeping whatever is at the screen centre there.
+    pub fn set_zoom(&mut self, zoom: usize, map: &Map, sw: i32, sh: i32) {
+        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, SEA as f32);
+        self.zoom = zoom % ZOOMS.len();
+        self.hw = ZOOMS[self.zoom].0;
+        self.hh = ZOOMS[self.zoom].1;
+        let _ = map;
+        self.look_at_point(x, y, SEA as f32, sw, sh);
     }
+
+    /// Turn by an angle about whatever is at the screen centre.
+    pub fn rotate_by(&mut self, radians: f32, sw: i32, sh: i32) {
+        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, SEA as f32);
+        self.angle = (self.angle + radians).rem_euclid(2.0 * std::f32::consts::PI);
+        self.look_at_point(x, y, SEA as f32, sw, sh);
+    }
+
+    /// Rotate by quarter turns.
+    pub fn rotate(&mut self, steps: i32, _map: &Map, sw: i32, sh: i32) {
+        self.rotate_by(steps as f32 * FRAC_PI_2, sw, sh);
+    }
+
+    pub fn degrees(&self) -> i32 {
+        (self.angle.to_degrees().round() as i32).rem_euclid(360)
+    }
+}
+
+/// What a screen cell's ray met in the height column.
+#[derive(Clone, Copy)]
+struct Hit {
+    tile: Tile,
+    mx: i32,
+    my: i32,
+    x: f32,
+    y: f32,
+    z: i32,
+    face: u8,
+    /// Rows below the top edge for a wall hit.
+    below: i32,
 }
 
 pub struct Renderer {
     w: i32,
     h: i32,
     g: Vec<GCell>,
+    /// Per-cell surface identity from the centre sample, for edge detection.
+    ids: Vec<u64>,
     /// Lights discovered while drawing this frame, such as lit windows.
     frame_lights: Vec<Light>,
     pub show_hud: bool,
@@ -218,10 +217,34 @@ fn wind(x: f32, y: f32, t: f32, strength: f32) -> f32 {
     w * (0.25 + 0.75 * strength)
 }
 
+/// Sextant glyph for a 2x3 bit pattern: bit `j * 2 + i` is column i, row j.
+fn sextant(bits: u8) -> char {
+    match bits {
+        0 => ' ',
+        63 => '█',
+        21 => '▌',
+        42 => '▐',
+        b => {
+            let mut i = b as u32 - 1;
+            if b > 21 {
+                i -= 1;
+            }
+            if b > 42 {
+                i -= 1;
+            }
+            char::from_u32(0x1FB00 + i).unwrap_or('▒')
+        }
+    }
+}
+
+fn color_dist(a: Rgb, b: Rgb) -> i32 {
+    (a.0 as i32 - b.0 as i32).abs() + (a.1 as i32 - b.1 as i32).abs() + (a.2 as i32 - b.2 as i32).abs()
+}
+
 impl Renderer {
     pub fn new(w: i32, h: i32) -> Renderer {
-        let sky = GCell { albedo: Rgb(0, 0, 0), ch: ' ', glyph: Rgb(0, 0, 0), wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false };
-        Renderer { w, h, g: vec![sky; (w * h) as usize], frame_lights: Vec::new(), show_hud: true }
+        let sky = GCell { albedo: Rgb(0, 0, 0), ch: ' ', glyph: Rgb(0, 0, 0), wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth: SKY_DEPTH };
+        Renderer { w, h, g: vec![sky; (w * h) as usize], ids: vec![0; (w * h) as usize], frame_lights: Vec::new(), show_hud: true }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -239,70 +262,12 @@ impl Renderer {
 
     /// Draw one frame into `cv`.
     pub fn draw(&mut self, cv: &mut Canvas, map: &Map, ts: &Tileset, world: &World, cam: &Camera, settings: &Settings, t: f32) {
-        let pal_player = SpriteColors { bg: Rgb(52, 74, 150), fg: Rgb(240, 214, 176), trunk_bg: Rgb(52, 74, 150), trunk_fg: Rgb(240, 214, 176) };
         let pal = Palette::for_season(world.season);
         let chop = world.choppiness();
         self.frame_lights.clear();
-        let night = 1.0 - world.skylight();
         self.sky_pass(ts, world, t);
-        // Walk every view-space tile whose footprint, walls or sprite can touch
-        // the screen, back to front along diagonals of constant vx + vy.
-        const SPRITE_H: i32 = 24;
-        const SPRITE_W: i32 = 16;
-        let (hw, hh) = (cam.hw, cam.hh);
-        let s_min = (-cam.oy - 2 * hh - MAX_Z).div_euclid(hh) - 1;
-        let s_max = (self.h - cam.oy + MAX_Z + hh + SPRITE_H).div_euclid(hh) + 1;
-        let d_min = (-cam.ox - 2 * hw - SPRITE_W).div_euclid(hw) - 1;
-        let d_max = (self.w - cam.ox + 2 * hw + SPRITE_W).div_euclid(hw) + 1;
-        for sdiag in s_min..=s_max {
-            for d in d_min..=d_max {
-                if (sdiag + d) & 1 != 0 {
-                    continue;
-                }
-                let (vx, vy) = ((sdiag + d) / 2, (sdiag - d) / 2);
-                let (mx, my) = cam.view_to_map(vx, vy, map);
-                let Some(tile) = map.get(mx, my) else { continue };
-                let z = tile.draw_z();
-                let (sx, sy) = cam.project(vx, vy, z);
-                self.surface(map, &tile, mx, my, sx, sy, ts, &pal, cam, t, chop, world);
-                self.walls(map, &tile, vx, vy, mx, my, sx, sy, cam, &pal, ts, world);
-                if let Some(v) = tile.tree {
-                    let sp = &SPECIES[tile.species as usize % SPECIES.len()];
-                    let set = ts.trees(cam.zoom, sp.form);
-                    let sprite = &set[v as usize % set.len()];
-                    let snow = world.snow_at(tile.temp as f32) * 0.7;
-                    let colors = SpriteColors {
-                        bg: biome::seasonal(&sp.canopy, world.season).lerp(pal.snow, snow),
-                        fg: biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph, snow * 0.5),
-                        trunk_bg: pal.trunk,
-                        trunk_fg: pal.trunk_glyph,
-                    };
-                    let gust = if cam.hw <= 2 { 0.0 } else { world.gust(mx as f32, my as f32, t) };
-                    self.sprite(sprite, &tile, mx, my, sx, sy, &colors, gust, t);
-                }
-                if let Some(v) = tile.building {
-                    let mat_ix = if matches!(tile.terrain, Terrain::Rock) || tile.z >= crate::map::SNOW - 3 {
-                        biome::STONE
-                    } else {
-                        BIOMES[tile.biome as usize % BIOMES.len()].material
-                    };
-                    let mat = &MATERIALS[mat_ix];
-                    let set = ts.houses(cam.zoom);
-                    let sprite = &set[v as usize % set.len()];
-                    let snow = world.snow_at(tile.temp as f32) * 0.8;
-                    let colors = SpriteColors { bg: mat.roof.lerp(pal.snow, snow), fg: mat.roof_glyph, trunk_bg: mat.wall, trunk_fg: mat.wall_glyph };
-                    self.sprite(sprite, &tile, mx, my, sx, sy, &colors, 0.0, t);
-                    if night > 0.05 {
-                        self.frame_lights.push(Light { mx, my, z: tile.draw_z(), color: [1.0 * night, 0.75 * night, 0.4 * night], radius: 4.0, intensity: 0.8, flicker: false });
-                    }
-                }
-                for e in &world.entities {
-                    if e.mx == mx && e.my == my {
-                        self.sprite(ts.player(cam.zoom), &tile, mx, my, sx, sy, &pal_player, 0.0, t);
-                    }
-                }
-            }
-        }
+        self.terrain_pass(map, ts, &pal, world, cam, t, chop, settings.get(AA) == 0 && ts.antialias);
+        self.sprite_pass(map, ts, &pal, world, cam, t);
         self.fires(map, world, cam, ts, t);
         self.light_pass(cv, world, t);
         // Precipitation falls beneath the cloud layer, so it is drawn first.
@@ -315,6 +280,369 @@ impl Renderer {
         }
         if settings.open {
             self.popover(cv, settings);
+        }
+    }
+
+    /// Walk down the height column under a screen position. Lowering the
+    /// level moves the ground point away from the camera, so a column is
+    /// entered through its front face.
+    fn ray(map: &Map, cam: &Camera, sx: f32, sy: f32) -> Option<Hit> {
+        // Nothing stands above the ceiling of the chunks the walk crosses.
+        let (x0, y0) = cam.unproject(sx, sy, 0.0);
+        let (x1, y1) = cam.unproject(sx, sy, MAX_Z as f32);
+        let top = map.ceiling(x0.floor() as i32, y0.floor() as i32).max(map.ceiling(x1.floor() as i32, y1.floor() as i32)).min(MAX_Z);
+        for z in (0..=top).rev() {
+            let (x, y) = cam.unproject(sx, sy, z as f32);
+            let (mx, my) = (x.floor() as i32, y.floor() as i32);
+            let Some(tile) = map.get(mx, my) else { continue };
+            let dz = tile.draw_z();
+            if dz == z {
+                return Some(Hit { tile, mx, my, x, y, z, face: FACE_TOP, below: 0 });
+            }
+            if dz > z {
+                let (px, py) = cam.unproject(sx, sy, dz as f32);
+                let face = if (px - (mx as f32 + 0.5)).abs() > (py - (my as f32 + 0.5)).abs() { FACE_RIGHT } else { FACE_LEFT };
+                return Some(Hit { tile, mx, my, x, y, z, face, below: dz - z });
+            }
+        }
+        None
+    }
+
+    /// Unlit surface colour: water by depth, ground by biome and season, and
+    /// a snow blend wherever the seasonal temperature is below freezing.
+    fn base_color(tile: &Tile, pal: &Palette, world: &World) -> Rgb {
+        let season = world.season;
+        let lift = (0.86 + tile.draw_z() as f32 * 0.018) * (1.0 - 0.28 * world.wet_at(tile.temp as f32));
+        let b = &BIOMES[tile.biome as usize % BIOMES.len()];
+        let c = match tile.terrain {
+            Terrain::Water => {
+                let depth = ((SEA - tile.z) as f32 / 3.0).clamp(0.0, 1.0);
+                return pal.water_shallow.lerp(pal.water_deep, depth);
+            }
+            Terrain::Sand => pal.sand.scale(lift),
+            Terrain::Grass => {
+                // Seasonal biomes go dormant as vigour drops.
+                let g = biome::ground_color(b, season);
+                let dormant = Rgb(142, 126, 92);
+                let k = if b.seasonal { (1.0 - biome::vigour(tile.temp as f32, season)) * 0.85 } else { 0.0 };
+                g.lerp(dormant, k).scale(lift)
+            }
+            Terrain::Dirt => pal.dirt.scale(lift),
+            Terrain::Rock => pal.rock.scale(lift),
+            Terrain::Snow => pal.snow,
+        };
+        c.lerp(pal.snow, world.snow_at(tile.temp as f32))
+    }
+
+    /// Unlit colour of a hit: the surface, or a cliff face below it that
+    /// keeps the surface tone for shallow steps and turns to earth deeper.
+    fn hit_color(hit: &Hit, pal: &Palette, world: &World) -> Rgb {
+        let surface = Self::base_color(&hit.tile, pal, world);
+        if hit.face == FACE_TOP {
+            return surface;
+        }
+        let earth = ((hit.below - 1) as f32 / 4.0).min(1.0);
+        let depth_shade = 1.0 - (hit.below as f32 * 0.02).min(0.25);
+        surface.scale(0.82).lerp(pal.dirt, earth).scale(depth_shade)
+    }
+
+    /// Terrain by inverse projection, with edge supersampling.
+    #[allow(clippy::too_many_arguments)]
+    fn terrain_pass(&mut self, map: &Map, ts: &Tileset, pal: &Palette, world: &World, cam: &Camera, t: f32, chop: f32, aa: bool) {
+        let (fx, fy) = cam.forward();
+        let (w, h) = (self.w, self.h);
+        let mut hits: Vec<Option<Hit>> = vec![None; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) as usize;
+                let hit = Self::ray(map, cam, x as f32 + 0.5, y as f32 + 0.5);
+                self.ids[i] = match &hit {
+                    Some(hh) => ((hh.mx as u64) << 40) ^ ((hh.my as u64 & 0xFFFFF) << 8) ^ hh.face as u64 ^ 1 << 4,
+                    None => 0,
+                };
+                hits[i] = hit;
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) as usize;
+                let Some(hit) = hits[i] else { continue };
+                let (albedo, ch, glyph) = self.shade(&hit, ts, pal, world, cam, t, chop, x, y);
+                let depth = hit.x * fx + hit.y * fy;
+                self.g[i] = GCell { albedo, ch, glyph, wx: hit.x, wy: hit.y, wz: hit.z as f32, face: hit.face, lit: true, depth };
+            }
+        }
+        if !aa {
+            return;
+        }
+        // Boundary cells: any neighbour with a different surface identity.
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) as usize;
+                let id = self.ids[i];
+                let edge = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
+                    let (nx, ny) = (x + dx, y + dy);
+                    nx >= 0 && ny >= 0 && nx < w && ny < h && self.ids[(ny * w + nx) as usize] != id
+                });
+                if !edge {
+                    continue;
+                }
+                let mut cols = [Rgb(0, 0, 0); 6];
+                let mut any = false;
+                for j in 0..3 {
+                    for k in 0..2 {
+                        let sx = x as f32 + (k as f32 + 0.5) / 2.0;
+                        let sy = y as f32 + (j as f32 + 0.5) / 3.0;
+                        cols[j * 2 + k] = match Self::ray(map, cam, sx, sy) {
+                            Some(hh) => {
+                                any = true;
+                                Self::hit_color(&hh, pal, world)
+                            }
+                            None => world.sky(),
+                        };
+                    }
+                }
+                if !any {
+                    continue;
+                }
+                // Two-colour quantisation: the first sample and its farthest.
+                let a = cols[0];
+                let b = *cols.iter().max_by_key(|c| color_dist(a, **c)).unwrap();
+                if color_dist(a, b) < 24 {
+                    continue;
+                }
+                let mut bits = 0u8;
+                for (n, c) in cols.iter().enumerate() {
+                    if color_dist(*c, a) <= color_dist(*c, b) {
+                        bits |= 1 << n;
+                    }
+                }
+                if bits == 0 || bits == 63 {
+                    continue;
+                }
+                let cell = &mut self.g[i];
+                cell.ch = sextant(bits);
+                cell.glyph = a;
+                cell.albedo = b;
+            }
+        }
+    }
+
+    /// Unlit colour and texture glyph for a hit.
+    #[allow(clippy::too_many_arguments)]
+    fn shade(&self, hit: &Hit, ts: &Tileset, pal: &Palette, world: &World, cam: &Camera, t: f32, chop: f32, sx: i32, sy: i32) -> (Rgb, char, Rgb) {
+        let base = Self::hit_color(hit, pal, world);
+        if hit.face != FACE_TOP {
+            let ch = ts.wall[(hit.face - 1) as usize];
+            let glyph = base.scale(if hit.face == FACE_RIGHT { 1.18 } else { 0.8 });
+            return (base, ch, glyph);
+        }
+        let tile = &hit.tile;
+        // Texture placement keyed to a ground grid near cell resolution, so it
+        // stays put as the camera pans and thins consistently with zoom.
+        let qs = (2 * cam.hw) as f32;
+        let hv = hash((hit.x * qs).floor() as i64, (hit.y * qs * 2.0).floor() as i64, tile.seed as u64);
+        let r = (hv % 1000) as f32 / 1000.0;
+        let snow = world.snow_at(tile.temp as f32);
+        let biome_ = &BIOMES[tile.biome as usize % BIOMES.len()];
+        let vig = biome::vigour(tile.temp as f32, world.season);
+        let ground_glyph = biome_.ground_glyph.lerp(pal.snow_glyph, snow).lerp(base.scale(1.25), 1.0 - vig);
+        let wind_strength = if cam.hw <= 2 { 0.0 } else { world.weather.wind };
+        let mut ch = ' ';
+        let mut glyph = base;
+        match tile.terrain {
+            Terrain::Grass => {
+                let density = (tile.grass as f32 * 0.14 + 0.04) * (1.0 - snow);
+                let (set, density) = if vig > 0.55 {
+                    (Some(&ts.cover[biome_.cover]), density * (0.4 + 0.6 * vig))
+                } else if vig > 0.15 {
+                    (None, density * 0.5 * (vig - 0.15) / 0.4 + 0.02)
+                } else {
+                    (None, 0.0)
+                };
+                if r < density {
+                    let w = wind(sx as f32, sy as f32, t, wind_strength);
+                    let lean = if w < -0.35 { 0 } else if w > 0.35 { 2 } else { 1 };
+                    ch = match set {
+                        Some(set) => set[lean],
+                        None => ts.stubble[((hv >> 20) % 3) as usize],
+                    };
+                    glyph = ground_glyph.scale(0.85 + ((hv >> 12) % 100) as f32 * 0.003);
+                }
+            }
+            Terrain::Water => {
+                let wave = chop * smoothstep(6.0, 160.0, tile.body as f32);
+                let phase = (t * (0.6 + wave) + sx as f32 * 0.13 + sy as f32 * 0.37 + (hv >> 16) as f32 * 0.001).sin();
+                let pond = tile.body < 60 && tile.z >= SEA - 1;
+                if pond && vig > 0.3 && r < 0.10 + 0.06 * vig {
+                    ch = ts.cattail[((hv >> 20) % 2) as usize];
+                    glyph = Rgb(120, 140, 70).lerp(Rgb(150, 120, 60), 1.0 - vig);
+                } else if r < 0.12 + 0.34 * wave {
+                    ch = ts.water[if phase > 0.6 { 0 } else if phase > 0.1 { 1 } else if phase > -0.5 { 2 } else { 3 }];
+                    let crest = (0.15 + 0.85 * wave) * (0.55 + 0.45 * phase.max(0.0));
+                    glyph = base.lerp(pal.water_glyph, crest);
+                }
+            }
+            Terrain::Sand => {
+                if r < 0.14 {
+                    ch = ts.sand[((hv >> 20) % 2) as usize];
+                    glyph = pal.sand_glyph;
+                }
+            }
+            Terrain::Dirt => {
+                if r < 0.22 {
+                    ch = ts.dirt[((hv >> 20) % 2) as usize];
+                    glyph = pal.dirt_glyph;
+                }
+            }
+            Terrain::Rock => {
+                if r < 0.24 {
+                    ch = ts.rock[((hv >> 20) % 2) as usize];
+                    glyph = pal.rock_glyph;
+                }
+            }
+            Terrain::Snow => {
+                if r < 0.18 {
+                    ch = ts.snow[((hv >> 20) % 2) as usize];
+                    glyph = pal.snow_glyph;
+                }
+            }
+        }
+        (base, ch, glyph)
+    }
+
+    /// Map-space bounding box of everything that can appear on screen.
+    fn visible_bounds(&self, cam: &Camera) -> (i32, i32, i32, i32) {
+        let corners = [(0.0, 0.0), (self.w as f32, 0.0), (0.0, self.h as f32), (self.w as f32, self.h as f32)];
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for &(sx, sy) in &corners {
+            for z in [0.0, (MAX_Z + 24) as f32] {
+                let (x, y) = cam.unproject(sx, sy, z);
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
+            }
+        }
+        (x0.floor() as i32 - 2, y0.floor() as i32 - 2, x1.ceil() as i32 + 2, y1.ceil() as i32 + 2)
+    }
+
+    /// Trees, buildings and entities, back to front with a depth test.
+    fn sprite_pass(&mut self, map: &Map, ts: &Tileset, pal: &Palette, world: &World, cam: &Camera, t: f32) {
+        let (fx, fy) = cam.forward();
+        let (x0, y0, x1, y1) = self.visible_bounds(cam);
+        let night = 1.0 - world.skylight();
+        let pal_player = SpriteColors { bg: Rgb(52, 74, 150), fg: Rgb(240, 214, 176), trunk_bg: Rgb(52, 74, 150), trunk_fg: Rgb(240, 214, 176) };
+        let mut items: Vec<(f32, i32, i32, Tile)> = Vec::new();
+        for my in y0..=y1 {
+            for mx in x0..=x1 {
+                let Some(tile) = map.get(mx, my) else { continue };
+                let has_entity = world.entities.iter().any(|e| e.mx == mx && e.my == my);
+                if tile.tree.is_none() && tile.building.is_none() && !has_entity {
+                    continue;
+                }
+                let depth = (mx as f32 + 0.5) * fx + (my as f32 + 0.5) * fy + 0.5 * (fx.abs() + fy.abs());
+                items.push((depth, mx, my, tile));
+            }
+        }
+        items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (depth, mx, my, tile) in items {
+            let (sx, sy) = cam.project_tile(mx, my, tile.draw_z());
+            if sx < -40 || sx > self.w + 40 || sy < -40 || sy > self.h + 40 {
+                continue;
+            }
+            if let Some(v) = tile.tree {
+                let sp = &SPECIES[tile.species as usize % SPECIES.len()];
+                let set = ts.trees(cam.zoom, sp.form);
+                let sprite = &set[v as usize % set.len()];
+                let snow = world.snow_at(tile.temp as f32) * 0.7;
+                let colors = SpriteColors {
+                    bg: biome::seasonal(&sp.canopy, world.season).lerp(pal.snow, snow),
+                    fg: biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph, snow * 0.5),
+                    trunk_bg: pal.trunk,
+                    trunk_fg: pal.trunk_glyph,
+                };
+                let gust = if cam.hw <= 2 { 0.0 } else { world.gust(mx as f32, my as f32, t) };
+                self.sprite(sprite, &tile, mx, my, sx, sy, &colors, gust, t, depth);
+            }
+            if let Some(v) = tile.building {
+                let mat_ix = if matches!(tile.terrain, Terrain::Rock) || tile.z >= crate::map::SNOW - 3 {
+                    biome::STONE
+                } else {
+                    BIOMES[tile.biome as usize % BIOMES.len()].material
+                };
+                let mat = &MATERIALS[mat_ix];
+                let set = ts.houses(cam.zoom);
+                let sprite = &set[v as usize % set.len()];
+                let snow = world.snow_at(tile.temp as f32) * 0.8;
+                let colors = SpriteColors { bg: mat.roof.lerp(pal.snow, snow), fg: mat.roof_glyph, trunk_bg: mat.wall, trunk_fg: mat.wall_glyph };
+                self.sprite(sprite, &tile, mx, my, sx, sy, &colors, 0.0, t, depth);
+                if night > 0.05 {
+                    self.frame_lights.push(Light { mx, my, z: tile.draw_z(), color: [1.0 * night, 0.75 * night, 0.4 * night], radius: 4.0, intensity: 0.8, flicker: false });
+                }
+            }
+            for e in &world.entities {
+                if e.mx == mx && e.my == my {
+                    self.sprite(ts.player(cam.zoom), &tile, mx, my, sx, sy, &pal_player, 0.0, t, depth + 0.01);
+                }
+            }
+        }
+    }
+
+    /// Draw a billboard anchored so its bottom row sits on the tile's centre
+    /// row. `gust` in 0..1 leans the canopy with the wind, more at the top.
+    /// Cells already holding nearer terrain or sprites are left alone.
+    #[allow(clippy::too_many_arguments)]
+    fn sprite(&mut self, sp: &Sprite, tile: &Tile, mx: i32, my: i32, sx: i32, sy: i32, col: &SpriteColors, gust: f32, t: f32, depth: f32) {
+        let n = sp.rows.len() as i32;
+        let phase = (tile.seed % 628) as f32 * 0.01;
+        let lean = if gust > 0.0 { (t * (0.8 + 1.2 * gust) + phase).sin() * gust * (1.0 + n as f32 * 0.08) } else { 0.0 };
+        for (r, row) in sp.rows.iter().enumerate() {
+            let r = r as i32;
+            let height = n - 1 - r;
+            let off = (lean * height as f32 / (n - 1).max(1) as f32).round() as i32;
+            let y = sy - height;
+            let trunk = r as usize >= sp.rows.len() - sp.trunk_rows;
+            let (bg, fg) = if trunk { (col.trunk_bg, col.trunk_fg) } else { (col.bg, col.fg) };
+            for (c, ch) in row.chars().enumerate() {
+                if ch == ' ' {
+                    continue;
+                }
+                let x = sx + c as i32 - sp.center + if trunk { 0 } else { off };
+                let wz = tile.draw_z() as f32 + height as f32;
+                if let Some(cell) = self.cell(x, y) {
+                    if cell.depth > depth {
+                        continue;
+                    }
+                    *cell = GCell { albedo: bg, ch, glyph: fg, wx: mx as f32, wy: my as f32, wz, face: FACE_TOP, lit: true, depth };
+                }
+            }
+        }
+    }
+
+    fn fires(&mut self, map: &Map, world: &World, cam: &Camera, ts: &Tileset, t: f32) {
+        let (fx, fy) = cam.forward();
+        for l in &world.lights {
+            let _ = map;
+            let (sx, sy) = cam.project_tile(l.mx, l.my, l.z);
+            let depth = (l.mx as f32 + 1.0) * fx.abs() + (l.my as f32 + 1.0) * fy.abs();
+            let frame = ((t * 9.0) as usize + (l.mx as usize)) % 3;
+            let flick = 0.8 + 0.2 * (t * 17.0 + l.mx as f32).sin();
+            let hot = Rgb((255.0 * flick) as u8, (190.0 * flick) as u8, (70.0 * flick) as u8);
+            let ember = Rgb(140, 50, 20);
+            for (i, dx) in (-1..=1).enumerate() {
+                let ch = ts.flame[(frame + i) % 3];
+                let y = if dx == 0 { sy - 1 } else { sy };
+                if let Some(c) = self.cell(sx + dx, y) {
+                    let bg = c.albedo;
+                    *c = GCell { albedo: bg, ch, glyph: hot, wx: l.mx as f32, wy: l.my as f32, wz: l.z as f32, face: 0, lit: false, depth };
+                }
+            }
+            for dx in -1..=0 {
+                if let Some(c) = self.cell(sx + dx, sy + 1) {
+                    *c = GCell { albedo: ember, ch: ' ', glyph: ember, wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth };
+                }
+            }
         }
     }
 
@@ -367,241 +695,7 @@ impl Renderer {
                     (' ', sky)
                 };
                 self.g[(y * self.w + x) as usize] =
-                    GCell { albedo: sky, ch, glyph, wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false };
-            }
-        }
-    }
-
-    /// Drawn height of the tile at a view position; off-map counts as ground.
-    fn view_z(&self, map: &Map, cam: &Camera, vx: i32, vy: i32) -> i32 {
-        let (mx, my) = cam.view_to_map(vx, vy, map);
-        map.get(mx, my).map(|t| t.draw_z()).unwrap_or(0)
-    }
-
-    /// Unlit surface colour: water by depth, ground by biome and season, and
-    /// a snow blend wherever the seasonal temperature is below freezing.
-    fn base_color(tile: &crate::map::Tile, pal: &Palette, world: &World) -> Rgb {
-        let season = world.season;
-        let lift = (0.86 + tile.draw_z() as f32 * 0.018) * (1.0 - 0.28 * world.wet_at(tile.temp as f32));
-        let b = &BIOMES[tile.biome as usize % BIOMES.len()];
-        let c = match tile.terrain {
-            Terrain::Water => {
-                let depth = ((SEA - tile.z) as f32 / 3.0).clamp(0.0, 1.0);
-                return pal.water_shallow.lerp(pal.water_deep, depth);
-            }
-            Terrain::Sand => pal.sand.scale(lift),
-            Terrain::Grass => {
-                // Seasonal biomes go dormant as vigour drops.
-                let g = biome::ground_color(b, season);
-                let dormant = Rgb(142, 126, 92);
-                let k = if b.seasonal { (1.0 - biome::vigour(tile.temp as f32, season)) * 0.85 } else { 0.0 };
-                g.lerp(dormant, k).scale(lift)
-            }
-            Terrain::Dirt => pal.dirt.scale(lift),
-            Terrain::Rock => pal.rock.scale(lift),
-            Terrain::Snow => pal.snow,
-        };
-        c.lerp(pal.snow, world.snow_at(tile.temp as f32))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn surface(
-        &mut self,
-        _map: &Map,
-        tile: &crate::map::Tile,
-        mx: i32,
-        my: i32,
-        sx: i32,
-        sy: i32,
-        ts: &Tileset,
-        pal: &Palette,
-        cam: &Camera,
-        t: f32,
-        chop: f32,
-        world: &World,
-    ) {
-        let base = Self::base_color(tile, pal, world);
-        let snow = world.snow_at(tile.temp as f32);
-        let biome = &BIOMES[tile.biome as usize % BIOMES.len()];
-        let vig = biome::vigour(tile.temp as f32, world.season);
-        let ground_glyph = biome.ground_glyph.lerp(pal.snow_glyph, snow).lerp(base.scale(1.25), 1.0 - vig);
-        let wind_strength = if cam.hw <= 2 { 0.0 } else { world.weather.wind };
-        // Cover thins as vigour drops: full glyphs, then stubble, then nothing.
-        let cover_density = (tile.grass as f32 * 0.14 + 0.04) * (1.0 - snow);
-        let (cover_set, cover_density) = if vig > 0.55 {
-            (Some(&ts.cover[biome.cover]), cover_density * (0.4 + 0.6 * vig))
-        } else if vig > 0.15 {
-            (None, cover_density * 0.5 * (vig - 0.15) / 0.4 + 0.02)
-        } else {
-            (None, 0.0)
-        };
-        // Wave visibility: weather roughness scaled by body size, so ponds lie flat.
-        let wave = chop * smoothstep(6.0, 160.0, tile.body as f32);
-        let z = tile.draw_z() as f32;
-        let (thw, thh) = (cam.hw, cam.hh);
-        for dy in -thh..thh {
-            let (lo, w) = row_span(dy, thw, thh);
-            for dx in lo..lo + w {
-                let (x, y) = (sx + dx, sy + dy);
-                let hv = hash(mx as i64 * 8 + dx as i64, my as i64 * 8 + dy as i64, tile.seed as u64);
-                let r = (hv % 1000) as f32 / 1000.0;
-                let u = (dx as f32 / thw as f32 + dy as f32 / thh as f32) * 0.5;
-                let v = (dy as f32 / thh as f32 - dx as f32 / thw as f32) * 0.5;
-                let (du, dv) = cam.offset_to_map(u, v);
-                let (wx, wy) = (mx as f32 + du, my as f32 + dv);
-                let mut ch = ' ';
-                let mut glyph = base;
-                match tile.terrain {
-                    Terrain::Grass => {
-                        if r < cover_density {
-                            let w = wind(x as f32, y as f32, t, wind_strength);
-                            let lean = if w < -0.35 { 0 } else if w > 0.35 { 2 } else { 1 };
-                            ch = match cover_set {
-                                Some(set) => set[lean],
-                                None => ts.stubble[((hv >> 20) % 3) as usize],
-                            };
-                            let vary = 0.85 + ((hv >> 12) % 100) as f32 * 0.003;
-                            glyph = ground_glyph.scale(vary);
-                        }
-                    }
-                    Terrain::Water => {
-                        let phase = (t * (0.6 + wave) + x as f32 * 0.13 + y as f32 * 0.37 + (hv >> 16) as f32 * 0.001).sin();
-                        let pond = tile.body < 60 && tile.z >= SEA - 1;
-                        if pond && vig > 0.3 && r < 0.10 + 0.06 * vig {
-                            // Cattails stand in the shallows of still water.
-                            ch = ts.cattail[((hv >> 20) % 2) as usize];
-                            glyph = Rgb(120, 140, 70).lerp(Rgb(150, 120, 60), 1.0 - vig);
-                        } else if r < 0.12 + 0.34 * wave {
-                            ch = ts.water[if phase > 0.6 { 0 } else if phase > 0.1 { 1 } else if phase > -0.5 { 2 } else { 3 }];
-                            let crest = (0.15 + 0.85 * wave) * (0.55 + 0.45 * phase.max(0.0));
-                            glyph = base.lerp(pal.water_glyph, crest);
-                        }
-                    }
-                    Terrain::Sand => {
-                        if r < 0.14 {
-                            ch = ts.sand[((hv >> 20) % 2) as usize];
-                            glyph = pal.sand_glyph;
-                        }
-                    }
-                    Terrain::Dirt => {
-                        if r < 0.22 {
-                            ch = ts.dirt[((hv >> 20) % 2) as usize];
-                            glyph = pal.dirt_glyph;
-                        }
-                    }
-                    Terrain::Rock => {
-                        if r < 0.24 {
-                            ch = ts.rock[((hv >> 20) % 2) as usize];
-                            glyph = pal.rock_glyph;
-                        }
-                    }
-                    Terrain::Snow => {
-                        if r < 0.18 {
-                            ch = ts.snow[((hv >> 20) % 2) as usize];
-                            glyph = pal.snow_glyph;
-                        }
-                    }
-                }
-                if let Some(c) = self.cell(x, y) {
-                    *c = GCell { albedo: base, ch, glyph, wx, wy, wz: z, face: FACE_TOP, lit: true };
-                }
-            }
-        }
-    }
-
-    /// Cliff faces. For each column the neighbour directly below is found
-    /// geometrically, and the height difference to it is drawn as wall rows.
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
-    fn walls(&mut self, map: &Map, tile: &crate::map::Tile, vx: i32, vy: i32, mx: i32, my: i32, sx: i32, sy: i32, cam: &Camera, pal: &Palette, ts: &Tileset, world: &World) {
-        let z = tile.draw_z();
-        let (thw, thh) = (cam.hw, cam.hh);
-        let right = z - self.view_z(map, cam, vx + 1, vy);
-        let left = z - self.view_z(map, cam, vx, vy + 1);
-        let front = z - self.view_z(map, cam, vx + 1, vy + 1);
-        if right <= 0 && left <= 0 && front <= 0 {
-            return;
-        }
-        let surface = Self::base_color(tile, pal, world);
-        let (mx, my) = (mx as f32, my as f32);
-        let (lo, w) = (-thh..thh).map(|dy| row_span(dy, thw, thh)).min_by_key(|&(lo, _)| lo).unwrap_or((0, 0));
-        let max_w = (-thh..thh).map(|dy| row_span(dy, thw, thh).1).max().unwrap_or(0);
-        let _ = w;
-        for dx in lo..lo + max_w {
-            let Some(bot) = col_bottom(dx, thw, thh) else { continue };
-            let below = bot + 1;
-            let (d, face) = if neighbour_covers(thw, thh, dx, below, thw, thh) {
-                (right, FACE_RIGHT)
-            } else if neighbour_covers(-thw, thh, dx, below, thw, thh) {
-                (left, FACE_LEFT)
-            } else if neighbour_covers(0, 2 * thh, dx, below, thw, thh) {
-                (front, if dx >= 0 { FACE_RIGHT } else { FACE_LEFT })
-            } else {
-                continue;
-            };
-            for k in 1..=d {
-                // Shallow steps keep the surface tone so contours read as
-                // shading bands; deeper rows turn to exposed earth.
-                let earth = ((k - 1) as f32 / 4.0).min(1.0);
-                let depth_shade = 1.0 - (k as f32 * 0.02).min(0.25);
-                let albedo = surface.scale(0.82).lerp(pal.dirt, earth).scale(depth_shade);
-                let wz = (z - k) as f32;
-                let ch = ts.wall[(face - 1) as usize];
-                let glyph = albedo.scale(if face == FACE_RIGHT { 1.18 } else { 0.8 });
-                if let Some(c) = self.cell(sx + dx, sy + bot + k) {
-                    *c = GCell { albedo, ch, glyph, wx: mx, wy: my, wz, face, lit: true };
-                }
-            }
-        }
-    }
-
-    /// Draw a billboard anchored so its bottom row sits on the tile's centre
-    /// row. `gust` in 0..1 leans the canopy with the wind, more at the top.
-    #[allow(clippy::too_many_arguments)]
-    fn sprite(&mut self, sp: &Sprite, tile: &crate::map::Tile, mx: i32, my: i32, sx: i32, sy: i32, col: &SpriteColors, gust: f32, t: f32) {
-        let n = sp.rows.len() as i32;
-        let phase = (tile.seed % 628) as f32 * 0.01;
-        let lean = if gust > 0.0 { (t * (0.8 + 1.2 * gust) + phase).sin() * gust * (1.0 + n as f32 * 0.08) } else { 0.0 };
-        for (r, row) in sp.rows.iter().enumerate() {
-            let r = r as i32;
-            let height = n - 1 - r;
-            let off = (lean * height as f32 / (n - 1).max(1) as f32).round() as i32;
-            let y = sy - height;
-            let trunk = r as usize >= sp.rows.len() - sp.trunk_rows;
-            let (bg, fg) = if trunk { (col.trunk_bg, col.trunk_fg) } else { (col.bg, col.fg) };
-            for (c, ch) in row.chars().enumerate() {
-                if ch == ' ' {
-                    continue;
-                }
-                let x = sx + c as i32 - sp.center + if trunk { 0 } else { off };
-                let wz = tile.draw_z() as f32 + height as f32;
-                if let Some(cell) = self.cell(x, y) {
-                    *cell = GCell { albedo: bg, ch, glyph: fg, wx: mx as f32, wy: my as f32, wz, face: FACE_TOP, lit: true };
-                }
-            }
-        }
-    }
-
-    fn fires(&mut self, map: &Map, world: &World, cam: &Camera, ts: &Tileset, t: f32) {
-        for l in &world.lights {
-            let (vx, vy) = cam.to_view(l.mx, l.my, map);
-            let (sx, sy) = cam.project(vx, vy, l.z);
-            let frame = ((t * 9.0) as usize + (l.mx as usize)) % 3;
-            let flick = 0.8 + 0.2 * (t * 17.0 + l.mx as f32).sin();
-            let hot = Rgb((255.0 * flick) as u8, (190.0 * flick) as u8, (70.0 * flick) as u8);
-            let ember = Rgb(140, 50, 20);
-            for (i, dx) in (-1..=1).enumerate() {
-                let ch = ts.flame[(frame + i) % 3];
-                let y = if dx == 0 { sy - 1 } else { sy };
-                if let Some(c) = self.cell(sx + dx, y) {
-                    let bg = c.albedo;
-                    *c = GCell { albedo: bg, ch, glyph: hot, wx: l.mx as f32, wy: l.my as f32, wz: l.z as f32, face: 0, lit: false };
-                }
-            }
-            for dx in -1..=0 {
-                if let Some(c) = self.cell(sx + dx, sy + 1) {
-                    *c = GCell { albedo: ember, ch: ' ', glyph: ember, wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false };
-                }
+                    GCell { albedo: sky, ch, glyph, wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth: SKY_DEPTH };
             }
         }
     }
@@ -763,8 +857,8 @@ impl Renderer {
         let wx = &world.weather;
         let weather = format!("cloud {:.0}% wind {:.0}% precip {:.0}%", wx.cover * 100.0, wx.wind * 100.0, wx.precip * 100.0);
         let line = format!(
-            " roguemap  rot {}  zoom {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
-            cam.rot,
+            " roguemap  {}deg  zoom {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
+            cam.degrees(),
             cam.zoom,
             SEASON_NAMES[s.floor() as usize % 4],
             s,
@@ -776,7 +870,7 @@ impl Renderer {
             world.lights.len() + self.frame_lights.len(),
             here,
         );
-        let help = " tab settings  m world map  wasd/hjkl walk  arrows pan  c centre  r/R rotate  z/Z zoom  v fill  g glyphs  [ ] season  , . time  p pause  W weather  f fire  F clear  H hud  q quit ";
+        let help = " tab settings  m world map  wasd/hjkl walk  arrows pan  c centre  r/R ( ) rotate  z/Z zoom  v fill  g glyphs  [ ] season  , . time  p pause  W weather  f fire  F clear  H hud  q quit ";
         cv.text(0, 0, &line, Rgb(220, 220, 230), Rgb(30, 32, 44));
         cv.text(0, self.h - 1, help, Rgb(160, 160, 176), Rgb(30, 32, 44));
     }

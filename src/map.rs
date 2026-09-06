@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::biome::{self, BIOMES};
-use crate::noise::{fbm, hash, hash01};
+use crate::noise::{fbm, hash};
 
 /// Tiles below this height are water; the water surface is drawn at this level.
 pub const SEA: i32 = 3;
@@ -63,7 +63,13 @@ pub struct Map {
     pub seed: u64,
     /// When true, only tiles inside `w` x `h` exist.
     pub bounded: bool,
-    chunks: RefCell<HashMap<(i32, i32), Vec<Tile>>>,
+    chunks: RefCell<HashMap<(i32, i32), Chunk>>,
+}
+
+/// A generated block of tiles with its tallest drawn height.
+struct Chunk {
+    tiles: Vec<Tile>,
+    max_z: i32,
 }
 
 impl Map {
@@ -79,7 +85,18 @@ impl Map {
         let key = (x.div_euclid(CHUNK), y.div_euclid(CHUNK));
         let mut chunks = self.chunks.borrow_mut();
         let chunk = chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1));
-        Some(chunk[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize])
+        Some(chunk.tiles[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize])
+    }
+
+    /// Tallest drawn height in the chunk containing a position, generating
+    /// it if needed; zero outside a bounded map.
+    pub fn ceiling(&self, x: i32, y: i32) -> i32 {
+        if self.bounded && (x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32) {
+            return 0;
+        }
+        let key = (x.div_euclid(CHUNK), y.div_euclid(CHUNK));
+        let mut chunks = self.chunks.borrow_mut();
+        chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1)).max_z
     }
 
     /// Raw height at any position. A slow continental field sets oceans,
@@ -196,11 +213,12 @@ impl Map {
         }
     }
 
-    fn generate_chunk(&self, cx: i32, cy: i32) -> Vec<Tile> {
+    fn generate_chunk(&self, cx: i32, cy: i32) -> Chunk {
         let (x0, y0) = (cx * CHUNK, cy * CHUNK);
         let mut tiles: Vec<Tile> = (0..CHUNK * CHUNK).map(|i| self.tile(x0 + i % CHUNK, y0 + i / CHUNK)).collect();
         self.label_water_bodies(&mut tiles, x0, y0);
-        tiles
+        let max_z = tiles.iter().map(|t| t.draw_z()).max().unwrap_or(0);
+        Chunk { tiles, max_z }
     }
 
     /// Flood-fill each water body touching the chunk, capped, and record the
@@ -239,6 +257,38 @@ impl Map {
                     tiles[j].body = size;
                     done[j] = true;
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiles_are_deterministic_and_chunk_independent() {
+        let a = Map::new(32, 32, 7);
+        let mut b = Map::new(32, 32, 7);
+        b.bounded = false;
+        for &(x, y) in &[(0, 0), (31, 31), (5, 17), (16, 16)] {
+            let ta = a.get(x, y).unwrap();
+            let tb = b.get(x, y).unwrap();
+            assert_eq!(ta.z, tb.z);
+            assert_eq!(ta.terrain, tb.terrain);
+            assert_eq!(ta.biome, tb.biome);
+        }
+        assert!(a.get(-1, 0).is_none());
+        assert!(b.get(-1, 0).is_some());
+    }
+
+    #[test]
+    fn ceiling_bounds_every_tile() {
+        let mut m = Map::new(8, 8, 3);
+        m.bounded = false;
+        for y in -40..40 {
+            for x in -40..40 {
+                assert!(m.get(x, y).unwrap().draw_z() <= m.ceiling(x, y));
             }
         }
     }

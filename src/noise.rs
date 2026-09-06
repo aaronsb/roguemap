@@ -57,3 +57,25 @@ pub fn fbm(x: f32, y: f32, seed: u64, octaves: u32) -> f32 {
 pub fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     smooth(((x - e0) / (e1 - e0)).clamp(0.0, 1.0))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noise_stays_in_unit_range() {
+        for i in 0..2000 {
+            let x = i as f32 * 0.37 - 300.0;
+            let v = fbm(x, x * 0.61, 11, 4);
+            assert!((0.0..1.0).contains(&v));
+        }
+    }
+
+    #[test]
+    fn smoothstep_clamps_both_ways() {
+        assert_eq!(smoothstep(0.0, 1.0, -1.0), 0.0);
+        assert_eq!(smoothstep(0.0, 1.0, 2.0), 1.0);
+        assert_eq!(smoothstep(1.0, 0.0, 1.0), 0.0);
+        assert_eq!(smoothstep(1.0, 0.0, 0.0), 1.0);
+    }
+}

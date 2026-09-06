@@ -294,6 +294,8 @@ pub struct Tileset {
     pub stubble: [char; 3],
     /// Reeds in still shallow water.
     pub cattail: [char; 2],
+    /// Whether sextant glyphs may be used for edge antialiasing.
+    pub antialias: bool,
     /// Water surface glyphs, cycled by wave phase.
     pub water: [char; 4],
     pub sand: [char; 2],
@@ -342,6 +344,7 @@ impl Tileset {
             cover: [['\\', '|', '/'], [',', '\'', ';'], ['"', '`', '"'], [' ', ' ', ' ']],
             stubble: [';', '.', '\''],
             cattail: [';', 'i'],
+            antialias: false,
             water: ['~', '-', '=', ' '],
             sand: ['.', ':'],
             dirt: ['.', ','],
@@ -365,6 +368,7 @@ impl Tileset {
             cover: [['╲', '│', '╱'], [',', '\'', ';'], ['·', '∙', '·'], [' ', ' ', ' ']],
             stubble: [';', '.', '`'],
             cattail: [';', '╿'],
+            antialias: true,
             water: ['🭸', '🭹', '🭺', '🭷'],
             sand: ['·', '∙'],
             dirt: ['·', '‥'],

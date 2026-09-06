@@ -183,3 +183,38 @@ pub fn seasonal_temp(annual: f32, season: f32) -> f32 {
     annual + 9.0 * ((season - 1.0) * std::f32::consts::FRAC_PI_2).cos()
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_covers_the_table() {
+        assert_eq!(BIOMES[classify(25.0, 80.0)].koppen, "Af");
+        assert_eq!(BIOMES[classify(25.0, 50.0)].koppen, "Aw");
+        assert_eq!(BIOMES[classify(20.0, 10.0)].koppen, "BW");
+        assert_eq!(BIOMES[classify(10.0, 30.0)].koppen, "BS");
+        assert_eq!(BIOMES[classify(12.0, 50.0)].koppen, "Cs");
+        assert_eq!(BIOMES[classify(8.0, 70.0)].koppen, "Cf");
+        assert_eq!(BIOMES[classify(-2.0, 70.0)].koppen, "Df");
+        assert_eq!(BIOMES[classify(-10.0, 70.0)].koppen, "ET");
+        assert_eq!(BIOMES[classify(-20.0, 70.0)].koppen, "EF");
+    }
+
+    #[test]
+    fn species_and_materials_resolve() {
+        for b in BIOMES {
+            assert!(b.material < MATERIALS.len(), "{}", b.name);
+            for &(sp, w) in b.species {
+                assert!(sp < SPECIES.len() && w > 0, "{}", b.name);
+            }
+        }
+    }
+
+    #[test]
+    fn vigour_falls_with_cold() {
+        assert!(vigour(20.0, 1.0) > 0.99);
+        assert!(vigour(5.0, 3.0) < 0.2);
+        assert!(vigour(5.0, 1.0) > vigour(5.0, 3.0));
+    }
+}

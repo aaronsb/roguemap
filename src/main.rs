@@ -56,7 +56,7 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
     let mut renderer = render::Renderer::new(w as i32, h as i32);
     renderer.show_hud = get("hud", 1.0) > 0.5;
     let mut cam = render::Camera::new();
-    cam.rot = get("rot", 0.0) as u8;
+    cam.angle = std::f32::consts::FRAC_PI_4 + get("rot", 0.0) * std::f32::consts::FRAC_PI_2 + get("deg", 0.0).to_radians();
     let zoom = kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| render::Camera::fitting_zoom(&map, w as i32, h as i32));
     cam.set_zoom(zoom, &map, w as i32, h as i32);
     cam.look_at(get("cx", map.w as f32 / 2.0) as i32, get("cy", map.h as f32 / 2.0) as i32, &map, w as i32, h as i32);
@@ -86,6 +86,15 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
         let (mx, my) = cam.center_tile(&map, w as i32, h as i32);
         let z = map.get(mx, my).map(|t| t.draw_z()).unwrap_or(map::SEA);
         world.add_campfire(mx, my, z);
+    }
+    // frames=N renders N extra frames and prints the average time per frame.
+    let frames = get("frames", 0.0) as usize;
+    if frames > 0 {
+        let start = std::time::Instant::now();
+        for i in 0..frames {
+            renderer.draw(&mut cv, &map, &ts, &world, &cam, &settings, get("t", 0.0) + i as f32 * 0.04);
+        }
+        eprintln!("{:.2} ms/frame", start.elapsed().as_secs_f32() * 1000.0 / frames as f32);
     }
     if get("worldmap", 0.0) > 0.5 {
         let mut wm = worldmap::WorldMap::new();
@@ -127,17 +136,7 @@ fn spawn(map: &map::Map) -> world::Entity {
 /// space a key moves the figure that way on screen, which is a diagonal in
 /// map space; in map-axes mode keys follow the map's own north and east.
 fn walk(world: &mut world::World, map: &map::Map, cam: &render::Camera, settings: &Settings, dir: (i32, i32)) {
-    let (dx, dy) = if settings.screen_space() {
-        let (dvx, dvy) = match dir {
-            (0, -1) => (-1, -1),
-            (0, 1) => (1, 1),
-            (-1, 0) => (-1, 1),
-            _ => (1, -1),
-        };
-        cam.view_delta_to_map(dvx, dvy)
-    } else {
-        dir
-    };
+    let (dx, dy) = if settings.screen_space() { cam.screen_dir_to_map(dir.0, dir.1) } else { dir };
     if let Some(p) = world.entities.first_mut() {
         let (nx, ny) = (p.mx + dx, p.my + dy);
         if let Some(t) = map.get(nx, ny) {
@@ -152,9 +151,8 @@ fn walk(world: &mut world::World, map: &map::Map, cam: &render::Camera, settings
 /// Recentre when the player leaves the middle of the screen.
 fn follow(cam: &mut render::Camera, world: &world::World, map: &map::Map, sw: i32, sh: i32) {
     if let Some(p) = world.entities.first() {
-        let (vx, vy) = cam.to_view(p.mx, p.my, map);
         let z = map.get(p.mx, p.my).map(|t| t.draw_z()).unwrap_or(0);
-        let (sx, sy) = cam.project(vx, vy, z);
+        let (sx, sy) = cam.project_tile(p.mx, p.my, z);
         if sx < sw / 5 || sx > sw * 4 / 5 || sy < sh / 5 || sy > sh * 4 / 5 {
             cam.look_at(p.mx, p.my, map, sw, sh);
         }
@@ -242,10 +240,12 @@ fn main() -> std::io::Result<()> {
                     }
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    KeyCode::Left => cam.ox += 2 * cam.hw,
-                    KeyCode::Right => cam.ox -= 2 * cam.hw,
-                    KeyCode::Up => cam.oy += 2 * cam.hh,
-                    KeyCode::Down => cam.oy -= 2 * cam.hh,
+                    KeyCode::Left => cam.ox += (2 * cam.hw) as f32,
+                    KeyCode::Right => cam.ox -= (2 * cam.hw) as f32,
+                    KeyCode::Up => cam.oy += (2 * cam.hh) as f32,
+                    KeyCode::Down => cam.oy -= (2 * cam.hh) as f32,
+                    KeyCode::Char('(') => cam.rotate_by(-5.0f32.to_radians(), sw, sh),
+                    KeyCode::Char(')') => cam.rotate_by(5.0f32.to_radians(), sw, sh),
                     KeyCode::Char('z') => cam.set_zoom(cam.zoom + 1, &map, sw, sh),
                     KeyCode::Char('Z') => cam.set_zoom(cam.zoom + tileset::ZOOMS.len() - 1, &map, sw, sh),
                     KeyCode::Char('c') => {

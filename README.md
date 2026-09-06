@@ -1,9 +1,13 @@
 # roguemap
 
-An isometric, height-mapped terrain renderer for the terminal. Tiles are
-rasterised back to front into a G-buffer of unlit colour, glyph, world
-position and face; a lighting pass then applies ambient sky light, a sun
-shadowed by drifting clouds, and point lights such as campfires. Seasons are
+An isometric, height-mapped terrain renderer for the terminal. Terrain is
+drawn by inverse projection: every screen cell walks down the height column
+under it until it meets a tile top or a cliff face, so the camera can sit at
+any angle. Cells on a boundary between two surfaces are supersampled 2x3 and
+drawn with a sextant glyph and two colours. Sprites are billboards drawn
+back to front with a depth test. A lighting pass then applies ambient sky
+light, a sun shadowed by drifting clouds, and point lights such as
+campfires. Seasons are
 palette swaps on the unlit colour. Glyphs come from a switchable tileset:
 plain ASCII, or PETSCII-style shapes from the Unicode Symbols for Legacy
 Computing block.
@@ -29,6 +33,7 @@ Anything from 80x25 upward works.
 | arrows | pan |
 | `c` | centre on the player |
 | `r` / `R` | rotate a quarter turn about the screen centre |
+| `(` / `)` | rotate five degrees |
 | `z` / `Z` | zoom in / out through seven tile sizes, 2x1 to 16x4 cells |
 | `g` | toggle PETSCII / ASCII glyphs |
 | `[` / `]` | step the season by a quarter |
@@ -56,6 +61,7 @@ right change it, `Esc` closes. Every row also has a shortcut key.
 | Wind | auto, calm, breeze, windy, gale |
 | Day length | 2 minutes, 10 minutes, 1 hour, 24 hours |
 | Cloud layer | shown or hidden |
+| Antialias | on or off (PETSCII glyphs only) |
 
 The settings table in `src/settings.rs` is the single source for the window
 and for the shortcuts.
