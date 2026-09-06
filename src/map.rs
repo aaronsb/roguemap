@@ -20,13 +20,14 @@ pub const SEA: i32 = 0;
 pub const FLOOR: f32 = -12.0;
 /// Metres of water under the shoreline per unit of the generator's field.
 const DEPTH: f32 = 4.0;
-/// Height from which terrain is bare rock; the treeline sits a little below
-/// it and buildings up there are built of stone.
+/// Height from which terrain is bare rock.
 pub const ROCK_Z: i32 = 51;
 /// Height from which what is built is built of stone.
 pub const STONE_Z: i32 = 40;
-/// The alpine line: nothing grows above it and it is snow-capped.
-pub const ALPINE_Z: i32 = 76;
+// There is no treeline constant. Height cools the air by `LAPSE`, the
+// climate picks the biome, and the biome's `tree_density` in
+// assets/biomes.toml says how many trees stand there: tundra and ice cap
+// carry almost none, so the trees stop where the table says they do.
 /// Ceiling of the relief: the top of a range.
 pub const MAX_Z: i32 = RELIEF as i32;
 /// Metres from the shoreline to the top of a range (ADR-004).
@@ -276,8 +277,8 @@ fn terrain_for(z: i32, temp: f32, near_water: bool, patch: f32) -> Terrain {
     }
 }
 
-/// Local building material: stone on rock and near the alpine zone,
-/// otherwise the biome's.
+/// Local building material: stone on rock and on high ground, otherwise
+/// the biome's.
 fn material_for(terrain: Terrain, z: i32, biome: &Biome, stone: usize) -> usize {
     if terrain == Terrain::Rock || z >= STONE_Z {
         stone

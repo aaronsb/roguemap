@@ -28,13 +28,18 @@ centimetres as `i32`, so the smallest unit in the world is a centimetre.
 | `RELIEF` | 120.0 | the top of the tallest range |
 | `STONE_Z` | 40 | bare stone shows above this height |
 | `ROCK_Z` | 51 | rock is the ground terrain above this height |
-| `ALPINE_Z` | 76 | the snow line |
 
 So the whole vertical range of the world is 132 metres: 12 below the
 waterline and 120 above it. A valley floor sits a metre or two above the
 water and a range tops out at 120. A tile's gameplay height is the
 continuous field floored to whole metres; the renderer uses the
 continuous value.
+
+The snow line and the treeline are not in that table and are not
+constants: height cools the air by the lapse rate, the climate picks the
+biome, and the biome's row says what grows and lies there. Snow is the
+terrain wherever the tile is cold enough, and trees thin out because
+tundra and ice cap carry almost no `tree_density` (docs/properties.md).
 
 ## The four zooms
 
