@@ -1,0 +1,74 @@
+[[setting]]
+key = "traversal"
+description = "Whether a walk key moves the figure that way on screen or along the map axes."
+label = "Traversal"
+values = ["screen space", "map axes"]
+default = 0
+
+[[setting]]
+key = "view"
+description = "A bounded island floating in the sky, or terrain in every direction."
+label = "World view"
+values = ["island", "filled"]
+default = 0
+shortcut = "v"
+
+[[setting]]
+key = "glyphs"
+description = "Which glyph set draws the scene."
+label = "Glyphs"
+values = ["petscii", "ascii"]
+default = 0
+shortcut = "g"
+
+[[setting]]
+key = "hud"
+description = "The status bar and help line."
+label = "HUD"
+values = ["shown", "hidden"]
+default = 0
+shortcut = "H"
+
+[[setting]]
+key = "clock"
+description = "Whether the day clock runs."
+label = "Clock"
+values = ["running", "paused"]
+default = 0
+shortcut = "p"
+
+[[setting]]
+key = "weather"
+description = "Automatic weather, or a fixed preset."
+label = "Weather"
+values = ["auto", "clear", "cloudy", "rain", "storm"]
+default = 0
+shortcut = "W"
+
+[[setting]]
+key = "wind"
+description = "Automatic wind, or a fixed strength."
+label = "Wind"
+values = ["auto", "calm", "breeze", "windy", "gale"]
+default = 0
+
+[[setting]]
+key = "day_length"
+description = "How long a day takes in real time."
+label = "Day length"
+values = ["2 min", "10 min", "1 hour", "24 hours"]
+default = 1
+
+[[setting]]
+key = "clouds"
+description = "The cloud layer seen from above at the smallest zooms."
+label = "Cloud layer"
+values = ["shown", "hidden"]
+default = 0
+
+[[setting]]
+key = "antialias"
+description = "Sextant supersampling along surface boundaries; PETSCII glyphs only."
+label = "Antialias"
+values = ["on", "off"]
+default = 0

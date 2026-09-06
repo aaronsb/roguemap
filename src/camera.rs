@@ -33,6 +33,12 @@ pub struct Anchor {
     pub depth: f32,
 }
 
+impl Default for Camera {
+    fn default() -> Camera {
+        Camera::new()
+    }
+}
+
 impl Camera {
     pub fn new() -> Camera {
         Camera { angle: FRAC_PI_4, ox: 0.0, oy: 0.0, zoom: 0, hw: ZOOMS[0].0, hh: ZOOMS[0].1, focus_z: SEA as f32 }

@@ -1,0 +1,6 @@
+# name=player tier=medium center=2 base_rows=0
+  _  
+ (o) 
+/|=|\
+ | | 
+_| |_

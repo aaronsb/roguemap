@@ -1,0 +1,4 @@
+# name=player tier=small center=1 base_rows=0
+ O 
+/|\
+/ \

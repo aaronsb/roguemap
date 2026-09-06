@@ -10,14 +10,24 @@ use crate::biome::seasonal_temp;
 use crate::canvas::Rgb;
 use crate::map::{Map, Terrain};
 use crate::noise::{fbm, smoothstep, value};
+use crate::properties::Identity;
 
-/// How a kind of light glows; a `Light` is one placed in the world.
-#[derive(Clone, Copy, Debug)]
+/// How a kind of light glows, a row of `lights.toml`; a `Light` is one
+/// placed in the world.
+#[derive(Clone, Debug, PartialEq)]
 pub struct LightSpec {
+    pub name: String,
+    pub identity: Identity,
+    /// Colour as 0..1 floats.
     pub color: [f32; 3],
+    /// Throw in tiles.
     pub radius: f32,
     pub intensity: f32,
-    pub flicker: bool,
+    /// Falloff exponent over the normalised distance.
+    pub falloff: f32,
+    /// Flicker depth in 0..1 and speed in hertz.
+    pub flicker_amount: f32,
+    pub flicker_rate: f32,
 }
 
 impl LightSpec {
@@ -30,17 +40,15 @@ impl LightSpec {
             color: [self.color[0] * strength, self.color[1] * strength, self.color[2] * strength],
             radius: self.radius,
             intensity: self.intensity,
-            flicker: self.flicker,
+            falloff: self.falloff,
+            flicker_amount: self.flicker_amount,
+            flicker_omega: self.flicker_rate * std::f32::consts::TAU,
         }
     }
 }
 
-pub const CAMPFIRE: LightSpec = LightSpec { color: [1.0, 0.62, 0.22], radius: 7.5, intensity: 2.2, flicker: true };
-/// A lit window; its strength follows how dark the sky is.
-pub const WINDOW: LightSpec = LightSpec { color: [1.0, 0.75, 0.4], radius: 4.0, intensity: 0.8, flicker: false };
-
 /// A point light in map coordinates.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
     pub mx: i32,
     pub my: i32,
@@ -48,18 +56,19 @@ pub struct Light {
     pub color: [f32; 3],
     pub radius: f32,
     pub intensity: f32,
-    pub flicker: bool,
+    pub falloff: f32,
+    pub flicker_amount: f32,
+    /// Flicker speed in radians per second.
+    pub flicker_omega: f32,
 }
 
-/// The creature kind the player is; the creature table comes with the asset
-/// pass.
+/// The creature kind the player is: the first row of `creatures.toml`.
 pub const PLAYER: u8 = 0;
 
-/// A creature standing on a tile; drawn with the player sprite tier.
+/// A creature standing on a tile, drawn with its kind's art.
 #[derive(Clone, Copy, Debug)]
 pub struct Entity {
-    /// Index into the creature table the asset pass brings; the player is 0.
-    #[allow(dead_code)]
+    /// Index into the creature table; the player is 0.
     pub kind: u8,
     pub mx: i32,
     pub my: i32,
@@ -329,12 +338,15 @@ impl World {
         Rgb(10, 12, 22).lerp(clear.lerp(overcast, self.weather.cover), self.skylight())
     }
 
-    /// Light a campfire on a tile unless it is water or off the map.
-    /// Returns whether one was lit.
+    /// Light a campfire on a tile unless it is water or off the map: the
+    /// light of the `campfire` prop, which the loader guarantees. Returns
+    /// whether one was lit.
     pub fn light_campfire(&mut self, map: &Map, mx: i32, my: i32) -> bool {
+        let assets = &map.assets;
+        let Some(spec) = assets.prop("campfire").and_then(|p| p.light).map(|i| &assets.lights[i]) else { return false };
         match map.get(mx, my) {
             Some(tile) if tile.terrain != Terrain::Water => {
-                self.lights.push(CAMPFIRE.at(mx, my, tile.draw_z(), 1.0));
+                self.lights.push(spec.at(mx, my, tile.draw_z(), 1.0));
                 true
             }
             _ => false,
@@ -356,13 +368,14 @@ impl World {
         self.entities.first_mut()
     }
 
-    /// Move the player one step, refusing water and the map edge. Returns
-    /// whether it moved.
+    /// Move the player one step, refusing terrain its kind cannot enter
+    /// and the map edge. Returns whether it moved.
     pub fn try_move(&mut self, map: &Map, dx: i32, dy: i32) -> bool {
         let Some(p) = self.player_mut() else { return false };
         let (nx, ny) = (p.mx + dx, p.my + dy);
+        let kind = &map.assets.creatures[p.kind as usize % map.assets.creatures.len()];
         match map.get(nx, ny) {
-            Some(t) if t.terrain != Terrain::Water => {
+            Some(t) if kind.can_enter.contains(&t.terrain) => {
                 p.mx = nx;
                 p.my = ny;
                 true
@@ -388,7 +401,7 @@ mod tests {
 
     #[test]
     fn player_refuses_water() {
-        let map = Map::new(32, 32, 7);
+        let map = Map::new(32, 32, 7, crate::assets::test_assets());
         let mut w = World::new(7);
         w.spawn_player(&map, 16, 16);
         let p = *w.player().unwrap();

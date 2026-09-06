@@ -3,9 +3,25 @@ name = "roguemap"
 version = "0.1.0"
 edition = "2021"
 description = "Isometric height-mapped terrain renderer for the terminal"
+default-run = "roguemap"
+build = "build.rs"
+
+[lib]
+name = "roguemap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "roguemap"
+path = "src/bin/roguemap.rs"
+
+[[bin]]
+name = "roguemap-edit"
+path = "src/bin/roguemap-edit.rs"
 
 [dependencies]
 crossterm = "0.29"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
 
 [profile.release]
 opt-level = 3

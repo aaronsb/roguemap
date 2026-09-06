@@ -1,0 +1,2 @@
+# name=stone tier=large center=0 base_rows=0 min_zoom=5
+▄

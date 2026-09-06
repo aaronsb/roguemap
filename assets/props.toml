@@ -1,0 +1,104 @@
+[[prop]]
+name = "boulder"
+description = "A large rounded rock on open ground; solid, so it takes a shadowed background."
+category = "rock"
+art = "boulder"
+color = [118, 118, 124]
+glyph = [150, 150, 158]
+density = 0.05
+terrain = ["rock", "dirt", "snow"]
+cover = []
+near_water = false
+min_zoom = 3
+tags = ["stone"]
+passable = false
+
+[[prop]]
+name = "stone"
+description = "A small loose stone on rocky, dry or mossy ground."
+category = "rock"
+art = "stone"
+color = [128, 124, 116]
+glyph = [160, 156, 148]
+density = 0.06
+terrain = ["rock", "dirt", "grass"]
+cover = ["moss", "dry"]
+near_water = false
+min_zoom = 3
+tags = ["stone"]
+
+[[prop]]
+name = "grass clump"
+description = "A tuft of tall grass in a meadow, drawn over the ground with no background."
+category = "plant"
+art = "grass-clump"
+color = [0, 0, 0]
+glyph = [150, 205, 95]
+density = 0.09
+terrain = ["grass"]
+cover = ["grass"]
+near_water = false
+min_zoom = 3
+tags = ["flammable"]
+
+[[prop]]
+name = "reeds"
+description = "Reeds along the waterline on sand or grass."
+category = "plant"
+art = "reeds"
+color = [0, 0, 0]
+glyph = [120, 140, 70]
+density = 0.14
+terrain = ["sand", "grass"]
+cover = []
+near_water = true
+min_zoom = 3
+tags = ["flammable"]
+
+[[prop]]
+name = "sagebrush"
+description = "Low grey-green brush of dry country."
+category = "plant"
+art = "sagebrush"
+color = [0, 0, 0]
+glyph = [150, 160, 120]
+density = 0.07
+terrain = ["grass", "dirt", "sand"]
+cover = ["dry"]
+near_water = false
+min_zoom = 3
+tags = ["flammable"]
+
+[[prop]]
+name = "moss"
+description = "A patch of moss on damp grass or rock."
+category = "plant"
+art = "moss"
+color = [0, 0, 0]
+glyph = [120, 170, 100]
+density = 0.08
+terrain = ["grass", "rock"]
+cover = ["moss"]
+near_water = false
+min_zoom = 3
+tags = ["flammable"]
+
+[[prop]]
+name = "campfire"
+description = "A ring of stones around a burning fire, lit by the player with the f key. It throws warm flickering light; never scattered by chance."
+category = "fire"
+art = "campfire"
+color = [140, 50, 20]
+glyph = [255, 190, 70]
+density = 0.0
+terrain = ["sand", "grass", "dirt", "rock", "snow"]
+cover = []
+near_water = false
+min_zoom = 3
+light = "campfire"
+emits = ["light", "heat"]
+affects = ["flammable"]
+reach = 1.5
+passable = false
+heat = 1.0
+states = ["lit", "burnt"]

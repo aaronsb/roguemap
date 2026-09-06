@@ -1,0 +1,89 @@
+[[species]]
+name = "oak"
+description = "A broad deciduous tree of the temperate lowlands: green in summer, orange in autumn and bare grey-brown in winter."
+category = "tree"
+form = "broadleaf"
+size_class = "mixed"
+canopy = [[72, 142, 60], [40, 110, 50], [180, 100, 40], [105, 82, 64]]
+canopy_glyph = [[130, 200, 100], [80, 160, 80], [230, 150, 60], [140, 118, 96]]
+tags = ["flammable", "wooden"]
+
+[[species]]
+name = "birch"
+description = "A slender, pale-barked deciduous tree that turns yellow in autumn; smaller than oak and quick to fill clearings."
+category = "tree"
+form = "broadleaf"
+size_class = "small"
+canopy = [[120, 190, 90], [90, 160, 70], [220, 180, 60], [150, 140, 130]]
+canopy_glyph = [[180, 230, 140], [150, 210, 120], [250, 220, 110], [210, 205, 200]]
+tags = ["flammable", "wooden"]
+
+[[species]]
+name = "pine"
+description = "A conifer with a dark evergreen crown; it climbs from the mixed forest to the treeline."
+category = "tree"
+form = "pine"
+size_class = "mixed"
+canopy = [30, 92, 50]
+canopy_glyph = [70, 140, 80]
+tags = ["flammable", "wooden"]
+
+[[species]]
+name = "spruce"
+description = "A tall, narrow evergreen conifer of the boreal forest, darker than pine."
+category = "tree"
+form = "pine"
+size_class = "large"
+canopy = [22, 72, 46]
+canopy_glyph = [56, 118, 74]
+tags = ["flammable", "wooden"]
+
+[[species]]
+name = "juniper"
+description = "A low evergreen shrub of dry hills and mountain slopes."
+category = "shrub"
+form = "scrub"
+size_class = "small"
+canopy = [70, 110, 70]
+canopy_glyph = [120, 160, 110]
+tags = ["flammable", "wooden"]
+
+[[species]]
+name = "sagebrush"
+description = "A grey-green scrub of the steppe and desert margins."
+category = "shrub"
+form = "scrub"
+size_class = "small"
+canopy = [130, 140, 110]
+canopy_glyph = [180, 190, 150]
+tags = ["flammable", "wooden"]
+
+[[species]]
+name = "saguaro"
+description = "A columnar cactus of the hot desert, with two arms once it is old enough."
+category = "cactus"
+form = "cactus"
+size_class = "mixed"
+canopy = [78, 138, 78]
+canopy_glyph = [150, 200, 130]
+tags = ["flammable"]
+
+[[species]]
+name = "kapok"
+description = "A giant broadleaf of the rainforest with a wide crown above the canopy."
+category = "tree"
+form = "broadleaf"
+size_class = "large"
+canopy = [30, 100, 45]
+canopy_glyph = [70, 150, 80]
+tags = ["flammable", "wooden"]
+
+[[species]]
+name = "acacia"
+description = "A flat-topped savanna tree that keeps a dusty green through the dry season."
+category = "tree"
+form = "broadleaf"
+size_class = "mixed"
+canopy = [[110, 140, 60], [100, 130, 55], [130, 120, 50], [120, 110, 60]]
+canopy_glyph = [[170, 200, 100], [160, 190, 90], [190, 170, 80], [170, 160, 100]]
+tags = ["flammable", "wooden"]

@@ -1,11 +1,11 @@
 //! Full-screen world map: biomes plotted top-down at one of three extents,
 //! with a cursor for teleporting.
 
-use crate::biome::{self, BIOMES};
+use crate::biome;
 use crate::canvas::{Canvas, Rgb};
 use crate::input::{self, WORLDMAP};
 use crate::map::{Map, ALPINE_Z, SEA};
-use crate::palette::{Palette, ROCK, SAND, SPRING};
+use crate::palette::{Palette, ROCK, SAND};
 use crate::ui::CHROME;
 use crate::world::World;
 
@@ -14,15 +14,17 @@ use crate::world::World;
 pub const SCALES: [i32; 3] = [1, 4, 16];
 pub const SCALE_NAMES: [&str; 3] = ["small", "medium", "large"];
 
-/// The map keeps the spring palette in every season so the legend and the
-/// plot stay readable under winter snow.
-const PLOT: Palette = SPRING;
-
 pub struct WorldMap {
     pub open: bool,
     pub scale: usize,
     /// Cursor in map coordinates.
     pub cursor: (i32, i32),
+}
+
+impl Default for WorldMap {
+    fn default() -> WorldMap {
+        WorldMap::new()
+    }
 }
 
 impl WorldMap {
@@ -47,24 +49,31 @@ impl WorldMap {
         self.scale = (self.scale as i32 + dir).rem_euclid(n) as usize;
     }
 
+    /// The map keeps the spring palette in every season so the legend and
+    /// the plot stay readable under winter snow.
+    fn plot_palette(map: &Map) -> &Palette {
+        &map.assets.surfaces.seasons[0].palette
+    }
+
     /// Colour of one sampled tile: water by depth, snow and rock by height
     /// and cold, otherwise the biome's ground colour. Coarser than the
     /// scene's surface colour: no dirt, no shoreline sand, and a stronger
     /// height lift so relief reads at sixteen tiles per cell.
     fn sample(map: &Map, world: &World, x: i32, y: i32) -> Rgb {
+        let plot = Self::plot_palette(map);
         let c = map.climate(x, y);
         if c.z < SEA {
             let depth = ((SEA - c.z) as f32 / 3.0).clamp(0.0, 1.0);
-            return PLOT.water_shallow.lerp(PLOT.water_deep, depth);
+            return plot.water_shallow.lerp(plot.water_deep, depth);
         }
-        let mut col = biome::ground_color(&BIOMES[c.biome], world.season);
+        let mut col = biome::ground_color(&map.assets.biomes[c.biome], world.season);
         if c.z >= ALPINE_Z - 2 {
-            col = PLOT.surfaces[ROCK].color;
+            col = plot.surfaces[ROCK].color;
         } else if c.z == SEA {
-            col = PLOT.surfaces[SAND].color;
+            col = plot.surfaces[SAND].color;
         }
         let lift = 0.8 + (c.z - SEA) as f32 * 0.03;
-        col.scale(lift).lerp(PLOT.snow(), world.snow_at(c.temp))
+        col.scale(lift).lerp(plot.snow(), world.snow_at(c.temp))
     }
 
     /// Draw the map over the whole canvas.
@@ -72,7 +81,7 @@ impl WorldMap {
         self.plot(cv, map, world, player);
         Self::crosshair(cv);
         self.header(cv, map);
-        Self::legend(cv, world);
+        Self::legend(cv, map, world);
     }
 
     /// Biome colours per cell, averaged over a 2x2 sub-sample at the coarse
@@ -128,9 +137,10 @@ impl WorldMap {
     fn header(&self, cv: &mut Canvas, map: &Map) {
         let (sx, sy) = self.stride();
         let (cx, cy) = self.cursor;
+        let assets = &map.assets;
         let c = map.climate(cx, cy);
-        let b = &BIOMES[c.biome];
-        let lead = b.species.first().map(|&(sp, _)| biome::SPECIES[sp].name).unwrap_or("none");
+        let b = &assets.biomes[c.biome];
+        let lead = b.species.first().map(|&(sp, _)| assets.species[sp].name.as_str()).unwrap_or("none");
         let header = format!(
             " world map  {}  1 cell = {}x{} tiles  cursor {},{}  {} ({})  {:.0}C  precip {:.0}  z{}  trees: {}  builds: {} ",
             SCALE_NAMES[self.scale % SCALES.len()],
@@ -144,16 +154,16 @@ impl WorldMap {
             c.precip,
             c.z,
             lead,
-            biome::MATERIALS[b.material].name
+            assets.materials[b.material].name
         );
         cv.text(0, 0, &header, CHROME.text, CHROME.bar);
     }
 
     /// Biome swatches along the bottom row, then the key hints.
-    fn legend(cv: &mut Canvas, world: &World) {
+    fn legend(cv: &mut Canvas, map: &Map, world: &World) {
         let (w, h) = (cv.w, cv.h);
         let mut x = 0;
-        for b in BIOMES {
+        for b in &map.assets.biomes {
             let sw = biome::ground_color(b, world.season);
             cv.put(x, h - 1, ' ', sw, sw);
             cv.put(x + 1, h - 1, ' ', sw, sw);

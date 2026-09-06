@@ -7,7 +7,7 @@ use crate::camera::Camera;
 use crate::canvas::Rgb;
 use crate::map::{Map, Terrain, Tile, MAX_Z, SEA};
 use crate::noise::{hash, smoothstep};
-use crate::palette::{surface_color, SURFACES};
+use crate::palette::surface_color;
 use crate::render::{GCell, Hit, Renderer, Scene, FACE_LEFT, FACE_RIGHT, FACE_TOP, SKY_DEPTH};
 
 /// Detail octaves for a zoom: none at the overview, more up close.
@@ -125,15 +125,16 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
     let hv = hash((hit.x * qs).floor() as i64, (hit.y * qs * 2.0).floor() as i64, tile.seed as u64);
     let r = (hv % 1000) as f32 / 1000.0;
     let snow = world.snow_at(tile.temp as f32);
-    let b = tile.biome();
+    let b = tile.biome(sc.assets);
     let vig = biome::vigour(tile.temp as f32, world.season);
+    let density_of = &sc.assets.surfaces.density;
     let ground_glyph = b.ground_glyph.lerp(pal.snow_glyph(), snow).lerp(base.scale(1.25), 1.0 - vig);
     let wind_strength = if cam.hw <= 2 { 0.0 } else { world.weather.wind };
     match tile.terrain {
         Terrain::Grass => {
-            let density = (tile.grass as f32 * 0.14 + 0.04) * (1.0 - snow);
+            let density = (tile.grass as f32 * density_of.grass_per_level + density_of.grass_base) * (1.0 - snow);
             let (set, density) = if vig > 0.55 {
-                (Some(&ts.cover[b.cover]), density * (0.4 + 0.6 * vig))
+                (Some(&ts.cover[b.cover as usize]), density * (0.4 + 0.6 * vig))
             } else if vig > 0.15 {
                 (None, density * 0.5 * (vig - 0.15) / 0.4 + 0.02)
             } else {
@@ -153,7 +154,7 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
             let wave = sc.chop * smoothstep(6.0, 160.0, tile.body_size as f32);
             let phase = (sc.t * (0.6 + wave) + sx as f32 * 0.13 + sy as f32 * 0.37 + (hv >> 16) as f32 * 0.001).sin();
             let pond = tile.body_size < 60 && tile.z >= SEA - 1;
-            if pond && vig > 0.3 && r < 0.10 + 0.06 * vig {
+            if pond && vig > 0.3 && r < density_of.cattail + 0.06 * vig {
                 let ch = ts.cattail[((hv >> 20) % 2) as usize];
                 return (ch, Rgb(120, 140, 70).lerp(Rgb(150, 120, 60), 1.0 - vig));
             } else if r < 0.12 + 0.34 * wave {
@@ -164,7 +165,7 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
         }
         ground => {
             if let Some(i) = ground.surface() {
-                if r < SURFACES[i].texture_density {
+                if r < sc.assets.surfaces.surface[i].texture_density {
                     return (ts.texture[i][((hv >> 20) % 2) as usize], pal.surfaces[i].glyph);
                 }
             }
@@ -227,7 +228,7 @@ impl Renderer {
     /// and the field's slope shades it toward or away from the sun.
     fn field_color(&self, sc: &Scene, hit: &Hit) -> Rgb {
         let octaves = detail_octaves(sc.cam);
-        let Some(grid) = &self.heights else { return surface_color(&hit.tile, &sc.pal, sc.world) };
+        let Some(grid) = &self.heights else { return surface_color(&hit.tile, &sc.pal, sc.world, sc.assets) };
         let field = |x: f32, y: f32| grid.sample(x, y) + sc.map.detail(x, y, octaves);
         let h = field(hit.x, hit.y);
         let kind = sc.map.surface_at(hit.x, hit.y, h, hit.tile.temp as f32);
@@ -236,7 +237,7 @@ impl Renderer {
         if kind == Terrain::Water {
             t.z = (h.floor() as i32).min(SEA - 1);
         }
-        let mut c = surface_color(&t, &sc.pal, sc.world);
+        let mut c = surface_color(&t, &sc.pal, sc.world, sc.assets);
         if kind != Terrain::Water && sc.cam.hw >= 8 {
             // Slope shading from the gradient; sun from the south-east.
             let e = 0.25;

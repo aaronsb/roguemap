@@ -1,0 +1,116 @@
+[[biome]]
+name = "rainforest"
+description = "Hot and wet all year: dense broadleaf forest over green ground."
+koppen = "Af"
+cover = "grass"
+ground = [50, 122, 52]
+ground_glyph = [110, 190, 100]
+seasonal = false
+grass = 3
+tree_density = 0.9
+species = [["kapok", 6], ["oak", 2]]
+material = "wood"
+
+[[biome]]
+name = "savanna"
+description = "Hot with a dry season: tall grass, scattered acacias and adobe houses."
+koppen = "Aw"
+cover = "dry"
+ground = [162, 150, 72]
+ground_glyph = [210, 195, 110]
+seasonal = false
+grass = 2
+tree_density = 0.15
+species = [["acacia", 5], ["juniper", 1]]
+material = "adobe"
+
+[[biome]]
+name = "desert"
+description = "Too dry for grass: bare ground with cacti and sagebrush."
+koppen = "BW"
+cover = "bare"
+ground = [206, 176, 122]
+ground_glyph = [170, 140, 90]
+seasonal = false
+grass = 0
+tree_density = 0.05
+species = [["saguaro", 5], ["sagebrush", 1]]
+material = "adobe"
+
+[[biome]]
+name = "steppe"
+description = "Semi-arid grassland with brush and few trees, dormant in winter."
+koppen = "BS"
+cover = "dry"
+ground = [172, 160, 92]
+ground_glyph = [210, 200, 130]
+seasonal = true
+grass = 1
+tree_density = 0.08
+species = [["sagebrush", 4], ["juniper", 2]]
+material = "adobe"
+
+[[biome]]
+name = "mediterranean"
+description = "Warm dry summers and mild wet winters: scrub and oak on stony ground."
+koppen = "Cs"
+cover = "dry"
+ground = [140, 150, 72]
+ground_glyph = [190, 200, 110]
+seasonal = true
+grass = 2
+tree_density = 0.35
+species = [["juniper", 4], ["oak", 2]]
+material = "stone"
+
+[[biome]]
+name = "temperate forest"
+description = "Mild and wet: oak, birch and pine over thick grass, strongly seasonal."
+koppen = "Cf"
+cover = "grass"
+ground = [86, 150, 60]
+ground_glyph = [150, 210, 100]
+seasonal = true
+grass = 3
+tree_density = 0.6
+species = [["oak", 5], ["birch", 3], ["pine", 1]]
+material = "wood"
+
+[[biome]]
+name = "boreal forest"
+description = "Cold with short summers: spruce and pine over moss."
+koppen = "Df"
+cover = "moss"
+ground = [70, 112, 62]
+ground_glyph = [120, 170, 100]
+seasonal = true
+grass = 1
+tree_density = 0.7
+species = [["spruce", 5], ["pine", 3], ["birch", 1]]
+material = "wood"
+
+[[biome]]
+name = "tundra"
+description = "Too cold for trees; juniper and brush over moss, stone buildings."
+koppen = "ET"
+cover = "moss"
+ground = [122, 132, 102]
+ground_glyph = [170, 180, 140]
+seasonal = true
+grass = 1
+tree_density = 0.05
+species = [["juniper", 3], ["sagebrush", 1]]
+material = "stone"
+
+[[biome]]
+name = "ice cap"
+description = "Permanent frost; nothing grows."
+koppen = "EF"
+cover = "bare"
+ground = [226, 232, 240]
+ground_glyph = [255, 255, 255]
+seasonal = false
+grass = 0
+tree_density = 0.0
+species = []
+material = "stone"

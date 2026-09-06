@@ -8,6 +8,7 @@
 //! light, the sun shadowed by drifting clouds, and point lights; overlays
 //! (overlay.rs) add precipitation and the cloud layer.
 
+use crate::assets::Assets;
 use crate::camera::Camera;
 use crate::canvas::{Canvas, Rgb};
 use crate::map::{Map, Tile, MAX_Z};
@@ -30,6 +31,8 @@ pub struct RenderOptions {
 /// every pass.
 pub struct Scene<'a> {
     pub map: &'a Map,
+    /// The tables the map was built from.
+    pub assets: &'a Assets,
     pub ts: &'a Tileset,
     pub pal: Palette,
     pub world: &'a World,
@@ -44,7 +47,8 @@ impl<'a> Scene<'a> {
     /// Gather one frame's inputs; the seasonal palette and water choppiness
     /// are derived once here.
     pub fn new(map: &'a Map, ts: &'a Tileset, world: &'a World, cam: &'a Camera, t: f32) -> Scene<'a> {
-        Scene { map, ts, pal: Palette::for_season(world.season), world, cam, t, chop: world.choppiness() }
+        let assets: &'a Assets = &map.assets;
+        Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness() }
     }
 }
 

@@ -84,8 +84,24 @@ right change it, `Esc` closes. Every row also has a shortcut key.
 | Cloud layer | shown or hidden |
 | Antialias | on or off (PETSCII glyphs only) |
 
-The settings table in `src/settings.rs` is the single source for the window
-and for the shortcuts.
+The settings table in `assets/settings.toml` drives the window; each row
+names its shortcut key, and the scene binding table in `src/input.rs`
+mirrors it (a test keeps the two in step).
+
+## Assets
+
+Everything that describes a thing in the world (biomes, species, materials,
+props, building kinds, creatures, surfaces, lights, settings rows, glyph
+sets and hand-drawn sprites) is a TOML or text file under `assets/`,
+embedded into the binary at build time. Set `ROGUEMAP_ASSETS=<dir>` to load
+the same layout from disk instead, with no rebuild; a missing directory or a
+bad row is an error naming the file and row. `make assets-export` writes
+the embedded set to `./assets-export` as a starting point. The layout and
+the art format are in [docs/assets.md](docs/assets.md), every row property
+in [docs/properties.md](docs/properties.md), and the decision in
+[ADR-001](docs/adr/ADR-001-assets-as-files.md). The crate is a library plus
+two binaries: `roguemap` (the game) and `roguemap-edit` (the editor of
+ADR-003, a stub for now).
 
 ## World
 

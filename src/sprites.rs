@@ -1,7 +1,7 @@
 //! Billboards over the terrain: trees, buildings and creatures drawn back
 //! to front with a depth test, small ground props, and campfire flames.
 
-use crate::biome::{self, MaterialRule, MATERIALS, PROPS};
+use crate::biome::MaterialRule;
 use crate::camera::Anchor;
 use crate::canvas::Rgb;
 use crate::map::{Flora, Structure, Terrain, Tile};
@@ -24,13 +24,12 @@ struct SpriteColors {
     base: Tint,
 }
 
-const PLAYER_TINT: Tint = Tint { bg: Rgb(52, 74, 150), fg: Rgb(240, 214, 176) };
-
 /// Something standing on a tile that draws as a billboard.
 enum SpriteItem {
     Tree(Flora),
     Building(Structure),
-    Entity,
+    /// A creature, by kind.
+    Entity(u8),
 }
 
 /// A sprite item resolved against the scene: what to draw and how.
@@ -46,10 +45,10 @@ struct Resolved<'a> {
 
 impl SpriteItem {
     fn resolve<'a>(&self, sc: &Scene<'a>, tile: &Tile, a: &Anchor) -> Resolved<'a> {
-        let (ts, pal, world, cam) = (sc.ts, &sc.pal, sc.world, sc.cam);
+        let (assets, ts, pal, world, cam) = (sc.assets, sc.ts, &sc.pal, sc.world, sc.cam);
         match *self {
             SpriteItem::Tree(flora) => {
-                let sp = flora.species();
+                let sp = flora.species(assets);
                 let set = ts.trees(cam.zoom, sp.form);
                 let pair = sp.size_class.pair(flora.variant);
                 let snow = world.snow_at(tile.temp as f32) * 0.7;
@@ -57,8 +56,8 @@ impl SpriteItem {
                     sprite: &set[(pair + flora.variant as usize % 2) % set.len()],
                     colors: SpriteColors {
                         top: Tint {
-                            bg: biome::seasonal(&sp.canopy, world.season).lerp(pal.snow(), snow),
-                            fg: biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph(), snow * 0.5),
+                            bg: crate::biome::seasonal(&sp.canopy, world.season).lerp(pal.snow(), snow),
+                            fg: crate::biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph(), snow * 0.5),
                         },
                         base: Tint { bg: pal.trunk, fg: pal.trunk_glyph },
                     },
@@ -68,10 +67,10 @@ impl SpriteItem {
                 }
             }
             SpriteItem::Building(st) => {
-                let kind = st.kind();
+                let kind = st.kind(assets);
                 let mat = match kind.material {
-                    MaterialRule::Local => tile.material(),
-                    MaterialRule::Fixed(i) => &MATERIALS[i % MATERIALS.len()],
+                    MaterialRule::Local => tile.material(assets),
+                    MaterialRule::Fixed(i) => &assets.materials[i % assets.materials.len()],
                 };
                 let set = ts.houses(cam.zoom);
                 let snow = world.snow_at(tile.temp as f32) * 0.8;
@@ -84,16 +83,20 @@ impl SpriteItem {
                     },
                     gust: 0.0,
                     depth_bias: 0.0,
-                    light: kind.light.filter(|_| night > 0.05).map(|spec| spec.at(a.mx, a.my, a.z, night)),
+                    light: kind.light.filter(|_| night > 0.05).map(|i| assets.lights[i].at(a.mx, a.my, a.z, night)),
                 }
             }
-            SpriteItem::Entity => Resolved {
-                sprite: ts.player(cam.zoom),
-                colors: SpriteColors { top: PLAYER_TINT, base: PLAYER_TINT },
-                gust: 0.0,
-                depth_bias: 0.01,
-                light: None,
-            },
+            SpriteItem::Entity(kind) => {
+                let creature = &assets.creatures[kind as usize % assets.creatures.len()];
+                let tint = Tint { bg: creature.color, fg: creature.glyph };
+                Resolved {
+                    sprite: assets.art.for_zoom(&creature.art, cam.zoom).expect("creature art was checked at load"),
+                    colors: SpriteColors { top: tint, base: tint },
+                    gust: 0.0,
+                    depth_bias: 0.01,
+                    light: None,
+                }
+            }
         }
     }
 }
@@ -126,8 +129,8 @@ impl Renderer {
             if let Some(st) = tile.building {
                 self.draw_item(sc, &SpriteItem::Building(st), &tile, &a);
             }
-            for _ in world.entities.iter().filter(|e| e.mx == mx && e.my == my) {
-                self.draw_item(sc, &SpriteItem::Entity, &tile, &a);
+            for e in world.entities.iter().filter(|e| e.mx == mx && e.my == my) {
+                self.draw_item(sc, &SpriteItem::Entity(e.kind), &tile, &a);
             }
         }
     }
@@ -172,14 +175,15 @@ impl Renderer {
         }
     }
 
-    /// Small ground props on a deterministic 4x4 sub-grid per tile, drawn at
-    /// the closer zooms only: boulders, clumps, reeds, brush from the table.
+    /// Small ground props on a deterministic 4x4 sub-grid per tile, drawn
+    /// from each prop's `min_zoom`: boulders, clumps, reeds, brush from the
+    /// table, with the art tier picked by zoom.
     pub(crate) fn prop_pass(&mut self, sc: &Scene) {
-        let (map, world, cam) = (sc.map, sc.world, sc.cam);
-        if cam.hw < 6 {
+        let (assets, map, world, cam) = (sc.assets, sc.map, sc.world, sc.cam);
+        let props = &assets.props;
+        if props.iter().all(|p| (cam.zoom as u8) < p.min_zoom) {
             return;
         }
-        let large = cam.hw >= 12;
         let (fx, fy) = cam.forward();
         let (x0, y0, x1, y1) = self.visible_bounds(cam);
         let mut items: Vec<(f32, f32, f32, i32, usize)> = Vec::new();
@@ -189,13 +193,13 @@ impl Renderer {
                 if tile.tree.is_some() || tile.building.is_some() || tile.terrain == Terrain::Water {
                     continue;
                 }
-                let cover = tile.biome().cover;
+                let cover = tile.biome(assets).cover;
                 for sub in 0..16 {
                     let hv = hash(mx as i64 * 4 + sub % 4, my as i64 * 4 + sub / 4, (tile.seed as u64) ^ 0x9A0B);
                     let roll = (hv % 10000) as f32 / 10000.0;
                     let mut acc = 0.0;
-                    for (pi, p) in PROPS.iter().enumerate() {
-                        if !p.terrain.contains(&tile.terrain) || (p.near_water && !tile.near_water) || (!p.cover.is_empty() && !p.cover.contains(&cover)) {
+                    for (pi, p) in props.iter().enumerate() {
+                        if (cam.zoom as u8) < p.min_zoom || !p.terrain.contains(&tile.terrain) || (p.near_water && !tile.near_water) || (!p.cover.is_empty() && !p.cover.contains(&cover)) {
                             continue;
                         }
                         acc += p.density;
@@ -212,21 +216,20 @@ impl Renderer {
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (depth, x, y, z, pi) in items {
-            let p = &PROPS[pi];
-            let rows = if large { p.large } else { p.small };
+            let p = &props[pi];
+            let Some(sprite) = assets.art.for_zoom(&p.art, cam.zoom) else { continue };
             let (sx, sy) = cam.project(x, y, z as f32);
             let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
-            let n = rows.len() as i32;
+            let n = sprite.rows.len() as i32;
             let temp = map.get(x.floor() as i32, y.floor() as i32).map(|t| t.temp as f32).unwrap_or(10.0);
             let snow = world.snow_at(temp);
-            for (r, row) in rows.iter().enumerate() {
+            for (r, row) in sprite.rows.iter().enumerate() {
                 let yy = sy - (n - 1 - r as i32);
-                let width = row.chars().count() as i32;
                 for (c, ch) in row.chars().enumerate() {
                     if ch == ' ' {
                         continue;
                     }
-                    let xx = sx + c as i32 - width / 2;
+                    let xx = sx + c as i32 - sprite.center;
                     if let Some(cell) = self.cell(xx, yy) {
                         if cell.depth > depth {
                             continue;

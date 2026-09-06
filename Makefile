@@ -1,7 +1,7 @@
 # roguemap task runner. `make help` lists targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help build run term test lint format check clean snap screenshots fonts golden golden-check
+.PHONY: help build run term test test-assets lint format check clean snap screenshots fonts golden golden-check assets-export
 
 BIN      := target/release/roguemap
 SEED     ?= 7
@@ -27,13 +27,16 @@ term: build ## Open a Konsole window with the Unscii font, sized like the screen
 test: ## Run unit tests
 	cargo test --release
 
+test-assets: ## Run the asset loader tests: embedded set, cross-references, round trips
+	cargo test --release assets::
+
 lint: ## Run clippy
 	cargo clippy --release -- -D warnings
 
 format: ## Format sources
 	cargo fmt
 
-check: lint test ## Run all quality gates
+check: lint test test-assets ## Run all quality gates
 
 clean: ## Remove build artefacts and generated screenshots
 	cargo clean
@@ -47,6 +50,9 @@ golden-check: build ## Re-render and compare against .golden byte for byte
 	@fail=0; for f in .golden/*.cells; do n=.golden-new/$$(basename $$f); \
 	  if ! cmp -s $$f $$n; then echo "DIFF $$(basename $$f)"; fail=1; fi; done; \
 	  if [ $$fail = 0 ]; then echo "golden: all frames identical"; else exit 1; fi
+
+assets-export: build ## Write the embedded asset tables to ./assets-export for editing (ROGUEMAP_ASSETS=assets-export to load them)
+	./$(BIN) --export-assets assets-export
 
 fonts: ## Report fonts covering the Symbols for Legacy Computing block
 	@fc-list ':charset=1fb00' family | sort -u

@@ -1,0 +1,23 @@
+[[material]]
+name = "adobe"
+description = "Sun-dried mud brick under a red clay tile roof; the material of dry country."
+wall = [198, 152, 108]
+wall_glyph = [150, 108, 70]
+roof = [156, 92, 60]
+roof_glyph = [200, 130, 90]
+
+[[material]]
+name = "wood"
+description = "Log and plank walls under a dark shingle roof; the material of forested country."
+wall = [112, 76, 46]
+wall_glyph = [160, 118, 76]
+roof = [72, 46, 30]
+roof_glyph = [120, 84, 56]
+
+[[material]]
+name = "stone"
+description = "Grey fieldstone walls under slate; used in the mountains and on bare rock."
+wall = [138, 138, 144]
+wall_glyph = [96, 96, 104]
+roof = [88, 90, 100]
+roof_glyph = [130, 132, 142]

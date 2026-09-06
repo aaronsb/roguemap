@@ -1,17 +1,21 @@
-//! Climate, biomes, tree species, building kinds and materials as data
-//! tables.
+//! Climate, biomes, tree species, building kinds, props and creatures: the
+//! resolved forms of the tables in `assets/` (ADR-001).
 //!
 //! Climate is temperature and precipitation. A simplified Köppen scheme maps
-//! the pair to a biome, and the biome names its ground colour, how many trees
-//! it carries, which species, and what its buildings are made of.
+//! the pair to a code, the biome table names a biome per code, and the
+//! biome names its ground colour, how many trees it carries, which species,
+//! and what its buildings are made of.
+
+use serde::{Deserialize, Serialize};
 
 use crate::canvas::Rgb;
 use crate::map::Terrain;
 use crate::palette::season_blend;
-use crate::world::{LightSpec, WINDOW};
+use crate::properties::{Conditions, Hooks, Identity, Physical};
 
 /// Shape a species is drawn with; the tileset builds sprites per form.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Form {
     Pine,
     Broadleaf,
@@ -23,11 +27,13 @@ pub const FORMS: [Form; 4] = [Form::Pine, Form::Broadleaf, Form::Scrub, Form::Ca
 
 /// Which of a form's sprite variants a species draws. Each form has four
 /// variants per zoom: a smaller pair then a larger pair.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SizeClass {
     /// Always the smaller pair.
     Small,
     /// Either pair, chosen by the tile's variant.
+    #[default]
     Mixed,
     /// Always the larger pair.
     Large,
@@ -44,127 +50,86 @@ impl SizeClass {
     }
 }
 
+/// Ground cover kinds; the tileset carries a glyph triple for each, indexed
+/// by the discriminant.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Cover {
+    Grass = 0,
+    Dry = 1,
+    Moss = 2,
+    Bare = 3,
+}
+
+pub const COVERS: [Cover; 4] = [Cover::Grass, Cover::Dry, Cover::Moss, Cover::Bare];
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Species {
-    pub name: &'static str,
+    pub name: String,
+    pub identity: Identity,
     pub form: Form,
     pub size_class: SizeClass,
     /// Canopy colour by season: spring, summer, autumn, winter.
     pub canopy: [Rgb; 4],
     pub canopy_glyph: [Rgb; 4],
+    /// Canopy volume for ADR-002; none means derived from `size_class`.
+    pub radius: Option<f32>,
+    pub height: Option<f32>,
+    /// Whether it drops leaves in autumn.
+    pub sheds: bool,
+    /// Index into the light table.
+    pub light: Option<usize>,
+    pub hooks: Hooks,
+    pub physical: Physical,
+    pub conditions: Conditions,
 }
 
-const fn evergreen(c: Rgb, g: Rgb) -> ([Rgb; 4], [Rgb; 4]) {
-    ([c, c, c, c], [g, g, g, g])
-}
-
-macro_rules! species {
-    ($name:expr, $form:expr, $size:expr, ev $c:expr, $g:expr) => {{
-        let (canopy, canopy_glyph) = evergreen($c, $g);
-        Species { name: $name, form: $form, size_class: $size, canopy, canopy_glyph }
-    }};
-    ($name:expr, $form:expr, $size:expr, $c:expr, $g:expr) => {
-        Species { name: $name, form: $form, size_class: $size, canopy: $c, canopy_glyph: $g }
-    };
-}
-
-use SizeClass::{Large, Mixed, Small};
-
-pub const SPECIES: &[Species] = &[
-    species!(
-        "oak",
-        Form::Broadleaf,
-        Mixed,
-        [Rgb(72, 142, 60), Rgb(40, 110, 50), Rgb(180, 100, 40), Rgb(105, 82, 64)],
-        [Rgb(130, 200, 100), Rgb(80, 160, 80), Rgb(230, 150, 60), Rgb(140, 118, 96)]
-    ),
-    species!(
-        "birch",
-        Form::Broadleaf,
-        Small,
-        [Rgb(120, 190, 90), Rgb(90, 160, 70), Rgb(220, 180, 60), Rgb(150, 140, 130)],
-        [Rgb(180, 230, 140), Rgb(150, 210, 120), Rgb(250, 220, 110), Rgb(210, 205, 200)]
-    ),
-    species!("pine", Form::Pine, Mixed, ev Rgb(30, 92, 50), Rgb(70, 140, 80)),
-    species!("spruce", Form::Pine, Large, ev Rgb(22, 72, 46), Rgb(56, 118, 74)),
-    species!("juniper", Form::Scrub, Small, ev Rgb(70, 110, 70), Rgb(120, 160, 110)),
-    species!("sagebrush", Form::Scrub, Small, ev Rgb(130, 140, 110), Rgb(180, 190, 150)),
-    species!("saguaro", Form::Cactus, Mixed, ev Rgb(78, 138, 78), Rgb(150, 200, 130)),
-    species!("kapok", Form::Broadleaf, Large, ev Rgb(30, 100, 45), Rgb(70, 150, 80)),
-    species!(
-        "acacia",
-        Form::Broadleaf,
-        Mixed,
-        [Rgb(110, 140, 60), Rgb(100, 130, 55), Rgb(130, 120, 50), Rgb(120, 110, 60)],
-        [Rgb(170, 200, 100), Rgb(160, 190, 90), Rgb(190, 170, 80), Rgb(170, 160, 100)]
-    ),
-];
-
+#[derive(Clone, Debug, PartialEq)]
 pub struct Material {
-    pub name: &'static str,
+    pub name: String,
+    pub identity: Identity,
     pub wall: Rgb,
     pub wall_glyph: Rgb,
     pub roof: Rgb,
     pub roof_glyph: Rgb,
 }
 
-pub const MATERIALS: &[Material] = &[
-    Material { name: "adobe", wall: Rgb(198, 152, 108), wall_glyph: Rgb(150, 108, 70), roof: Rgb(156, 92, 60), roof_glyph: Rgb(200, 130, 90) },
-    Material { name: "wood", wall: Rgb(112, 76, 46), wall_glyph: Rgb(160, 118, 76), roof: Rgb(72, 46, 30), roof_glyph: Rgb(120, 84, 56) },
-    Material { name: "stone", wall: Rgb(138, 138, 144), wall_glyph: Rgb(96, 96, 104), roof: Rgb(88, 90, 100), roof_glyph: Rgb(130, 132, 142) },
-];
-
-pub const ADOBE: usize = 0;
-pub const WOOD: usize = 1;
-pub const STONE: usize = 2;
-
 /// What a building kind is made of.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MaterialRule {
     /// The tile's local material: the biome's, or stone in the highlands.
     Local,
-    /// One material everywhere.
-    #[allow(dead_code)]
+    /// One material everywhere, by index into the material table.
     Fixed(usize),
 }
 
 /// A kind of building: where it is placed, what it is made of and whether
-/// it glows at night.
-pub struct BuildingKind {
-    /// Name, the key the asset pass will load the row by.
-    #[allow(dead_code)]
-    pub name: &'static str,
+/// it glows at night. ADR-002 adds the geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Block {
+    pub name: String,
+    pub identity: Identity,
     /// Settlement field value a tile needs before one may stand on it.
     pub settle_min: f32,
     /// Percentage of qualifying tiles that carry one.
     pub chance: u64,
     /// Terrain kinds it stands on.
-    pub terrain: &'static [Terrain],
+    pub terrain: Vec<Terrain>,
     pub material: MaterialRule,
-    pub light: Option<LightSpec>,
+    /// Index into the light table, pushed per building at night.
+    pub light: Option<usize>,
+    pub hooks: Hooks,
+    pub physical: Physical,
+    pub conditions: Conditions,
 }
 
-pub const HOUSE: usize = 0;
-
-pub const BUILDINGS: &[BuildingKind] = &[BuildingKind {
-    name: "house",
-    settle_min: 0.64,
-    chance: 14,
-    terrain: &[Terrain::Grass, Terrain::Dirt, Terrain::Sand],
-    material: MaterialRule::Local,
-    light: Some(WINDOW),
-}];
-
-/// Ground cover kinds; the tileset carries a glyph triple for each.
-pub const COVER_GRASS: usize = 0;
-pub const COVER_DRY: usize = 1;
-pub const COVER_MOSS: usize = 2;
-pub const COVER_BARE: usize = 3;
-
+#[derive(Clone, Debug, PartialEq)]
 pub struct Biome {
-    pub name: &'static str,
-    pub koppen: &'static str,
+    pub name: String,
+    pub identity: Identity,
+    pub koppen: String,
     /// Ground cover kind drawn over the ground colour.
-    pub cover: usize,
+    pub cover: Cover,
     /// Summer ground colour and glyph colour; seasons modulate them.
     pub ground: Rgb,
     pub ground_glyph: Rgb,
@@ -174,79 +139,90 @@ pub struct Biome {
     pub grass: u8,
     /// Fraction of eligible tiles carrying a tree in the densest patches.
     pub tree_density: f32,
-    /// Species indices with relative weights.
-    pub species: &'static [(usize, u8)],
+    /// Species indices with relative weights, in file order.
+    pub species: Vec<(usize, u8)>,
+    /// Index into the material table.
     pub material: usize,
 }
 
-pub const BIOMES: &[Biome] = &[
-    Biome { name: "rainforest", cover: COVER_GRASS, koppen: "Af", ground: Rgb(50, 122, 52), ground_glyph: Rgb(110, 190, 100), seasonal: false, grass: 3, tree_density: 0.9, species: &[(7, 6), (0, 2)], material: WOOD },
-    Biome { name: "savanna", cover: COVER_DRY, koppen: "Aw", ground: Rgb(162, 150, 72), ground_glyph: Rgb(210, 195, 110), seasonal: false, grass: 2, tree_density: 0.15, species: &[(8, 5), (4, 1)], material: ADOBE },
-    Biome { name: "desert", cover: COVER_BARE, koppen: "BW", ground: Rgb(206, 176, 122), ground_glyph: Rgb(170, 140, 90), seasonal: false, grass: 0, tree_density: 0.05, species: &[(6, 5), (5, 1)], material: ADOBE },
-    Biome { name: "steppe", cover: COVER_DRY, koppen: "BS", ground: Rgb(172, 160, 92), ground_glyph: Rgb(210, 200, 130), seasonal: true, grass: 1, tree_density: 0.08, species: &[(5, 4), (4, 2)], material: ADOBE },
-    Biome { name: "mediterranean", cover: COVER_DRY, koppen: "Cs", ground: Rgb(140, 150, 72), ground_glyph: Rgb(190, 200, 110), seasonal: true, grass: 2, tree_density: 0.35, species: &[(4, 4), (0, 2)], material: STONE },
-    Biome { name: "temperate forest", cover: COVER_GRASS, koppen: "Cf", ground: Rgb(86, 150, 60), ground_glyph: Rgb(150, 210, 100), seasonal: true, grass: 3, tree_density: 0.6, species: &[(0, 5), (1, 3), (2, 1)], material: WOOD },
-    Biome { name: "boreal forest", cover: COVER_MOSS, koppen: "Df", ground: Rgb(70, 112, 62), ground_glyph: Rgb(120, 170, 100), seasonal: true, grass: 1, tree_density: 0.7, species: &[(3, 5), (2, 3), (1, 1)], material: WOOD },
-    Biome { name: "tundra", cover: COVER_MOSS, koppen: "ET", ground: Rgb(122, 132, 102), ground_glyph: Rgb(170, 180, 140), seasonal: true, grass: 1, tree_density: 0.05, species: &[(4, 3), (5, 1)], material: STONE },
-    Biome { name: "ice cap", cover: COVER_BARE, koppen: "EF", ground: Rgb(226, 232, 240), ground_glyph: Rgb(255, 255, 255), seasonal: false, grass: 0, tree_density: 0.0, species: &[], material: STONE },
-];
-
-/// Where a prop may stand.
+/// A small ground prop and where it may stand.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Prop {
-    /// Name, the key the asset pass will load the row by.
-    #[allow(dead_code)]
-    pub name: &'static str,
-    /// Rows for the mid zooms and for the closest zooms.
-    pub small: &'static [&'static str],
-    pub large: &'static [&'static str],
+    pub name: String,
+    pub identity: Identity,
+    /// Art name; the tier is picked by zoom.
+    pub art: String,
+    /// Background colour; black draws the glyph over the ground.
     pub color: Rgb,
     pub glyph: Rgb,
     /// Chance per 4x4 sub-cell of a qualifying tile.
     pub density: f32,
-    /// Terrain kinds the prop stands on.
-    pub terrain: &'static [Terrain],
+    pub terrain: Vec<Terrain>,
     /// Ground cover kinds it needs, empty for any.
-    pub cover: &'static [usize],
+    pub cover: Vec<Cover>,
     /// Whether the tile must touch water.
     pub near_water: bool,
+    /// Smallest zoom it is drawn at.
+    pub min_zoom: u8,
+    pub light: Option<usize>,
+    pub hooks: Hooks,
+    pub physical: Physical,
+    pub conditions: Conditions,
 }
 
-use Terrain as T;
+/// A creature kind; the player is the first row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Creature {
+    pub name: String,
+    pub identity: Identity,
+    pub art: String,
+    pub color: Rgb,
+    pub glyph: Rgb,
+    /// Terrain it may walk on.
+    pub can_enter: Vec<Terrain>,
+    /// Tiles per second.
+    pub speed: f32,
+    pub diet: Vec<String>,
+    pub behaviour: String,
+    /// Perception range in tiles.
+    pub sight: f32,
+    /// Index into the block table: where it returns at night.
+    pub home: Option<usize>,
+    pub spacing: f32,
+    pub light: Option<usize>,
+    pub hooks: Hooks,
+    pub conditions: Conditions,
+}
 
-pub const PROPS: &[Prop] = &[
-    Prop { name: "boulder", small: &["o"], large: &[" ▄▄ ", "████"], color: Rgb(118, 118, 124), glyph: Rgb(150, 150, 158), density: 0.05, terrain: &[T::Rock, T::Dirt, T::Snow], cover: &[], near_water: false },
-    Prop { name: "stone", small: &["."], large: &["▄"], color: Rgb(128, 124, 116), glyph: Rgb(160, 156, 148), density: 0.06, terrain: &[T::Rock, T::Dirt, T::Grass], cover: &[COVER_MOSS, COVER_DRY], near_water: false },
-    Prop { name: "grass clump", small: &["\\|/"], large: &[" \\|/ ", "\\|||/"], color: Rgb(0, 0, 0), glyph: Rgb(150, 205, 95), density: 0.09, terrain: &[T::Grass], cover: &[COVER_GRASS], near_water: false },
-    Prop { name: "reeds", small: &["|"], large: &["|||", "|||"], color: Rgb(0, 0, 0), glyph: Rgb(120, 140, 70), density: 0.14, terrain: &[T::Sand, T::Grass], cover: &[], near_water: true },
-    Prop { name: "sagebrush", small: &[";"], large: &[";;;", ";;;"], color: Rgb(0, 0, 0), glyph: Rgb(150, 160, 120), density: 0.07, terrain: &[T::Grass, T::Dirt, T::Sand], cover: &[COVER_DRY], near_water: false },
-    Prop { name: "moss", small: &["\""], large: &["\"\"\""], color: Rgb(0, 0, 0), glyph: Rgb(120, 170, 100), density: 0.08, terrain: &[T::Grass, T::Rock], cover: &[COVER_MOSS], near_water: false },
-];
+/// The Köppen codes `classify` emits; the biome table must name each.
+pub const KOPPEN_CODES: [&str; 9] = ["Af", "Aw", "BW", "BS", "Cs", "Cf", "Df", "ET", "EF"];
 
 /// Simplified Köppen classification from annual mean temperature in degrees
-/// Celsius and precipitation on a 0..100 scale.
-pub fn classify(temp: f32, precip: f32) -> usize {
+/// Celsius and precipitation on a 0..100 scale, as the code the biome
+/// table is keyed by.
+pub fn classify(temp: f32, precip: f32) -> &'static str {
     if temp <= -16.0 {
-        8
+        "EF"
     } else if temp <= -6.0 {
-        7
+        "ET"
     } else if precip < 22.0 {
-        2
+        "BW"
     } else if precip < 42.0 {
-        3
+        "BS"
     } else if temp >= 18.0 {
         if precip >= 68.0 {
-            0
+            "Af"
         } else {
-            1
+            "Aw"
         }
     } else if temp >= 3.0 {
         if precip < 58.0 {
-            4
+            "Cs"
         } else {
-            5
+            "Cf"
         }
     } else {
-        6
+        "Df"
     }
 }
 
@@ -298,30 +274,20 @@ mod tests {
 
     #[test]
     fn classify_covers_the_table() {
-        assert_eq!(BIOMES[classify(25.0, 80.0)].koppen, "Af");
-        assert_eq!(BIOMES[classify(25.0, 50.0)].koppen, "Aw");
-        assert_eq!(BIOMES[classify(20.0, 10.0)].koppen, "BW");
-        assert_eq!(BIOMES[classify(10.0, 30.0)].koppen, "BS");
-        assert_eq!(BIOMES[classify(12.0, 50.0)].koppen, "Cs");
-        assert_eq!(BIOMES[classify(8.0, 70.0)].koppen, "Cf");
-        assert_eq!(BIOMES[classify(-2.0, 70.0)].koppen, "Df");
-        assert_eq!(BIOMES[classify(-10.0, 70.0)].koppen, "ET");
-        assert_eq!(BIOMES[classify(-20.0, 70.0)].koppen, "EF");
-    }
-
-    #[test]
-    fn species_and_materials_resolve() {
-        for b in BIOMES {
-            assert!(b.material < MATERIALS.len(), "{}", b.name);
-            for &(sp, w) in b.species {
-                assert!(sp < SPECIES.len() && w > 0, "{}", b.name);
-            }
-        }
-        for k in BUILDINGS {
-            if let MaterialRule::Fixed(m) = k.material {
-                assert!(m < MATERIALS.len(), "{}", k.name);
-            }
-            assert!(!k.terrain.is_empty(), "{}", k.name);
+        assert_eq!(classify(25.0, 80.0), "Af");
+        assert_eq!(classify(25.0, 50.0), "Aw");
+        assert_eq!(classify(20.0, 10.0), "BW");
+        assert_eq!(classify(10.0, 30.0), "BS");
+        assert_eq!(classify(12.0, 50.0), "Cs");
+        assert_eq!(classify(8.0, 70.0), "Cf");
+        assert_eq!(classify(-2.0, 70.0), "Df");
+        assert_eq!(classify(-10.0, 70.0), "ET");
+        assert_eq!(classify(-20.0, 70.0), "EF");
+        for code in KOPPEN_CODES {
+            let found = [(25.0, 80.0), (25.0, 50.0), (20.0, 10.0), (10.0, 30.0), (12.0, 50.0), (8.0, 70.0), (-2.0, 70.0), (-10.0, 70.0), (-20.0, 70.0)]
+                .iter()
+                .any(|&(t, p)| classify(t, p) == code);
+            assert!(found, "{code}");
         }
     }
 

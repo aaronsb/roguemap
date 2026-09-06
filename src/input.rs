@@ -3,8 +3,6 @@
 
 use crossterm::event::KeyCode;
 
-use crate::settings::{CLOCK, GLYPHS, HUD, VIEW, WEATHER};
-
 /// What a key does. Scene actions come first, then the settings popover's,
 /// then the world map's.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -20,8 +18,9 @@ pub enum Action {
     RotateQuarter(i32),
     RotateDegrees(f32),
     Zoom(i32),
-    /// Step a settings row forward.
-    Cycle(usize),
+    /// Step a settings row forward, by key. `settings.toml` carries the
+    /// same shortcut per row; a test keeps the two in step.
+    Cycle(&'static str),
     StepSeason(f32),
     StepHour(f32),
     Campfire,
@@ -72,15 +71,15 @@ pub const SCENE: &[Binding] = &[
         help: "rotate",
     },
     Binding { keys: &[(Char('z'), Zoom(1)), (Char('Z'), Zoom(-1))], label: "z/Z", help: "zoom" },
-    Binding { keys: &[(Char('v'), Cycle(VIEW))], label: "v", help: "fill" },
-    Binding { keys: &[(Char('g'), Cycle(GLYPHS))], label: "g", help: "glyphs" },
+    Binding { keys: &[(Char('v'), Cycle("view"))], label: "v", help: "fill" },
+    Binding { keys: &[(Char('g'), Cycle("glyphs"))], label: "g", help: "glyphs" },
     Binding { keys: &[(Char('['), StepSeason(-0.25)), (Char(']'), StepSeason(0.25))], label: "[ ]", help: "season" },
     Binding { keys: &[(Char(','), StepHour(-1.0)), (Char('.'), StepHour(1.0))], label: ", .", help: "time" },
-    Binding { keys: &[(Char('p'), Cycle(CLOCK))], label: "p", help: "pause" },
-    Binding { keys: &[(Char('W'), Cycle(WEATHER))], label: "W", help: "weather" },
+    Binding { keys: &[(Char('p'), Cycle("clock"))], label: "p", help: "pause" },
+    Binding { keys: &[(Char('W'), Cycle("weather"))], label: "W", help: "weather" },
     Binding { keys: &[(Char('f'), Campfire)], label: "f", help: "fire" },
     Binding { keys: &[(Char('F'), ClearFires)], label: "F", help: "clear" },
-    Binding { keys: &[(Char('H'), Cycle(HUD))], label: "H", help: "hud" },
+    Binding { keys: &[(Char('H'), Cycle("hud"))], label: "H", help: "hud" },
     Binding { keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
 ];
 

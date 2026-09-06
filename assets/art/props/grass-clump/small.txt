@@ -1,0 +1,2 @@
+# name=grass-clump tier=small center=1 base_rows=0
+\|/

@@ -1,49 +1,33 @@
-//! roguemap: an isometric, height-mapped terrain renderer for the terminal.
-
-mod biome;
-mod camera;
-mod canvas;
-mod input;
-mod lighting;
-mod map;
-mod noise;
-mod overlay;
-mod palette;
-mod raster;
-mod render;
-mod settings;
-mod sprite;
-mod sprites;
-mod terminal;
-mod tileset;
-mod ui;
-mod world;
-mod worldmap;
+//! roguemap: the game binary. Argument parsing, the headless snapshot and
+//! the event loop; everything else lives in the library.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use camera::Camera;
-use canvas::Canvas;
-use input::Action;
-use map::Map;
-use render::{RenderOptions, Renderer, Scene};
-use settings::{Settings, AA, CLOCK, CLOUDS, DAY_LENGTH, GLYPHS, HUD, VIEW, WEATHER, WIND};
-use tileset::Tileset;
-use world::World;
-use worldmap::WorldMap;
+use roguemap::assets::Assets;
+use roguemap::camera::Camera;
+use roguemap::canvas::Canvas;
+use roguemap::input::{self, Action};
+use roguemap::map::Map;
+use roguemap::render::{RenderOptions, Renderer, Scene};
+use roguemap::settings::Settings;
+use roguemap::tileset::Tileset;
+use roguemap::world::World;
+use roguemap::worldmap::WorldMap;
+use roguemap::{terminal, ui, world};
 
 /// Push the settings table into the objects that act on it, and return
 /// what the renderer needs to know.
 fn apply(settings: &Settings, map: &mut Map, world: &mut World) -> RenderOptions {
     map.bounded = !settings.filled();
-    world.auto_time = settings.get(CLOCK) == 0;
-    world.weather_preset = settings.get(WEATHER).checked_sub(1);
-    world.wind_preset = settings.get(WIND).checked_sub(1);
-    world.day_secs = world::DAY_LENGTHS[settings.get(DAY_LENGTH)];
-    RenderOptions { aa: settings.get(AA) == 0, clouds: settings.get(CLOUDS) == 0 }
+    world.auto_time = settings.get("clock") == 0;
+    world.weather_preset = settings.get("weather").checked_sub(1);
+    world.wind_preset = settings.get("wind").checked_sub(1);
+    world.day_secs = world::DAY_LENGTHS[settings.get("day_length")];
+    RenderOptions { aa: settings.get("antialias") == 0, clouds: settings.get("clouds") == 0 }
 }
 
 /// Whether the main loop goes on after a key.
@@ -60,17 +44,19 @@ struct App {
     settings: Settings,
     wmap: WorldMap,
     renderer: Renderer,
-    tilesets: [Tileset; 2],
+    /// One per value of the glyphs setting.
+    tilesets: Vec<Tileset>,
     /// Screen size in cells.
     sw: i32,
     sh: i32,
 }
 
 impl App {
-    fn new(seed: u64, size: usize, sw: i32, sh: i32) -> App {
-        let mut map = Map::new(size, size, seed);
+    fn new(assets: Rc<Assets>, seed: u64, size: usize, sw: i32, sh: i32) -> App {
+        let tilesets = Tileset::all(&assets);
+        let mut map = Map::new(size, size, seed, assets.clone());
         let mut world = World::new(seed);
-        let settings = Settings::new();
+        let settings = Settings::new(&assets);
         apply(&settings, &mut map, &mut world);
         let mut cam = Camera::new();
         cam.set_zoom(Camera::fitting_zoom(&map, sw, sh), sw, sh);
@@ -83,7 +69,7 @@ impl App {
             settings,
             wmap: WorldMap::new(),
             renderer: Renderer::new(sw, sh),
-            tilesets: [Tileset::petscii(), Tileset::ascii()],
+            tilesets,
             sw,
             sh,
         }
@@ -98,14 +84,14 @@ impl App {
     /// Draw the current mode into `cv` at animation time `t`.
     fn frame(&mut self, cv: &mut Canvas, t: f32) {
         let opts = apply(&self.settings, &mut self.map, &mut self.world);
-        let ts = &self.tilesets[self.settings.get(GLYPHS)];
+        let ts = &self.tilesets[self.settings.get("glyphs")];
         if self.wmap.open {
             let player = self.world.player().map(|e| (e.mx, e.my));
             self.wmap.draw(cv, &self.map, &self.world, player);
             return;
         }
         self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t), &opts);
-        if self.settings.get(HUD) == 0 {
+        if self.settings.get("hud") == 0 {
             ui::hud(cv, &self.map, ts, &self.world, &self.cam, self.world.lights.len() + self.renderer.frame_light_count());
         }
         if self.settings.open {
@@ -151,7 +137,7 @@ impl App {
             Action::RotateQuarter(steps) => self.cam.rotate(steps, sw, sh),
             Action::RotateDegrees(deg) => self.cam.rotate_by(deg.to_radians(), sw, sh),
             Action::Zoom(steps) => self.cam.zoom_by(steps, sw, sh),
-            Action::Cycle(item) => self.settings.cycle(item, 1),
+            Action::Cycle(key) => self.settings.cycle(key, 1),
             Action::StepSeason(q) => self.world.step_season(q),
             Action::StepHour(h) => self.world.step_hour(h),
             Action::Campfire => self.light_campfire(),
@@ -165,7 +151,7 @@ impl App {
         match a {
             Action::Close => self.settings.open = false,
             Action::CursorMove(dir) => self.settings.move_cursor(dir),
-            Action::Adjust(dir) => self.settings.cycle(self.settings.cursor, dir),
+            Action::Adjust(dir) => self.settings.cycle_row(self.settings.cursor, dir),
             _ => {}
         }
     }
@@ -240,7 +226,7 @@ impl SnapArgs {
 /// rot, deg, zoom, size, fill (1 for an unbounded world), cx, cy (tile to
 /// centre on), popover (1), fire (1 to place a campfire at centre), player
 /// (1), hud (0|1), worldmap (1) with scale, frames (N, to time rendering).
-fn snapshot(args: &[String]) -> std::io::Result<()> {
+fn snapshot(assets: Rc<Assets>, args: &[String]) -> std::io::Result<()> {
     let w: u16 = args[0].parse().unwrap_or(200);
     let h: u16 = args[1].parse().unwrap_or(60);
     let out = &args[2];
@@ -248,17 +234,18 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
     let (sw, sh) = (w as i32, h as i32);
     let seed = a.num("seed", 7.0) as u64;
     let size = a.num("size", 32.0) as usize;
-    let mut map = Map::new(size, size, seed);
+    let tilesets = Tileset::all(&assets);
+    let mut map = Map::new(size, size, seed, assets.clone());
     let mut world = World::new(seed);
 
-    let mut settings = Settings::new();
-    settings.set(VIEW, (a.num("fill", 0.0) >= 0.5) as usize);
-    settings.set(HUD, (a.num("hud", 1.0) <= 0.5) as usize);
-    settings.set(GLYPHS, (a.text("glyphs") == Some("ascii")) as usize);
+    let mut settings = Settings::new(&assets);
+    settings.set("view", (a.num("fill", 0.0) >= 0.5) as usize);
+    settings.set("hud", (a.num("hud", 1.0) <= 0.5) as usize);
+    let glyphs = a.text("glyphs").unwrap_or("petscii");
+    settings.set("glyphs", settings.items[settings.find("glyphs").unwrap()].values.iter().position(|v| v == glyphs).unwrap_or(0));
     settings.open = a.flag("popover");
     let opts = apply(&settings, &mut map, &mut world);
-    let tilesets = [Tileset::petscii(), Tileset::ascii()];
-    let ts = &tilesets[settings.get(GLYPHS)];
+    let ts = &tilesets[settings.get("glyphs")];
 
     let mut cv = Canvas::new(w, h);
     let mut renderer = Renderer::new(sw, sh);
@@ -313,7 +300,7 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
         wm.draw(&mut cv, &map, &world, world.player().map(|e| (e.mx, e.my)));
     } else {
         renderer.draw(&mut cv, &Scene::new(&map, ts, &world, &cam, t), &opts);
-        if settings.get(HUD) == 0 {
+        if settings.get("hud") == 0 {
             ui::hud(&mut cv, &map, ts, &world, &cam, world.lights.len() + renderer.frame_light_count());
         }
         if settings.open {
@@ -325,14 +312,33 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
 
 fn main() -> std::io::Result<()> {
     let argv: Vec<String> = std::env::args().collect();
+    // Load and validate the tables before touching the terminal, so a bad
+    // file is reported on a plain console.
+    let assets = match Assets::load() {
+        Ok(a) => Rc::new(a),
+        Err(e) => {
+            eprintln!("roguemap: cannot load assets: {e}");
+            std::process::exit(1);
+        }
+    };
     if argv.get(1).map(|s| s.as_str()) == Some("--snap") {
-        return snapshot(&argv[2..]);
+        return snapshot(assets, &argv[2..]);
+    }
+    // `--export-assets DIR` writes the loaded set out for editing.
+    if argv.get(1).map(|s| s.as_str()) == Some("--export-assets") {
+        let Some(dir) = argv.get(2) else {
+            eprintln!("usage: roguemap --export-assets DIR");
+            std::process::exit(2);
+        };
+        assets.export(std::path::Path::new(dir))?;
+        eprintln!("wrote {} files to {dir}", assets.files().len());
+        return Ok(());
     }
     let seed: u64 = argv.get(1).and_then(|s| s.parse().ok()).unwrap_or(7);
     let size: usize = argv.get(2).and_then(|s| s.parse().ok()).unwrap_or(32);
 
     let mut term = terminal::Terminal::new()?;
-    let mut app = App::new(seed, size, term.width(), term.height());
+    let mut app = App::new(assets, seed, size, term.width(), term.height());
 
     let start = Instant::now();
     let frame = Duration::from_millis(40);

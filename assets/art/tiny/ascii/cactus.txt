@@ -1,0 +1,2 @@
+# name=ascii/cactus tier=tiny center=0 base_rows=1
+Y

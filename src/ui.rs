@@ -6,7 +6,7 @@ use crate::canvas::{Canvas, Rgb};
 use crate::input::{self, SCENE, SETTINGS};
 use crate::map::Map;
 use crate::palette::{season_blend, SEASON_NAMES};
-use crate::settings::{Settings, ITEMS};
+use crate::settings::Settings;
 use crate::tileset::Tileset;
 use crate::world::World;
 
@@ -44,7 +44,7 @@ pub fn hud(cv: &mut Canvas, map: &Map, ts: &Tileset, world: &World, cam: &Camera
         .player()
         .and_then(|e| map.get(e.mx, e.my))
         .map(|t| {
-            let b = t.biome();
+            let b = t.biome(&map.assets);
             format!("{} ({}) {}C z{}", b.name, b.koppen, t.temp, t.z)
         })
         .unwrap_or_default();
@@ -70,11 +70,12 @@ pub fn hud(cv: &mut Canvas, map: &Map, ts: &Tileset, world: &World, cam: &Camera
 
 /// Modal settings window, one row per table item.
 pub fn popover(cv: &mut Canvas, settings: &Settings) {
-    let name_w = ITEMS.iter().map(|i| i.name.len()).max().unwrap_or(8);
-    let val_w = ITEMS.iter().flat_map(|i| i.values.iter().map(|v| v.len())).max().unwrap_or(8);
+    let items = &settings.items;
+    let name_w = items.iter().map(|i| i.label.len()).max().unwrap_or(8);
+    let val_w = items.iter().flat_map(|i| i.values.iter().map(|v| v.len())).max().unwrap_or(8);
     let hint = input::help_line(SETTINGS, "   ");
     let inner = (name_w + val_w + 11).max(hint.len());
-    let rows = ITEMS.len() as i32 + 4;
+    let rows = items.len() as i32 + 4;
     let x0 = (cv.w - inner as i32 - 2) / 2;
     let y0 = (cv.h - rows) / 2;
     let (fg, bg, dim) = (CHROME.panel_text, CHROME.panel, CHROME.panel_dim);
@@ -82,11 +83,11 @@ pub fn popover(cv: &mut Canvas, settings: &Settings) {
     cv.text(x0, y0, &format!("┌{}┐", "─".repeat(inner)), dim, bg);
     cv.text(x0 + 2, y0, " settings ", fg, bg);
     cv.text(x0, y0 + 1, &row(""), dim, bg);
-    for (i, item) in ITEMS.iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
         let selected = i == settings.cursor;
         let body = format!(
             "  {:<nw$}   {} {:^vw$} {}",
-            item.name,
+            item.label,
             if selected { '<' } else { ' ' },
             settings.label(i),
             if selected { '>' } else { ' ' },

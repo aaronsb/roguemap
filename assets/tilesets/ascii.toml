@@ -1,0 +1,48 @@
+name = "ascii"
+description = "Plain printable ASCII for any terminal; no antialiasing."
+antialias = false
+
+[roles]
+stubble = [";", ".", "'"]
+cattail = [";", "i"]
+water = ["~", "-", "=", " "]
+wall = [" ", " "]
+star = [".", "*"]
+snowflake = ["*", "."]
+flame = ["^", "*", "^"]
+rain = "|"
+
+[roles.cover]
+grass = ['\', "|", "/"]
+dry = [",", "'", ";"]
+moss = ['"', "`", '"']
+bare = [" ", " ", " "]
+
+[roles.texture]
+sand = [".", ":"]
+dirt = [".", ","]
+rock = ["^", "%"]
+snow = ["*", "+"]
+
+[art]
+pine_l = "/"
+pine_r = '\'
+pine_fill = ["^", "^"]
+round_top = [".", "-", "."]
+round_mid = ["(", "@", ")"]
+round_bot = ["`", "-", "'"]
+trunk = ["|", "||", "|##|"]
+cactus = "|"
+roof_l = "/"
+roof_r = '\'
+roof_fill = "#"
+wall_fill = " "
+door = "|"
+window = "o"
+tiny_house = "ascii/house"
+
+[art.tiny]
+pine = "ascii/pine"
+broadleaf = "ascii/broadleaf"
+scrub = "ascii/scrub"
+cactus = "ascii/cactus"

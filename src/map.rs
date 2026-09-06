@@ -4,8 +4,12 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 
-use crate::biome::{self, Biome, BuildingKind, Material, Species, BIOMES, BUILDINGS, HOUSE, MATERIALS, SPECIES, STONE};
+use serde::{Deserialize, Serialize};
+
+use crate::assets::Assets;
+use crate::biome::{self, Biome, Block, Material, Species};
 use crate::noise::{fbm, hash};
 
 /// Tiles below this height are water; the water surface is drawn at this level.
@@ -19,7 +23,8 @@ const CHUNK: i32 = 32;
 /// Water bodies larger than this are treated as open water.
 const BODY_CAP: usize = 200;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Terrain {
     Water,
     Sand,
@@ -53,23 +58,23 @@ pub struct Flora {
 }
 
 impl Flora {
-    pub fn species(&self) -> &'static Species {
-        &SPECIES[self.species as usize % SPECIES.len()]
+    pub fn species<'a>(&self, assets: &'a Assets) -> &'a Species {
+        &assets.species[self.species as usize % assets.species.len()]
     }
 }
 
 /// A building standing on a tile.
 #[derive(Clone, Copy, Debug)]
 pub struct Structure {
-    /// Index into the building table.
+    /// Index into the block table.
     pub kind: u8,
     /// Sprite variant, 0..=3.
     pub variant: u8,
 }
 
 impl Structure {
-    pub fn kind(&self) -> &'static BuildingKind {
-        &BUILDINGS[self.kind as usize % BUILDINGS.len()]
+    pub fn kind<'a>(&self, assets: &'a Assets) -> &'a Block {
+        &assets.blocks[self.kind as usize % assets.blocks.len()]
     }
 }
 
@@ -103,19 +108,17 @@ impl Tile {
         self.z.max(SEA)
     }
 
-    pub fn biome(&self) -> &'static Biome {
-        &BIOMES[self.biome as usize % BIOMES.len()]
+    pub fn biome<'a>(&self, assets: &'a Assets) -> &'a Biome {
+        &assets.biomes[self.biome as usize % assets.biomes.len()]
     }
 
-    /// The species of the tree here, if any. Read by the asset pass's
-    /// flora tables.
-    #[allow(dead_code)]
-    pub fn species(&self) -> Option<&'static Species> {
-        self.tree.map(|f| f.species())
+    /// The species of the tree here, if any.
+    pub fn species<'a>(&self, assets: &'a Assets) -> Option<&'a Species> {
+        self.tree.map(|f| f.species(assets))
     }
 
-    pub fn material(&self) -> &'static Material {
-        &MATERIALS[self.material as usize % MATERIALS.len()]
+    pub fn material<'a>(&self, assets: &'a Assets) -> &'a Material {
+        &assets.materials[self.material as usize % assets.materials.len()]
     }
 }
 
@@ -136,6 +139,10 @@ pub struct Map {
     pub seed: u64,
     /// When true, only tiles inside `w` x `h` exist.
     pub bounded: bool,
+    /// The tables tiles index into.
+    pub assets: Rc<Assets>,
+    /// Material index of stone, for the highlands.
+    stone: usize,
     chunks: RefCell<HashMap<(i32, i32), Chunk>>,
 }
 
@@ -164,17 +171,18 @@ fn terrain_for(z: i32, temp: f32, near_water: bool, patch: f32) -> Terrain {
 
 /// Local building material: stone on rock and near the alpine zone,
 /// otherwise the biome's.
-fn material_for(terrain: Terrain, z: i32, biome: &Biome) -> usize {
+fn material_for(terrain: Terrain, z: i32, biome: &Biome, stone: usize) -> usize {
     if terrain == Terrain::Rock || z >= ALPINE_Z - 3 {
-        STONE
+        stone
     } else {
         biome.material
     }
 }
 
 impl Map {
-    pub fn new(w: usize, h: usize, seed: u64) -> Map {
-        Map { w, h, seed, bounded: true, chunks: RefCell::new(HashMap::new()) }
+    pub fn new(w: usize, h: usize, seed: u64, assets: Rc<Assets>) -> Map {
+        let stone = assets.material_index("stone").expect("the loader requires a stone material");
+        Map { w, h, seed, bounded: true, assets, stone, chunks: RefCell::new(HashMap::new()) }
     }
 
     /// Whether a position exists on this map.
@@ -333,19 +341,21 @@ impl Map {
         let z = hf.floor() as i32;
         let temp = self.temperature(x, y, z);
         let precip = self.precipitation(x, y);
-        Climate { hf, z, temp, precip, biome: biome::classify(temp, precip) }
+        let biome = self.assets.koppen[biome::classify(temp, precip)];
+        Climate { hf, z, temp, precip, biome }
     }
 
-    /// Whether a building stands at a tile, from the settlement field and
-    /// the kind's placement rule.
+    /// Whether a building stands at a tile: the first block kind, in table
+    /// order, whose placement rule passes the settlement field.
     fn place_building(&self, x: i32, y: i32, hv: u64, terrain: Terrain, z: i32) -> Option<Structure> {
-        let kind = &BUILDINGS[HOUSE];
         let settle = fbm(x as f32 * 0.05 + 7.0, y as f32 * 0.05, self.seed ^ 0xB1, 2);
-        if kind.terrain.contains(&terrain) && z > SEA && settle > kind.settle_min && (hv >> 40) % 100 < kind.chance {
-            Some(Structure { kind: HOUSE as u8, variant: ((hv >> 48) % 4) as u8 })
-        } else {
-            None
-        }
+        self.assets.blocks.iter().enumerate().find_map(|(i, kind)| {
+            if kind.terrain.contains(&terrain) && z > SEA && settle > kind.settle_min && (hv >> 40) % 100 < kind.chance {
+                Some(Structure { kind: i as u8, variant: ((hv >> 48) % 4) as u8 })
+            } else {
+                None
+            }
+        })
     }
 
     /// Classify one tile from the height field and climate around it.
@@ -353,7 +363,7 @@ impl Map {
         let climate = self.climate(x, y);
         let z = climate.z;
         let temp = climate.temp;
-        let biome = &BIOMES[climate.biome];
+        let biome = &self.assets.biomes[climate.biome];
         let near_water = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.is_water(x + dx, y + dy));
         let patch = self.patch(x as f32 + 0.5, y as f32 + 0.5);
         let terrain = terrain_for(z, temp, near_water, patch);
@@ -362,7 +372,7 @@ impl Map {
         let forest = fbm(x as f32 * 0.08, y as f32 * 0.08, self.seed ^ 0xF0, 3);
         let density = biome.tree_density * crate::noise::smoothstep(0.3, 0.7, forest);
         let tree = if terrain == Terrain::Grass && z > SEA && !biome.species.is_empty() && (hv % 1000) as f32 / 1000.0 < density {
-            Some(Flora { species: biome::weighted_pick(biome.species, hv >> 16) as u8, variant: ((hv >> 8) % 4) as u8 })
+            Some(Flora { species: biome::weighted_pick(&biome.species, hv >> 16) as u8, variant: ((hv >> 8) % 4) as u8 })
         } else {
             None
         };
@@ -378,7 +388,7 @@ impl Map {
             body_size: 0,
             biome: climate.biome as u8,
             building,
-            material: material_for(terrain, z, biome) as u8,
+            material: material_for(terrain, z, biome, self.stone) as u8,
             temp: temp.round().clamp(-60.0, 60.0) as i8,
             near_water,
             hf: climate.hf,
@@ -437,11 +447,13 @@ impl Map {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::test_assets;
 
     #[test]
     fn tiles_are_deterministic_and_chunk_independent() {
-        let a = Map::new(32, 32, 7);
-        let mut b = Map::new(32, 32, 7);
+        let assets = test_assets();
+        let a = Map::new(32, 32, 7, assets.clone());
+        let mut b = Map::new(32, 32, 7, assets);
         b.bounded = false;
         for &(x, y) in &[(0, 0), (31, 31), (5, 17), (16, 16)] {
             let ta = a.get(x, y).unwrap();
@@ -456,7 +468,7 @@ mod tests {
 
     #[test]
     fn ceiling_bounds_every_tile() {
-        let mut m = Map::new(8, 8, 3);
+        let mut m = Map::new(8, 8, 3, test_assets());
         m.bounded = false;
         for y in -40..40 {
             for x in -40..40 {
@@ -467,7 +479,7 @@ mod tests {
 
     #[test]
     fn bounds_helpers_follow_bounded() {
-        let mut m = Map::new(8, 8, 3);
+        let mut m = Map::new(8, 8, 3, test_assets());
         assert!(m.contains(0, 0) && m.contains(7, 7));
         assert!(!m.contains(-1, 0) && !m.contains(8, 0));
         assert_eq!(m.clamp(-5, 20), (0, 7));
@@ -478,7 +490,7 @@ mod tests {
 
     #[test]
     fn climate_agrees_with_tiles() {
-        let m = Map::new(32, 32, 7);
+        let m = Map::new(32, 32, 7, test_assets());
         for &(x, y) in &[(0, 0), (31, 31), (5, 17), (16, 16)] {
             let c = m.climate(x, y);
             let t = m.get(x, y).unwrap();
@@ -490,7 +502,7 @@ mod tests {
 
     #[test]
     fn nearest_land_is_never_water() {
-        let m = Map::new(32, 32, 7);
+        let m = Map::new(32, 32, 7, test_assets());
         let (x, y) = m.nearest_land(0, 0);
         assert_ne!(m.get(x, y).unwrap().terrain, Terrain::Water);
     }

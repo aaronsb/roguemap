@@ -1,0 +1,9 @@
+[[creature]]
+name = "player"
+description = "The one you steer."
+category = "person"
+art = "player"
+color = [52, 74, 150]
+glyph = [240, 214, 176]
+can_enter = ["sand", "grass", "dirt", "rock", "snow"]
+speed = 1.0

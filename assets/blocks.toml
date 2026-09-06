@@ -1,0 +1,10 @@
+[[block]]
+name = "house"
+description = "A small dwelling with a gable roof, a door and, when wide enough, windows that glow at night. Built of the local material."
+category = "dwelling"
+settle_min = 0.64
+chance = 14
+terrain = ["grass", "dirt", "sand"]
+material = "by_biome"
+light = "window"
+tags = ["flammable", "wooden"]

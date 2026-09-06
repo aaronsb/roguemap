@@ -1,0 +1,96 @@
+[[season]]
+name = "spring"
+description = "Fresh growth and cool water."
+trunk = [92, 58, 34]
+trunk_glyph = [140, 96, 60]
+sand = [196, 180, 130]
+sand_glyph = [150, 136, 92]
+dirt = [122, 92, 60]
+dirt_glyph = [88, 64, 40]
+rock = [124, 124, 130]
+rock_glyph = [90, 90, 96]
+snow = [228, 232, 240]
+snow_glyph = [255, 255, 255]
+water_shallow = [46, 128, 176]
+water_deep = [16, 48, 104]
+water_glyph = [176, 214, 240]
+
+[[season]]
+name = "summer"
+description = "Full growth; the reference colours of the year."
+trunk = [92, 58, 34]
+trunk_glyph = [140, 96, 60]
+sand = [196, 180, 130]
+sand_glyph = [150, 136, 92]
+dirt = [122, 92, 60]
+dirt_glyph = [88, 64, 40]
+rock = [124, 124, 130]
+rock_glyph = [90, 90, 96]
+snow = [228, 232, 240]
+snow_glyph = [255, 255, 255]
+water_shallow = [40, 132, 170]
+water_deep = [14, 50, 98]
+water_glyph = [176, 214, 240]
+
+[[season]]
+name = "autumn"
+description = "Warm water tones while the leaves turn."
+trunk = [92, 58, 34]
+trunk_glyph = [140, 96, 60]
+sand = [196, 180, 130]
+sand_glyph = [150, 136, 92]
+dirt = [122, 92, 60]
+dirt_glyph = [88, 64, 40]
+rock = [124, 124, 130]
+rock_glyph = [90, 90, 96]
+snow = [228, 232, 240]
+snow_glyph = [255, 255, 255]
+water_shallow = [52, 112, 150]
+water_deep = [18, 44, 90]
+water_glyph = [176, 214, 240]
+
+[[season]]
+name = "winter"
+description = "Snow on every ground surface and pale water."
+trunk = [92, 58, 34]
+trunk_glyph = [140, 96, 60]
+sand = [214, 214, 222]
+sand_glyph = [170, 170, 184]
+dirt = [170, 168, 178]
+dirt_glyph = [120, 118, 130]
+rock = [196, 200, 212]
+rock_glyph = [140, 144, 156]
+snow = [228, 232, 240]
+snow_glyph = [255, 255, 255]
+water_shallow = [120, 168, 200]
+water_deep = [30, 64, 110]
+water_glyph = [210, 230, 245]
+
+[[surface]]
+name = "sand"
+description = "Beaches and river banks at sea level."
+texture_density = 0.14
+relief = true
+
+[[surface]]
+name = "dirt"
+description = "Bare earth in patches through the grass."
+texture_density = 0.22
+relief = true
+
+[[surface]]
+name = "rock"
+description = "Bare rock above the treeline."
+texture_density = 0.24
+relief = true
+
+[[surface]]
+name = "snow"
+description = "Permanent snow in the deep cold; height does not shade it."
+texture_density = 0.18
+relief = false
+
+[density]
+grass_base = 0.04
+grass_per_level = 0.14
+cattail = 0.1

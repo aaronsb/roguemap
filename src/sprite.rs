@@ -1,7 +1,7 @@
 //! Billboard sprites and the procedural shape builders that make them:
-//! conifers, broadleaf canopies, scrub, cacti, houses and the player figure,
-//! each sized for a tile footprint and drawn with a tileset's glyph
-//! vocabulary.
+//! conifers, broadleaf canopies, scrub, cacti and houses, each sized for a
+//! tile footprint and drawn with a tileset's glyph vocabulary. Hand-drawn
+//! sprites (the player, props, the tiny tiers) come from `assets/art`.
 
 use crate::biome::{Form, FORMS};
 use crate::noise::hash;
@@ -10,7 +10,7 @@ use crate::tileset::Art;
 /// A billboard sprite: rows top to bottom, all one width. `center` is the
 /// column index that sits over the tile centre; the last `base_rows` rows
 /// take the base colours (a trunk, or walls under a roof).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Sprite {
     pub rows: Vec<String>,
     pub center: i32,
@@ -28,13 +28,13 @@ fn trunk_height(n: usize) -> usize {
     (n / 4).max(1)
 }
 
-fn trunk_for(art: &Art, n: usize, even: bool) -> &'static str {
+fn trunk_for(art: &Art, n: usize, even: bool) -> &str {
     if n >= 12 {
-        art.trunk[2]
+        &art.trunk[2]
     } else if even || n >= 3 {
-        art.trunk[1]
+        &art.trunk[1]
     } else {
-        art.trunk[0]
+        &art.trunk[0]
     }
 }
 
@@ -101,12 +101,6 @@ fn round_tree(art: &Art, n: usize) -> Sprite {
     assemble(rows, trunk_for(art, n, true), trunk_height(n))
 }
 
-/// A sprite from literal rows, padded to the widest.
-fn tiny(rows: &[&str]) -> Sprite {
-    let width = rows.iter().map(|r| r.chars().count()).max().unwrap_or(1);
-    Sprite { rows: rows.iter().map(|r| pad_center(r, width)).collect(), center: (width / 2) as i32, base_rows: 1 }
-}
-
 /// A saguaro-style cactus `n` rows tall with two arms.
 fn cactus(art: &Art, n: usize, seed: u64) -> Sprite {
     let n = n.max(2);
@@ -147,7 +141,7 @@ fn scrub(art: &Art, n: usize) -> Sprite {
 pub fn trees_for(art: &Art, form: Form, hw: i32) -> Vec<Sprite> {
     let fi = FORMS.iter().position(|&f| f == form).unwrap_or(0);
     if hw <= 2 {
-        let t = tiny(art.tiny[fi]);
+        let t = art.tiny[fi].clone();
         return vec![t.clone(), t.clone(), t.clone(), t];
     }
     let n = hw as usize;
@@ -206,7 +200,7 @@ fn walls(art: &Art, wall_w: usize, wall_h: usize) -> Vec<String> {
 /// the top colours and wall rows the base colours.
 pub fn house(art: &Art, hw: i32, variant: u8) -> Sprite {
     if hw <= 3 {
-        return tiny(&[art.tiny_house]);
+        return art.tiny_house.clone();
     }
     let wide = variant % 2 == 1;
     let wall_w = (if hw <= 6 { 4 } else if hw <= 12 { 8 } else { 14 }) + (if wide { 2 } else { 0 });
@@ -218,25 +212,11 @@ pub fn house(art: &Art, hw: i32, variant: u8) -> Sprite {
     Sprite { rows, center: (width / 2) as i32, base_rows: wall_h }
 }
 
-/// The player figure for a tile of half width `hw`.
-pub fn player_for(hw: i32) -> Sprite {
-    let rows: &[&str] = if hw <= 3 {
-        &["@"]
-    } else if hw <= 6 {
-        &[" O ", "/|\\", "/ \\"]
-    } else if hw <= 12 {
-        &["  _  ", " (o) ", "/|=|\\", " | | ", "_| |_"]
-    } else {
-        &["   ___   ", "  (o o)  ", "   \\_/   ", " __|=|__ ", "/  |=|  \\", "   |=|   ", "   | |   ", "   | |   ", "  _| |_  "]
-    };
-    let width = rows.iter().map(|r| r.chars().count()).max().unwrap_or(1);
-    Sprite { rows: rows.iter().map(|r| r.to_string()).collect(), center: (width / 2) as i32, base_rows: 0 }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tileset::{ASCII_ART, PETSCII_ART, ZOOMS};
+    use crate::assets::test_assets;
+    use crate::tileset::{Tileset, ZOOMS};
 
     fn check(sp: &Sprite, what: &str) {
         assert!(!sp.rows.is_empty(), "{what}: no rows");
@@ -251,7 +231,9 @@ mod tests {
 
     #[test]
     fn tree_sprites_hold_their_invariants() {
-        for art in [&ASCII_ART, &PETSCII_ART] {
+        let assets = test_assets();
+        for ts in Tileset::all(&assets) {
+            let art = &ts.art;
             for &(hw, _) in &ZOOMS {
                 for &form in &FORMS {
                     let set = trees_for(art, form, hw);
@@ -265,14 +247,17 @@ mod tests {
     }
 
     #[test]
-    fn house_and_player_sprites_hold_their_invariants() {
-        for art in [&ASCII_ART, &PETSCII_ART] {
+    fn house_and_art_sprites_hold_their_invariants() {
+        let assets = test_assets();
+        for ts in Tileset::all(&assets) {
             for &(hw, _) in &ZOOMS {
                 for v in 0..4 {
-                    check(&house(art, hw, v), &format!("house hw {hw} v{v}"));
+                    check(&house(&ts.art, hw, v), &format!("{} house hw {hw} v{v}", ts.name));
                 }
-                check(&player_for(hw), &format!("player hw {hw}"));
             }
+        }
+        for e in &assets.art.entries {
+            check(&e.sprite, &e.path);
         }
     }
 }

@@ -1,0 +1,48 @@
+name = "petscii"
+description = "Shapes from the Symbols for Legacy Computing block plus box and block drawing; needs a font covering U+1FB00."
+antialias = true
+
+[roles]
+stubble = [";", ".", "`"]
+cattail = [";", "╿"]
+water = ["🭸", "🭹", "🭺", "🭷"]
+wall = ["▒", "░"]
+star = ["·", "✦"]
+snowflake = ["╳", "·"]
+flame = ["▲", "△", "▲"]
+rain = "🭰"
+
+[roles.cover]
+grass = ["╲", "│", "╱"]
+dry = [",", "'", ";"]
+moss = ["·", "∙", "·"]
+bare = [" ", " ", " "]
+
+[roles.texture]
+sand = ["·", "∙"]
+dirt = ["·", "‥"]
+rock = ["▲", "◆"]
+snow = ["╳", "·"]
+
+[art]
+pine_l = "◢"
+pine_r = "◣"
+pine_fill = ["▓", "▒"]
+round_top = ["▗", "▄", "▖"]
+round_mid = ["▐", "▓", "▌"]
+round_bot = ["▝", "▀", "▘"]
+trunk = ["▌", "▐▌", "▐██▌"]
+cactus = "▌"
+roof_l = "◢"
+roof_r = "◣"
+roof_fill = "▒"
+wall_fill = " "
+door = "▐"
+window = "□"
+tiny_house = "petscii/house"
+
+[art.tiny]
+pine = "petscii/pine"
+broadleaf = "petscii/broadleaf"
+scrub = "petscii/scrub"
+cactus = "petscii/cactus"

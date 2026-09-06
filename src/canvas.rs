@@ -1,8 +1,10 @@
 //! A grid of coloured cells that the renderer draws into and the terminal
 //! diffs against its previous frame.
 
-/// 24-bit colour.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+use serde::{Deserialize, Serialize};
+
+/// 24-bit colour. In the asset files it is a `[r, g, b]` array.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {

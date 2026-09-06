@@ -15,7 +15,8 @@ fn mul(c: Rgb, l: [f32; 3]) -> Rgb {
 }
 
 /// Summed point light at a world position. Height counts half as much as
-/// distance along the ground; flickering lights pulse on their own phase.
+/// distance along the ground; flickering lights pulse on their own phase,
+/// dipping by `flicker_amount` at `flicker_omega` radians per second.
 fn point_light_at(wx: f32, wy: f32, wz: f32, lights: &[&Light], t: f32) -> [f32; 3] {
     let mut pl = [0.0f32; 3];
     for (li, light) in lights.iter().enumerate() {
@@ -26,9 +27,12 @@ fn point_light_at(wx: f32, wy: f32, wz: f32, lights: &[&Light], t: f32) -> [f32;
         if d >= light.radius {
             continue;
         }
-        let mut f = (1.0 - d / light.radius).powi(2) * light.intensity;
-        if light.flicker {
-            f *= 0.78 + 0.22 * (t * 11.0 + li as f32 * 1.7).sin() * (t * 5.3).cos().abs();
+        let k = 1.0 - d / light.radius;
+        let fall = if light.falloff == 2.0 { k * k } else { k.powf(light.falloff) };
+        let mut f = fall * light.intensity;
+        let a = light.flicker_amount;
+        if a > 0.0 {
+            f *= (1.0 - a) + a * (t * light.flicker_omega + li as f32 * 1.7).sin() * (t * 5.3).cos().abs();
         }
         pl = [pl[0] + light.color[0] * f, pl[1] + light.color[1] * f, pl[2] + light.color[2] * f];
     }
@@ -75,7 +79,7 @@ mod tests {
 
     #[test]
     fn point_light_falls_off_to_its_radius() {
-        let l = Light { mx: 0, my: 0, z: 0, color: [1.0, 0.5, 0.0], radius: 4.0, intensity: 1.0, flicker: false };
+        let l = Light { mx: 0, my: 0, z: 0, color: [1.0, 0.5, 0.0], radius: 4.0, intensity: 1.0, falloff: 2.0, flicker_amount: 0.0, flicker_omega: 0.0 };
         let lights = [&l];
         let near = point_light_at(0.0, 0.0, 0.0, &lights, 0.0);
         let mid = point_light_at(2.0, 0.0, 0.0, &lights, 0.0);

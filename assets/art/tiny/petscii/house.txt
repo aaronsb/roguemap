@@ -1,0 +1,2 @@
+# name=petscii/house tier=tiny center=0 base_rows=1
+⌂
