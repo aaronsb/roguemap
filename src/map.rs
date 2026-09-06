@@ -43,7 +43,7 @@ const SEA_UNITS: f32 = 3.0;
 /// Field value where bare rock starts; `ROCK_Z` is its height in metres.
 const ROCK_UNITS: f32 = 10.0;
 /// Degrees the air cools between the shoreline and the top of a range. The
-/// world's 300 m of relief stands in for a continent's, so the lapse rate
+/// world's 120 m of relief stands in for a continent's, so the lapse rate
 /// follows `relief_fraction` rather than a real rate per metre, and the
 /// treeline, the snow line and the biome bands sit where they did.
 const LAPSE: f32 = 26.4;

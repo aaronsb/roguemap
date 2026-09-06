@@ -40,7 +40,10 @@ lint: ## Run clippy
 format: ## Format sources
 	cargo fmt
 
-check: lint test test-assets test-golden ## Run all quality gates
+fmt-check: ## Verify formatting
+	cargo fmt --check
+
+check: fmt-check lint test test-assets test-golden ## Run all quality gates
 
 clean: ## Remove build artefacts and generated screenshots
 	cargo clean
