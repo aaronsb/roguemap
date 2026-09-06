@@ -178,3 +178,14 @@ draws in 9 to 14 ms.
 3. Next: the settlement system paints towns and roads; the editor paints
    by hand through `Map::set_stack`; bridges (`deck`) and props casting
    short shadows at the closest zooms; the scale pass (ADR-004).
+
+## Volumes are stand-ins
+
+The canopy shapes (cone, ellipsoid, dome, column) are the far-zoom level
+of detail. They give a tree its mass and its shadow at a distance. An
+evergreen up close is not a smooth cone: it is one straight trunk with
+whorls of near-horizontal branches at intervals, each whorl shorter than
+the one below, foliage in tiers with gaps between them, the lowest whorls
+dead or shed, and a ragged outline. That silhouette comes from the
+L-system species (docs/lsystem.md), whose branch and leaf volumes replace
+the stand-in shape at the near zooms once the adapter lands.
