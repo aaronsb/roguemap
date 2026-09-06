@@ -77,14 +77,15 @@ lists in order, so reordering rows changes the world.
 ### Interaction hooks
 
 Props, species, blocks and creatures carry the reserved hooks `light`,
-`tags`, `emits`, `affects` and `reach`, plus the physical, lifecycle and
-condition properties in the catalogue. They are validated and stored but
+`tags`, `emits`, `affects` and `reach`. Props, species and blocks carry
+the physical and lifecycle properties as well, and all four the condition
+properties in the catalogue. They are validated and stored but
 no system reads them yet; they are the seams for a future interaction
 graph. A lamp with `reach = 0` only throws its light, while a bonfire with
-`reach = 1.5` and `affects = ["flammable"]` can act on the tagged things
+`reach = 3` and `affects = ["flammable"]` can act on the tagged things
 around it. The `campfire` prop is the one the `f` key places: it names the
-`campfire` light, emits light and heat, and affects flammable things within
-1.5 tiles.
+`campfire` light, emits light and heat, and affects flammable things
+within three metres, like every other distance in the tables (ADR-004).
 
 ### Conditions
 

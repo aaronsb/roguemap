@@ -7,6 +7,16 @@ carry only the properties that apply; the loader supplies defaults for the
 rest. Properties marked *reserved* are validated and stored but not yet
 read by any system.
 
+The tables catalogued here are `biomes`, `species`, `materials`, `props`,
+`blocks`, `creatures`, `seasons`, `surfaces` and `lights`. In the Tables
+column *all* means every one of them and *all placeables* means props,
+species, blocks and creatures, the four tables that describe a thing
+standing in the world. The settings, frame and tileset tables describe the
+program rather than the world and are documented with their own systems
+(docs/frames.md, ADR-005). The row structs are `src/assets/schema.rs`, and
+a test parses the tables below and holds each property against them
+(docs/testing.md), so a property is added to both or to neither.
+
 ## Identity
 
 | Property | Type | Default | Tables | Meaning |
@@ -26,11 +36,13 @@ read by any system.
 | lsystem | table | {} | species | Parameter overrides for the habit, or a grammar written out in full: `branch_angle`, `forks`, `taper`, `droop`, `leaf_density`, `asymmetry`, `jitter`, `prune_height`, `depth`, `length`, `leaf_radius`, `axiom`, `rules`, `dead_rules` (docs/lsystem.md). |
 | dead_chance | 0..1 | 0.02 | species | Chance an instance stands dead: no leaves, grey bark, a broken crown. The roll is a hash of the tile seed, so the same tree is dead every time. |
 | roof | enum | flat | blocks | Profile above the column: none, flat, gable, hip. |
-| art | string | none | props, creatures | Name of an art file set; tiers are chosen by zoom. Absent means no picture. |
+| art | name | required | props, creatures | Name of an art file set; the tier is chosen by zoom. Every prop and creature has one. |
+| min_zoom | zoom index | 2 (near) | props | Smallest zoom the prop is drawn at; a pebble is not worth a cell at 1:8. |
 | size | [w, d, h] metres | required | props, species, blocks, creatures | Real extent: width, depth, height. A block's is one tile at one level (a house level [2, 2, 3]); a species' is a mature tree's spread and height (an oak [10, 10, 18]); a boulder [1.2, 1.0, 0.8]; the person [0.6, 0.4, 2.0]. The renderer draws it through the zoom's rows and columns per metre (ADR-004), and a sprite's art tier is the one whose rows are nearest the height it stands. |
 | size_class | small, mixed, large | mixed | species | Scales the species' size: 0.8, 1, 1.15. |
 | radius, height, trunk, trunk_radius | metres | from size by shape | species | Crown radius and height, trunk height and radius, when a row wants other proportions than its shape derives. The canopy is `size` plus these; there is no other spelling of it. |
-| color, glyph_color | rgb | required | props, lights | Fill and glyph colours; seasonal tables use four values. |
+| color | rgb | props black, creatures required | props, creatures | Fill behind the glyph. Black on a prop means the glyph is drawn over the ground with no background. Lights carry their own `color` (below). |
+| glyph | rgb | required | props, creatures | Glyph colour. `glyph_color` is accepted as the older spelling. |
 | canopy, canopy_glyph | rgb x4 | required | species | Spring, summer, autumn, winter colours. |
 | material | name or rule | by_biome | blocks | Wall and roof colours by material; `by_biome` (or `local`) takes the tile's material. |
 | pitch, max_rise | metres per metre, metres | 1.0, 1.5 | blocks | Roof rise per metre of run from the eaves, and its cap. |
@@ -38,7 +50,7 @@ read by any system.
 | ground | enum | flatten | blocks | What the tile top becomes: none, flatten, pave, till. |
 | windows, window_pitch | fraction pair, metres | [0.5, 1.0], 1.0 | blocks | Band within a level where windows go (empty for none) and the spacing along a face. |
 | door | bool | true | blocks | One door at ground level on an open face, toward a road when there is one. |
-| seasonal | bool | true | species, biomes | Whether colours follow the seasons. |
+| seasonal | bool | false | biomes | Whether the biome's ground and cover colours follow the seasons: a rainforest and a desert say no, a temperate wood yes. A species has no such flag; its canopy is seasonal whenever its `canopy` table gives four colours. |
 | snow_cover | 0..1 | 1 | props, species, blocks | How much accumulated snow shows on it; a smooth boulder holds less than a roof. |
 
 ### Conditions
@@ -71,10 +83,9 @@ occupied, asleep, carrying.
 
 | Property | Type | Default | Tables | Meaning |
 |---|---|---|---|---|
-| terrain | terrain list | any | props, blocks, creatures | Ground kinds it may stand on. |
+| terrain | terrain list | required | props, blocks | Ground kinds it may stand on. A creature says `can_enter` instead, and a species is placed by its biome's weighted list. |
 | cover | cover list | any | props | Ground cover kinds required (grass, dry, moss, bare). |
-| biomes | name list | any | props, blocks, creatures | Biomes it may appear in; species use the biome's own weighted list instead. |
-| near_water | bool | false | props, blocks | Requires a cardinal neighbour of water. |
+| near_water | bool | false | props | Requires a cardinal neighbour of water. |
 | min_height, max_height | metres | none | props, species, blocks | Elevation band above sea level. |
 | max_slope | metres per metre | none | blocks, props | Refuses steep ground; buildings want flat tiles. |
 | density | 0..1 | required for props | props | Chance per placement cell where the rules pass. |
@@ -94,15 +105,18 @@ occupied, asleep, carrying.
 | blocks_sight | bool | false | props, species, blocks | Whether it stops line of sight (reserved). |
 | level_height | metres | size's height | blocks | Metres per level; a stack of two is twice as tall. |
 | max_levels, deck | count, bool | 3, false | blocks | Validation cap on levels; `deck` is reserved for bridges. |
-| mass | kg | 0 | props, creatures | Reserved for physics and pushing. |
-| hardness | 0..1 | 1 | props, blocks | Resistance to damage and to being harvested. |
 
 ## Light and energy
 
 | Property | Type | Default | Tables | Meaning |
 |---|---|---|---|---|
-| light | name | none | props, blocks, creatures | Row in lights.toml this asset emits. |
-| color, radius, intensity, falloff, flicker_amount, flicker_rate | see lights | required | lights | The light itself: colour, throw in metres, brightness, falloff exponent, flicker depth and speed. |
+| light | name | none | all placeables | Row in lights.toml this asset emits. |
+| color | rgb 0..1 | required | lights | The light's colour, as three floats. |
+| radius | metres | required | lights | How far it throws. |
+| intensity | 0.. | required | lights | Brightness at the source. |
+| falloff | exponent | 2 | lights | How the light falls off with distance. |
+| flicker_amount | 0..1 | 0 | lights | Flicker depth; zero is a steady light. |
+| flicker_rate | hertz | 0 | lights | Flicker speed. |
 | heat | 0..1 | 0 | props, blocks | Warmth given off; drives melting and comfort (reserved). |
 | fuel | minutes | none | props | How long it burns before going out; none means indefinitely (reserved). |
 
@@ -114,9 +128,9 @@ occupied, asleep, carrying.
 | emits | string list | [] | all placeables | What it puts out continuously: light, heat, smoke, sound, scent. |
 | affects | string list | [] | all placeables | Tags it can act on within reach: a bonfire affects flammable; a lamp affects nothing. |
 | reach | metres | 0 | all placeables | How far its effects act. Zero means it only emits. |
-| verbs | string list | [] | props, blocks, creatures | Actions a player may take: examine, harvest, enter, light, extinguish, climb. |
+| verbs | string list | [] | props, species, blocks | Actions a player may take: examine, harvest, enter, light, extinguish, climb. |
 | yields | name and count list | [] | props, species | What harvesting produces, for a future inventory. |
-| states | string list | [] | props, blocks, species | Named states with their own art or colours: unlit, lit, burning, burnt, ruined, sapling, mature, dead. |
+| states | string list | [] | all placeables, surfaces | Named states with their own art or colours: unlit, lit, burning, burnt, ruined, sapling, mature, dead. |
 
 ## Lifecycle and weather (reserved)
 
@@ -126,12 +140,20 @@ occupied, asleep, carrying.
 | decay | days | none | props, blocks | Time from ruined to gone. |
 | sway | 0..1 | species 1, others 0 | species, props | How much wind moves it. |
 | sheds | bool | true for deciduous | species | Whether it drops leaves in autumn. |
-| prune_height | 0..1 | 0.2 conifer, 0.35 broadleaf | species | Fraction of the height carrying no live crown: a tree self-prunes as it grows, so there is bare trunk under the canopy. The L-system's own value, when a species has one, is what the canopy volume uses. |
+
+Self-pruning — the bare trunk under the canopy, a fraction of the height —
+is not a row property of its own. The canopy volume takes it from the
+shape (0.2 for a cone, 0.35 for an ellipsoid, none for a dome or cactus),
+and a species grown from a grammar overrides it with `prune_height` inside
+its `lsystem` table, which the stand-in volume then follows.
 
 ## Creatures
 
-Creatures carry the identity, appearance and condition properties above,
-`size` in metres like every other placeable, and:
+Creatures carry the identity, appearance, interaction-hook and condition
+properties above and `size` in metres like every other placeable. The
+physical, placement and lifecycle group belongs to the things that stand
+still: a creature has none of it, and walks where `can_enter` lets it.
+Their own properties are:
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|

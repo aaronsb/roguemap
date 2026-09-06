@@ -30,7 +30,7 @@ pub struct Hooks {
     pub tags: Vec<String>,
     pub emits: Vec<String>,
     pub affects: Vec<String>,
-    /// Tiles; zero means it only emits.
+    /// Metres; zero means it only emits.
     pub reach: f32,
 }
 
