@@ -55,6 +55,7 @@ right change it, `Esc` closes. Every row also has a shortcut key.
 | Weather | auto, clear, cloudy, rain, storm |
 | Wind | auto, calm, breeze, windy, gale |
 | Day length | 2 minutes, 10 minutes, 1 hour, 24 hours |
+| Cloud layer | shown or hidden |
 
 The settings table in `src/settings.rs` is the single source for the window
 and for the shortcuts.
@@ -80,6 +81,12 @@ noise on the day clock, or follow the presets in settings. Wind moves the
 clouds, stirs trees through a gust field, drives the grass and raises
 whitecaps. Precipitation accumulates per temperature band as snowpack or
 wetness and melts or dries with warmth and sun.
+
+At the two smallest zooms the view is above the clouds. Each screen cell
+samples the cloud field where a ray from a virtual camera meets the cloud
+plane, so panning moves clouds faster than the ground by C/(C - H), and the
+shadow of each cloud lies along the sun direction by the altitude over the
+tangent of the sun's elevation. Precipitation is drawn beneath the layer.
 
 ## World map
 

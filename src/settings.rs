@@ -15,8 +15,9 @@ pub const CLOCK: usize = 4;
 pub const WEATHER: usize = 5;
 pub const WIND: usize = 6;
 pub const DAY_LENGTH: usize = 7;
+pub const CLOUDS: usize = 8;
 
-pub const ITEMS: [Item; 8] = [
+pub const ITEMS: [Item; 9] = [
     Item { name: "Traversal", values: &["screen space", "map axes"] },
     Item { name: "World view", values: &["island", "filled"] },
     Item { name: "Glyphs", values: &["petscii", "ascii"] },
@@ -25,6 +26,7 @@ pub const ITEMS: [Item; 8] = [
     Item { name: "Weather", values: &["auto", "clear", "cloudy", "rain", "storm"] },
     Item { name: "Wind", values: &["auto", "calm", "breeze", "windy", "gale"] },
     Item { name: "Day length", values: &["2 min", "10 min", "1 hour", "24 hours"] },
+    Item { name: "Cloud layer", values: &["shown", "hidden"] },
 ];
 
 pub struct Settings {

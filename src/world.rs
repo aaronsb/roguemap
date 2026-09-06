@@ -71,6 +71,18 @@ pub struct World {
 }
 
 impl World {
+    /// Cloud base altitude in height units (rows at 1x zoom).
+    pub const CLOUD_ALTITUDE: f32 = 10.0;
+
+    /// Ground offset in tiles from a cloud to its shadow: the sun's azimuth
+    /// times the altitude over the tangent of its elevation, capped.
+    pub fn shadow_shift(&self) -> (f32, f32) {
+        let elev = self.elevation().max(0.08);
+        let len = (Self::CLOUD_ALTITUDE * 0.5 * (1.0 - elev * elev).sqrt() / elev).min(18.0);
+        // Sun to the south-east in map space; shadows fall north-west.
+        (-len * 0.7, -len * 0.7)
+    }
+
     pub fn new(seed: u64) -> World {
         World {
             season: 1.0,

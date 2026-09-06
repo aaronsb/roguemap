@@ -8,7 +8,7 @@
 use crate::biome::{self, BIOMES, MATERIALS, SPECIES};
 use crate::canvas::{Canvas, Rgb};
 use crate::map::{Map, Terrain, MAX_Z, SEA};
-use crate::settings::{Settings, ITEMS};
+use crate::settings::{Settings, CLOUDS, ITEMS};
 use crate::noise::{fbm, hash, smoothstep};
 use crate::palette::{Palette, SEASON_NAMES};
 use crate::tileset::{Sprite, Tileset, ZOOMS};
@@ -127,6 +127,26 @@ impl Camera {
     /// Screen position of a view-space tile at height `z`.
     pub fn project(&self, vx: i32, vy: i32, z: i32) -> (i32, i32) {
         ((vx - vy) * self.hw + self.ox, (vx + vy) * self.hh - z + self.oy)
+    }
+
+    /// Fractional map coordinates of the ground point under a screen cell.
+    pub fn unproject_map(&self, sx: f32, sy: f32, map: &Map) -> (f32, f32) {
+        let a = (sx - self.ox as f32) / self.hw as f32;
+        let b = (sy - self.oy as f32) / self.hh as f32;
+        let (vx, vy) = ((a + b) / 2.0, (b - a) / 2.0);
+        let (m0x, m0y) = self.view_to_map(0, 0, map);
+        let (dx, dy) = self.offset_to_map(vx, vy);
+        (m0x as f32 + dx, m0y as f32 + dy)
+    }
+
+    /// Virtual camera height in height units for parallax; higher when
+    /// zoomed out.
+    pub fn height(&self) -> f32 {
+        match self.hw {
+            0..=2 => 48.0,
+            3 => 64.0,
+            _ => 120.0,
+        }
     }
 
     /// View-space tile under a screen point, ignoring height.
@@ -285,7 +305,11 @@ impl Renderer {
         }
         self.fires(map, world, cam, ts, t);
         self.light_pass(cv, world, t);
+        // Precipitation falls beneath the cloud layer, so it is drawn first.
         self.weather_pass(cv, ts, world, map, cam, t);
+        if settings.get(CLOUDS) == 0 {
+            self.cloud_pass(cv, ts, world, map, cam);
+        }
         if self.show_hud {
             self.hud(cv, ts, world, cam, map);
         }
@@ -587,6 +611,7 @@ impl Renderer {
         let sun = world.sun();
         let sunny = sun[0] + sun[1] + sun[2] > 0.01;
         let cloud_th = world.cloud_threshold();
+        let (shadow_dx, shadow_dy) = world.shadow_shift();
         let face_k = [1.0f32, 0.78, 0.5];
         let mul = |c: Rgb, l: [f32; 3]| -> Rgb {
             Rgb(
@@ -608,7 +633,7 @@ impl Renderer {
                 l = [l[0] * amb_face, l[1] * amb_face, l[2] * amb_face];
                 if sunny {
                     let (ox, oy) = world.cloud_offset;
-                    let cloud = fbm((g.wx + ox) * 0.07, (g.wy + oy) * 0.07, 0xC10D, 3);
+                    let cloud = fbm((g.wx + ox + shadow_dx) * 0.07, (g.wy + oy + shadow_dy) * 0.07, 0xC10D, 3);
                     let shadow = smoothstep(cloud_th, cloud_th + 0.10, cloud);
                     let s = fk * (1.0 - 0.72 * shadow);
                     l = [l[0] + sun[0] * s, l[1] + sun[1] * s, l[2] + sun[2] * s];
@@ -632,6 +657,55 @@ impl Renderer {
                 let knee = |v: f32| 1.6 * (1.0 - (-v / 1.6).exp());
                 l = [l[0] + knee(pl[0]), l[1] + knee(pl[1]), l[2] + knee(pl[2])];
                 cv.put(x, y, g.ch, mul(g.glyph, l), mul(g.albedo, l));
+            }
+        }
+    }
+
+    /// Cloud layer seen from above at the two smallest zooms. Each screen
+    /// cell samples the cloud field at the point a ray from a virtual camera
+    /// of height C meets the cloud plane at altitude H: the ground point under
+    /// the cell, raised H rows, pulled toward the screen centre by 1 - H/C.
+    /// Panning therefore moves clouds by C/(C - H) relative to the ground.
+    fn cloud_pass(&self, cv: &mut Canvas, ts: &Tileset, world: &World, map: &Map, cam: &Camera) {
+        if cam.hw > 3 {
+            return;
+        }
+        let cover = world.weather.cover;
+        // Light cover reads as clouds above the land; heavy cover has already
+        // dimmed the whole scene, so the layer fades out toward overcast.
+        let strength = smoothstep(0.03, 0.15, cover) * (1.0 - smoothstep(0.7, 0.9, cover));
+        if strength <= 0.0 {
+            return;
+        }
+        let altitude = World::CLOUD_ALTITUDE;
+        let c = cam.height();
+        let k = 1.0 - altitude / c;
+        let (cx, cy) = cam.unproject_map(self.w as f32 / 2.0, self.h as f32 / 2.0, map);
+        let (ox, oy) = world.cloud_offset;
+        let th = world.cloud_threshold();
+        let light = 0.3 + 0.7 * world.skylight();
+        let sunlit = Rgb(238, 240, 246).scale(light);
+        let shaded = Rgb(190, 196, 212).scale(light);
+        let rows = altitude * cam.hh as f32 / 2.0;
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let (gx, gy) = cam.unproject_map(x as f32 + 0.5, y as f32 + rows, map);
+                let (wx, wy) = (cx + (gx - cx) * k, cy + (gy - cy) * k);
+                let d = fbm((wx + ox) * 0.07, (wy + oy) * 0.07, 0xC10D, 3);
+                let a = smoothstep(th, th + 0.16, d) * strength;
+                if a < 0.08 {
+                    continue;
+                }
+                // Thick centres are bright; edges take the shaded tone.
+                let core = smoothstep(th + 0.1, th + 0.3, d);
+                let col = shaded.lerp(sunlit, core);
+                let i = (y * self.w + x) as usize;
+                let cell = cv.cells[i];
+                if a > 0.6 {
+                    cv.put(x, y, ' ', col, cell.bg.lerp(col, a));
+                } else {
+                    cv.put(x, y, ts.wall[1], col, cell.bg.lerp(col, a * 0.6));
+                }
             }
         }
     }
