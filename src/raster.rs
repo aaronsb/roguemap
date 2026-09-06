@@ -175,14 +175,21 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
 }
 
 impl Renderer {
-    /// Walk down the height column under a screen position. Lowering the
-    /// level moves the ground point away from the camera, so a column is
-    /// entered through its front face. Levels are subdivided so the ground
-    /// point never moves more than half a tile between samples.
-    fn ray(map: &Map, cam: &Camera, sx: f32, sy: f32) -> Option<Hit> {
-        // Nothing stands above the ceiling of the chunks the walk can cross;
-        // the segment is shorter than a chunk, so its bounding corners cover
-        // every chunk it touches.
+    /// Height of the drawn surface at a ground point: the continuous field,
+    /// flattened to sea level over water.
+    fn surface_height(&self, sc: &Scene, x: f32, y: f32) -> f32 {
+        let grid = self.heights.as_ref().expect("height grid built for the frame");
+        let h = grid.sample(x, y) + sc.map.detail(x, y, detail_octaves(sc.cam));
+        h.max(SEA as f32)
+    }
+
+    /// March down the surface under a screen position. Lowering the level
+    /// moves the ground point away from the camera, so the first sample at
+    /// or below the surface is the visible point. The surface is the
+    /// continuous field, so there are no terraces; steep slopes shade as
+    /// cliffs, with the face chosen by the gradient's direction.
+    fn ray(&self, sc: &Scene, sx: f32, sy: f32) -> Option<Hit> {
+        let (map, cam) = (sc.map, sc.cam);
         let (x0, y0) = cam.unproject(sx, sy, 0.0);
         let (x1, y1) = cam.unproject(sx, sy, MAX_Z as f32);
         let mut top = 0;
@@ -190,7 +197,7 @@ impl Renderer {
             let (mx, my) = map.clamp(x.floor() as i32, y.floor() as i32);
             top = top.max(map.ceiling(mx, my));
         }
-        let top = top.min(MAX_Z);
+        let top = (top + 1).min(MAX_Z + 1);
         let steps = (2.0 / cam.b()).ceil().max(1.0) as i32;
         let (s, c) = cam.angle.sin_cos();
         let mut i = top * steps;
@@ -200,25 +207,26 @@ impl Renderer {
             let (x, y) = cam.unproject(sx, sy, zf);
             let (mx, my) = (x.floor() as i32, y.floor() as i32);
             let Some(tile) = map.get(mx, my) else { continue };
-            let dz = tile.draw_z();
-            let dzf = dz as f32;
-            if dzf < zf {
+            let h = self.surface_height(sc, x, y);
+            if h < zf {
                 continue;
             }
+            // Gradient of the surface for shading and cliff faces.
+            let e = 0.25;
+            let gx = (self.surface_height(sc, x + e, y) - self.surface_height(sc, x - e, y)) / (2.0 * e);
+            let gy = (self.surface_height(sc, x, y + e) - self.surface_height(sc, x, y - e)) / (2.0 * e);
+            let slope = (gx * gx + gy * gy).sqrt();
+            let sun = (-(gx + gy) * 0.5).clamp(-1.0, 1.0);
+            const CLIFF: f32 = 1.6;
+            let (face, below) = if slope < CLIFF {
+                (FACE_TOP, 0)
+            } else {
+                let x_face = gx.abs() > gy.abs();
+                let face = if (s * c > 0.0) == x_face { FACE_RIGHT } else { FACE_LEFT };
+                (face, ((slope - CLIFF) * 1.5).ceil().clamp(1.0, 6.0) as i32)
+            };
             let z = zf.floor() as i32;
-            if (dzf - zf).abs() < 1e-4 {
-                return Some(Hit { tile, mx, my, x, y, z, face: FACE_TOP, below: 0 });
-            }
-            // Entered through a side: the slab crossed last along the ray is
-            // the face, then the axis face is mapped to the screen side it
-            // shows on for this angle.
-            let (px, py) = cam.unproject(sx, sy, dzf);
-            let tx = ((px - (mx as f32 + 0.5)).abs() - 0.5) / s.abs().max(1e-6);
-            let ty = ((py - (my as f32 + 0.5)).abs() - 0.5) / c.abs().max(1e-6);
-            let x_face = tx > ty;
-            let face = if (s * c > 0.0) == x_face { FACE_RIGHT } else { FACE_LEFT };
-            let below = (dzf - zf).ceil().max(1.0) as i32;
-            return Some(Hit { tile, mx, my, x, y, z, face, below });
+            return Some(Hit { tile, mx, my, x, y, h, z, face, below, sun });
         }
         None
     }
@@ -227,10 +235,8 @@ impl Renderer {
     /// continuous fields decide water, sand, earth and rock through the tile,
     /// and the field's slope shades it toward or away from the sun.
     fn field_color(&self, sc: &Scene, hit: &Hit) -> Rgb {
-        let octaves = detail_octaves(sc.cam);
-        let Some(grid) = &self.heights else { return surface_color(&hit.tile, &sc.pal, sc.world, sc.assets) };
-        let field = |x: f32, y: f32| grid.sample(x, y) + sc.map.detail(x, y, octaves);
-        let h = field(hit.x, hit.y);
+        let grid = self.heights.as_ref().expect("height grid built for the frame");
+        let h = grid.sample(hit.x, hit.y) + sc.map.detail(hit.x, hit.y, detail_octaves(sc.cam));
         let kind = sc.map.surface_at(hit.x, hit.y, h, hit.tile.temp as f32);
         let mut t = hit.tile;
         t.terrain = kind;
@@ -238,13 +244,9 @@ impl Renderer {
             t.z = (h.floor() as i32).min(SEA - 1);
         }
         let mut c = surface_color(&t, &sc.pal, sc.world, sc.assets);
-        if kind != Terrain::Water && sc.cam.hw >= 8 {
-            // Slope shading from the gradient; sun from the south-east.
-            let e = 0.25;
-            let dx = field(hit.x + e, hit.y) - field(hit.x - e, hit.y);
-            let dy = field(hit.x, hit.y + e) - field(hit.x, hit.y - e);
-            let lit = (-(dx + dy) * 0.5 / e).clamp(-1.0, 1.0);
-            c = c.scale(1.0 + 0.18 * lit * sc.world.daylight());
+        if kind != Terrain::Water {
+            // Slope shading toward or away from the sun.
+            c = c.scale(1.0 + 0.18 * hit.sun * sc.world.daylight());
         }
         c
     }
@@ -278,7 +280,7 @@ impl Renderer {
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) as usize;
-                let hit = Self::ray(sc.map, sc.cam, x as f32 + 0.5, y as f32 + 0.5);
+                let hit = self.ray(sc, x as f32 + 0.5, y as f32 + 0.5);
                 self.ids[i] = match &hit {
                     Some(hh) => ((hh.mx as u64) << 40) ^ ((hh.my as u64 & 0xFFFFF) << 8) ^ hh.face as u64 ^ 1 << 4,
                     None => 0,
@@ -299,7 +301,7 @@ impl Renderer {
                 let Some(hit) = hits[i] else { continue };
                 let (albedo, ch, glyph) = self.shade(sc, &hit, x, y);
                 let depth = hit.x * fx + hit.y * fy;
-                self.g[i] = GCell { albedo, ch, glyph, wx: hit.x, wy: hit.y, wz: hit.z as f32, face: hit.face, lit: true, depth };
+                self.g[i] = GCell { albedo, ch, glyph, wx: hit.x, wy: hit.y, wz: hit.h, face: hit.face, lit: true, depth };
             }
         }
     }
@@ -352,7 +354,7 @@ impl Renderer {
             for k in 0..2 {
                 let sx = x as f32 + (k as f32 + 0.5) / 2.0;
                 let sy = y as f32 + (j as f32 + 0.5) / 3.0;
-                cols[j * 2 + k] = match Self::ray(sc.map, sc.cam, sx, sy) {
+                cols[j * 2 + k] = match self.ray(sc, sx, sy) {
                     Some(hh) => {
                         first.get_or_insert(hh);
                         self.hit_color(sc, &hh)

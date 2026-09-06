@@ -70,3 +70,23 @@ volumes for the walk instead of rows of characters.
 
 At the overview a tree stays a one-glyph column. Billboards remain for
 creatures and small props, which face the camera anyway.
+
+## Cast shadows
+
+Terrain steps, stacks and canopies cast shadows on the ground and on each
+other. Once per frame a shadow mask is built in map space over the visible
+bounds at four samples per tile: each occluder projects its footprint
+along the sun vector onto the ground. A column of height h above the
+surface it shadows sweeps a parallelogram of length h over the tangent of
+the sun's elevation, in the azimuth the cloud shadows already use; a
+canopy projects an ellipse offset the same way; a stack is a column plus
+its roof outline. The light pass multiplies direct sun by one minus the
+mask value at the surface point, sampled bilinearly for soft edges, and
+leaves ambient light alone, so shadowed ground stays readable.
+
+Shadow length is capped as cloud shadows are, so dawn and dusk stretch
+shadows without covering the map. At night there is no direct sun and the
+mask is skipped. Level of detail: at the two smallest zooms only terrain
+and stacks cast; from the middle zooms canopies cast too; at the closest
+zooms props with height cast short shadows. Cost is one rasterised
+footprint per occluder in view plus one mask lookup per lit cell.

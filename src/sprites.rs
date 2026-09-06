@@ -4,7 +4,7 @@
 use crate::biome::MaterialRule;
 use crate::camera::Anchor;
 use crate::canvas::Rgb;
-use crate::map::{Flora, Structure, Terrain, Tile};
+use crate::map::{SEA, Flora, Structure, Terrain, Tile};
 use crate::noise::hash;
 use crate::render::{GCell, Renderer, Scene, FACE_TOP};
 use crate::sprite::Sprite;
@@ -83,7 +83,7 @@ impl SpriteItem {
                     },
                     gust: 0.0,
                     depth_bias: 0.0,
-                    light: kind.light.filter(|_| night > 0.05).map(|i| assets.lights[i].at(a.mx, a.my, a.z, night)),
+                    light: kind.light.filter(|_| night > 0.05).map(|i| assets.lights[i].at(a.mx, a.my, a.z.round() as i32, night)),
                 }
             }
             SpriteItem::Entity(kind) => {
@@ -119,7 +119,7 @@ impl Renderer {
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (_, mx, my, tile) in items {
-            let a = cam.anchor(mx, my, tile.draw_z());
+            let a = cam.anchor_f(mx, my, tile.hf.max(SEA as f32));
             if a.sx < -40 || a.sx > self.w + 40 || a.sy < -40 || a.sy > self.h + 40 {
                 continue;
             }
@@ -164,7 +164,7 @@ impl Renderer {
                     continue;
                 }
                 let x = a.sx + c as i32 - sp.center + if base { 0 } else { off };
-                let wz = a.z as f32 + height as f32;
+                let wz = a.z + height as f32;
                 if let Some(cell) = self.cell(x, y) {
                     if cell.depth > a.depth {
                         continue;
@@ -186,7 +186,7 @@ impl Renderer {
         }
         let (fx, fy) = cam.forward();
         let (x0, y0, x1, y1) = self.visible_bounds(cam);
-        let mut items: Vec<(f32, f32, f32, i32, usize)> = Vec::new();
+        let mut items: Vec<(f32, f32, f32, f32, usize)> = Vec::new();
         for my in y0..=y1 {
             for mx in x0..=x1 {
                 let Some(tile) = map.get(mx, my) else { continue };
@@ -207,7 +207,7 @@ impl Renderer {
                             let x = mx as f32 + (sub % 4) as f32 / 4.0 + 0.125;
                             let y = my as f32 + (sub / 4) as f32 / 4.0 + 0.125;
                             let depth = x * fx + y * fy;
-                            items.push((depth, x, y, tile.draw_z(), pi));
+                            items.push((depth, x, y, tile.hf.max(SEA as f32), pi));
                             break;
                         }
                     }
@@ -218,7 +218,7 @@ impl Renderer {
         for (depth, x, y, z, pi) in items {
             let p = &props[pi];
             let Some(sprite) = assets.art.for_zoom(&p.art, cam.zoom) else { continue };
-            let (sx, sy) = cam.project(x, y, z as f32);
+            let (sx, sy) = cam.project(x, y, z);
             let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
             let n = sprite.rows.len() as i32;
             let temp = map.get(x.floor() as i32, y.floor() as i32).map(|t| t.temp as f32).unwrap_or(10.0);
@@ -237,7 +237,7 @@ impl Renderer {
                         let solid = p.color != Rgb(0, 0, 0);
                         let bg = if solid { p.color.lerp(Rgb(228, 232, 240), snow * 0.8) } else { cell.albedo };
                         let fg = p.glyph.lerp(Rgb(235, 238, 245), snow * 0.6);
-                        *cell = GCell { albedo: bg, ch, glyph: fg, wx: x, wy: y, wz: z as f32 + (n - 1 - r as i32) as f32, face: FACE_TOP, lit: true, depth };
+                        *cell = GCell { albedo: bg, ch, glyph: fg, wx: x, wy: y, wz: z + (n - 1 - r as i32) as f32, face: FACE_TOP, lit: true, depth };
                     }
                 }
             }

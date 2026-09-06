@@ -1,5 +1,6 @@
+assets-export/
 *.cells
+.claude/worktrees/
 .golden/
 .golden-new/
 target/
-assets-export/

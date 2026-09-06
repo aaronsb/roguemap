@@ -27,7 +27,8 @@ pub struct Camera {
 pub struct Anchor {
     pub mx: i32,
     pub my: i32,
-    pub z: i32,
+    /// Surface height the sprite stands on.
+    pub z: f32,
     pub sx: i32,
     pub sy: i32,
     pub depth: f32,
@@ -96,8 +97,13 @@ impl Camera {
 
     /// Where a tile at drawn height `z` sits on screen.
     pub fn anchor(&self, mx: i32, my: i32, z: i32) -> Anchor {
-        let (sx, sy) = self.project_tile(mx, my, z);
-        Anchor { mx, my, z, sx, sy, depth: self.tile_depth(mx, my) }
+        self.anchor_f(mx, my, z as f32)
+    }
+
+    /// Anchor at a fractional surface height.
+    pub fn anchor_f(&self, mx: i32, my: i32, z: f32) -> Anchor {
+        let (sx, sy) = self.project(mx as f32 + 0.5, my as f32 + 0.5, z);
+        Anchor { mx, my, z, sx: sx.floor() as i32, sy: sy.floor() as i32, depth: self.tile_depth(mx, my) }
     }
 
     /// Virtual camera altitude in height units for cloud parallax; higher

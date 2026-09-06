@@ -299,11 +299,18 @@ impl Map {
         fbm(xf * 0.13, yf * 0.13, self.seed ^ 0x51, 3)
     }
 
+    /// Whether a position lies within a tile of water, for beaches.
+    fn shore(&self, xf: f32, yf: f32) -> bool {
+        let (x, y) = (xf.floor() as i32, yf.floor() as i32);
+        self.get(x, y).map(|t| t.near_water || t.terrain == Terrain::Water).unwrap_or(false)
+            || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.get(x + dx, y + dy).map(|t| t.terrain == Terrain::Water).unwrap_or(false))
+    }
+
     /// Surface kind at a fractional position from the continuous fields.
     pub fn surface_at(&self, xf: f32, yf: f32, h: f32, temp: f32) -> Terrain {
         if h < SEA as f32 {
             Terrain::Water
-        } else if h < SEA as f32 + 1.3 {
+        } else if h < SEA as f32 + 0.45 || (h < SEA as f32 + 1.3 && self.shore(xf, yf)) {
             Terrain::Sand
         } else if temp <= -16.0 {
             Terrain::Snow

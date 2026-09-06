@@ -14,7 +14,7 @@ use crate::canvas::{Canvas, Rgb};
 use crate::map::{Map, Tile, MAX_Z};
 use crate::noise::hash;
 use crate::palette::Palette;
-use crate::raster::{detail_octaves, HeightGrid};
+use crate::raster::HeightGrid;
 use crate::tileset::Tileset;
 use crate::world::{Light, World};
 
@@ -82,10 +82,14 @@ pub(crate) struct Hit {
     pub my: i32,
     pub x: f32,
     pub y: f32,
+    /// Surface height at the hit.
+    pub h: f32,
     pub z: i32,
     pub face: u8,
-    /// Rows below the top edge for a wall hit.
+    /// Steepness bands for cliff shading, 0 on gentle ground.
     pub below: i32,
+    /// Sun-facing factor of the surface, -1 away to 1 toward.
+    pub sun: f32,
 }
 
 pub struct Renderer {
@@ -127,12 +131,8 @@ impl Renderer {
     pub fn draw(&mut self, cv: &mut Canvas, sc: &Scene, opts: &RenderOptions) {
         self.frame_lights.clear();
         self.sky_pass(sc);
-        self.heights = if detail_octaves(sc.cam) > 0 {
-            let (x0, y0, x1, y1) = self.visible_bounds(sc.cam);
-            Some(HeightGrid::build(sc.map, x0, y0, x1, y1))
-        } else {
-            None
-        };
+        let (x0, y0, x1, y1) = self.visible_bounds(sc.cam);
+        self.heights = Some(HeightGrid::build(sc.map, x0, y0, x1, y1));
         self.terrain_pass(sc, opts.aa && sc.ts.antialias);
         self.sprite_pass(sc);
         self.prop_pass(sc);
