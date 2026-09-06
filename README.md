@@ -12,6 +12,18 @@ palette swaps on the unlit colour. Glyphs come from a switchable tileset:
 plain ASCII, or PETSCII-style shapes from the Unicode Symbols for Legacy
 Computing block.
 
+## Screenshots
+
+Rendered by `make screenshots` with the canonical snapshot pipeline.
+
+| | |
+|---|---|
+| ![island](docs/screenshots/island.png) The island view | ![rotated](docs/screenshots/rotated.png) Rotated 25 degrees off compass |
+| ![filled](docs/screenshots/filled.png) Filled world at 4x1 | ![closeup](docs/screenshots/closeup.png) Encounter zoom at 16x4 |
+| ![night](docs/screenshots/night.png) Night, campfire and lit windows | ![winter](docs/screenshots/winter.png) Winter after two days of storm |
+| ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom | ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses |
+| ![worldmap](docs/screenshots/worldmap.png) World map, large extent | ![ascii](docs/screenshots/ascii.png) The ASCII glyph set |
+
 ## Run
 
 ```
