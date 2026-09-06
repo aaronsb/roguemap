@@ -23,7 +23,7 @@ read by any system.
 | shape | enum | required for species and blocks | species, blocks | Procedural form: pine, broadleaf, scrub, cactus, later lsystem; for blocks the roof profile. |
 | art | string | none | props, creatures, blocks | Name of an art file set; tiers are chosen by zoom. Absent means procedural shape or no picture. |
 | size_class | small, mixed, large | mixed | species | Which sprite variant pair the row draws from. |
-| radius, height | tiles, height units | from size_class | species | Canopy volume for the geometry renderer (ADR-002). |
+| canopy | [radius, base, top] metres | from size | species | Canopy volume for the geometry renderer (ADR-002): radius, height of the canopy base above ground, height of its top. Defaults derive from `size`. |
 | color, glyph_color | rgb | required | props, lights | Fill and glyph colours; seasonal tables use four values. |
 | canopy, canopy_glyph | rgb x4 | required | species | Spring, summer, autumn, winter colours. |
 | material | name or rule | biome | blocks | Wall and roof colours by material; `local` takes the tile's material. |
@@ -75,6 +75,7 @@ occupied, asleep, carrying.
 
 | Property | Type | Default | Tables | Meaning |
 |---|---|---|---|---|
+| size | [w, d, h] metres | required | all placeables | Real extent: width, depth and height. Every prop, tree, block, creature and vehicle has one, natural or built. The renderer derives rows and columns at each zoom from it, art tiers scale to fit it, and footprint, occlusion and cast shadows follow from it. A boulder is [1.2, 1.0, 0.8]; an oak [10, 10, 18]; a person [0.6, 0.4, 2.0]; a house level [8, 6, 3]. |
 | passable | bool | props true, blocks false, trees false | props, species, blocks | Whether a creature may enter the tile. |
 | blocks_sight | bool | false | props, species, blocks | Whether it stops line of sight (reserved). |
 | levels, level_height | count, height units | 1, 2 | blocks | Stack height; a stack of two is twice as tall. |
