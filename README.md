@@ -25,6 +25,7 @@ Rendered by `make screenshots` with the canonical snapshot pipeline.
 | ![island](docs/screenshots/island.png) The island view | ![rotated](docs/screenshots/rotated.png) Rotated 25 degrees off compass |
 | ![filled](docs/screenshots/filled.png) Filled world at 4x1 | ![closeup](docs/screenshots/closeup.png) Encounter zoom at 16x4 |
 | ![scale-zclose](docs/screenshots/scale-zclose.png) The yardstick at 1:1: a 2 m person, an 18 m oak, a house | ![scale-zfar](docs/screenshots/scale-zfar.png) The same ground at 1:8 |
+| ![village](docs/screenshots/village.png) A village on the steppe at 1:4 | ![scale-zmid](docs/screenshots/scale-zmid.png) The yardstick at 1:4 |
 | ![night](docs/screenshots/night.png) Night, campfire and lit windows | ![winter](docs/screenshots/winter.png) Winter after two days of storm |
 | ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom | ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses |
 | ![worldmap](docs/screenshots/worldmap.png) World map, large extent | ![ascii](docs/screenshots/ascii.png) The ASCII glyph set |
