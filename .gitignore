@@ -1,2 +1,4 @@
 *.cells
+.golden/
+.golden-new/
 target/

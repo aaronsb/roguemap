@@ -126,6 +126,35 @@ pub const BIOMES: &[Biome] = &[
     Biome { name: "ice cap", cover: COVER_BARE, koppen: "EF", ground: Rgb(226, 232, 240), ground_glyph: Rgb(255, 255, 255), seasonal: false, grass: 0, tree_density: 0.0, species: &[], material: STONE },
 ];
 
+/// Where a prop may stand.
+pub struct Prop {
+    pub name: &'static str,
+    /// Rows for the mid zooms and for the closest zooms.
+    pub small: &'static [&'static str],
+    pub large: &'static [&'static str],
+    pub color: Rgb,
+    pub glyph: Rgb,
+    /// Chance per 4x4 sub-cell of a qualifying tile.
+    pub density: f32,
+    /// Terrain kinds the prop stands on.
+    pub terrain: &'static [crate::map::Terrain],
+    /// Ground cover kinds it needs, empty for any.
+    pub cover: &'static [usize],
+    /// Whether the tile must touch water.
+    pub near_water: bool,
+}
+
+use crate::map::Terrain as T;
+
+pub const PROPS: &[Prop] = &[
+    Prop { name: "boulder", small: &["o"], large: &[" ▄▄ ", "████"], color: Rgb(118, 118, 124), glyph: Rgb(150, 150, 158), density: 0.05, terrain: &[T::Rock, T::Dirt, T::Snow], cover: &[], near_water: false },
+    Prop { name: "stone", small: &["."], large: &["▄"], color: Rgb(128, 124, 116), glyph: Rgb(160, 156, 148), density: 0.06, terrain: &[T::Rock, T::Dirt, T::Grass], cover: &[COVER_MOSS, COVER_DRY], near_water: false },
+    Prop { name: "grass clump", small: &["\\|/"], large: &[" \\|/ ", "\\|||/"], color: Rgb(0, 0, 0), glyph: Rgb(150, 205, 95), density: 0.09, terrain: &[T::Grass], cover: &[COVER_GRASS], near_water: false },
+    Prop { name: "reeds", small: &["|"], large: &["|||", "|||"], color: Rgb(0, 0, 0), glyph: Rgb(120, 140, 70), density: 0.14, terrain: &[T::Sand, T::Grass], cover: &[], near_water: true },
+    Prop { name: "sagebrush", small: &[";"], large: &[";;;", ";;;"], color: Rgb(0, 0, 0), glyph: Rgb(150, 160, 120), density: 0.07, terrain: &[T::Grass, T::Dirt, T::Sand], cover: &[COVER_DRY], near_water: false },
+    Prop { name: "moss", small: &["\""], large: &["\"\"\""], color: Rgb(0, 0, 0), glyph: Rgb(120, 170, 100), density: 0.08, terrain: &[T::Grass, T::Rock], cover: &[COVER_MOSS], near_water: false },
+];
+
 /// Simplified Köppen classification from annual mean temperature in degrees
 /// Celsius and precipitation on a 0..100 scale.
 pub fn classify(temp: f32, precip: f32) -> usize {

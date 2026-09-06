@@ -48,6 +48,10 @@ pub struct Tile {
     pub building: Option<u8>,
     /// Annual mean temperature, degrees Celsius.
     pub temp: i8,
+    /// Whether a cardinal neighbour is water.
+    pub near_water: bool,
+    /// Smooth height at the tile centre, before flooring.
+    pub hf: f32,
 }
 
 impl Tile {
@@ -99,30 +103,77 @@ impl Map {
         chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1)).max_z
     }
 
-    /// Raw height at any position. A slow continental field sets oceans,
-    /// plains and ranges over hundreds of tiles; local noise adds hills.
-    /// Rivers follow the mid-level contour of another slow field.
-    pub fn height(&self, x: i32, y: i32) -> i32 {
-        let (xf, yf) = (x as f32, y as f32);
-        let continental = fbm(xf * 0.0035 + 17.0, yf * 0.0035, self.seed ^ 0xC0, 3);
-        let continental = ((continental - 0.5) * 2.0 + 0.5).clamp(0.0, 1.0);
+    /// Smooth height at a fractional position, in height units. A slow
+    /// continental field sets oceans, plains and ranges over hundreds of
+    /// tiles; local noise adds hills; rivers follow the mid-level contour of
+    /// another slow field. Tile heights are this field floored at the tile
+    /// centre, so the column geometry is a terrace of it.
+    pub fn height_smooth(&self, xf: f32, yf: f32) -> f32 {
         let local = fbm(xf * 0.045, yf * 0.045, self.seed, 4);
-        let n = continental * 0.62 + local * 0.38;
+        let n = self.control_height(xf, yf) * 0.62 + local * 0.38;
         let n = ((n - 0.5) * 1.6 + 0.5).clamp(0.0, 0.999);
-        let mut z = (n.powf(1.15) * (MAX_Z as f32 + 1.0)) as i32;
+        let mut z = n.powf(1.15) * (MAX_Z as f32 + 1.0);
 
-        if z > SEA && z < SNOW - 2 {
+        if z > SEA as f32 + 1.0 && z < (SNOW - 2) as f32 {
             let r = crate::noise::value(xf * 0.012 + 5.0, yf * 0.012 + 9.0, self.seed ^ 0x51E);
             let d = (r - 0.5).abs();
             if d < 0.008 {
-                z = SEA - 2;
+                z = SEA as f32 - 1.5;
             } else if d < 0.016 {
-                z = z.min(SEA - 1);
+                z = z.min(SEA as f32 - 0.5);
             } else if d < 0.045 {
-                z = z.min(SEA + ((d - 0.016) * 90.0).floor() as i32);
+                z = z.min(SEA as f32 + (d - 0.016) * 90.0 + 0.5);
             }
         }
         z
+    }
+
+    /// The coarse control layer for height in `[0, 1]`: the overall shape of
+    /// the world at a resolution of hundreds of tiles. Everything finer is
+    /// procedural detail filled in below it. Today it is a slow noise; an
+    /// authored or edited control grid can replace it without touching the
+    /// detail layers.
+    pub fn control_height(&self, xf: f32, yf: f32) -> f32 {
+        let c = fbm(xf * 0.0035 + 17.0, yf * 0.0035, self.seed ^ 0xC0, 3);
+        ((c - 0.5) * 2.0 + 0.5).clamp(0.0, 1.0)
+    }
+
+    /// Fine relief added to the smooth field at close zooms: fractal detail
+    /// under one height unit, so it never changes a tile's terrace but gives
+    /// slopes, shorelines and patches sub-tile shape.
+    pub fn detail(&self, xf: f32, yf: f32, octaves: u32) -> f32 {
+        if octaves == 0 {
+            return 0.0;
+        }
+        (fbm(xf * 0.6 + 3.0, yf * 0.6 + 1.0, self.seed ^ 0xD7, octaves) - 0.5) * 0.9
+    }
+
+
+    /// Tile height: the smooth field floored at the tile centre.
+    pub fn height(&self, x: i32, y: i32) -> i32 {
+        self.height_smooth(x as f32 + 0.5, y as f32 + 0.5).floor() as i32
+    }
+
+    /// Dirt patch field, above 0.72 is bare earth.
+    pub fn patch(&self, xf: f32, yf: f32) -> f32 {
+        fbm(xf * 0.13, yf * 0.13, self.seed ^ 0x51, 3)
+    }
+
+    /// Surface kind at a fractional position from the continuous fields.
+    pub fn surface_at(&self, xf: f32, yf: f32, h: f32, temp: f32) -> Terrain {
+        if h < SEA as f32 {
+            Terrain::Water
+        } else if h < SEA as f32 + 1.3 {
+            Terrain::Sand
+        } else if temp <= -16.0 {
+            Terrain::Snow
+        } else if h >= (SNOW - 2) as f32 {
+            Terrain::Rock
+        } else if self.patch(xf, yf) > 0.72 {
+            Terrain::Dirt
+        } else {
+            Terrain::Grass
+        }
     }
 
     fn is_water(&self, x: i32, y: i32) -> bool {
@@ -146,13 +197,14 @@ impl Map {
 
     /// Classify one tile from the height field and climate around it.
     fn tile(&self, x: i32, y: i32) -> Tile {
-        let z = self.height(x, y);
+        let hf = self.height_smooth(x as f32 + 0.5, y as f32 + 0.5);
+        let z = hf.floor() as i32;
         let temp = self.temperature(x, y, z);
         let precip = self.precipitation(x, y);
         let biome_ix = biome::classify(temp, precip);
         let biome = &BIOMES[biome_ix];
         let near_water = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.is_water(x + dx, y + dy));
-        let patch = fbm(x as f32 * 0.13, y as f32 * 0.13, self.seed ^ 0x51, 3);
+        let patch = self.patch(x as f32 + 0.5, y as f32 + 0.5);
         let terrain = if z < SEA {
             Terrain::Water
         } else if z == SEA || (z == SEA + 1 && near_water) {
@@ -210,6 +262,8 @@ impl Map {
             species,
             building,
             temp: temp.round().clamp(-60.0, 60.0) as i8,
+            near_water,
+            hf,
         }
     }
 

@@ -1,7 +1,7 @@
 # roguemap task runner. `make help` lists targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help build run term test lint format check clean snap screenshots fonts
+.PHONY: help build run term test lint format check clean snap screenshots fonts golden golden-check
 
 BIN      := target/release/roguemap
 SEED     ?= 7
@@ -38,6 +38,15 @@ check: lint test ## Run all quality gates
 clean: ## Remove build artefacts and generated screenshots
 	cargo clean
 	rm -f $(SHOTS)/*.png *.cells
+
+golden: build ## Record reference frames in .golden (run before a refactor)
+	tools/golden.sh .golden
+
+golden-check: build ## Re-render and compare against .golden byte for byte
+	tools/golden.sh .golden-new >/dev/null
+	@fail=0; for f in .golden/*.cells; do n=.golden-new/$$(basename $$f); \
+	  if ! cmp -s $$f $$n; then echo "DIFF $$(basename $$f)"; fail=1; fi; done; \
+	  if [ $$fail = 0 ]; then echo "golden: all frames identical"; else exit 1; fi
 
 fonts: ## Report fonts covering the Symbols for Legacy Computing block
 	@fc-list ':charset=1fb00' family | sort -u
