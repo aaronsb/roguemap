@@ -79,6 +79,18 @@ impl Canvas {
         }
     }
 
+    /// Copy another canvas in at an offset; cells off the target are
+    /// dropped. Panes rendered at their own size — the editor's previews
+    /// and the inset view — land on the screen this way.
+    pub fn blit(&mut self, src: &Canvas, x0: i32, y0: i32) {
+        for y in 0..src.h {
+            for x in 0..src.w {
+                let c = src.cells[(y * src.w + x) as usize];
+                self.put(x0 + x, y0 + y, c.ch, c.fg, c.bg);
+            }
+        }
+    }
+
     /// Write the grid as text: a header line `w h`, then one line per cell
     /// of `codepoint fr fg fb br bg bb`, row-major. This is the cell dump
     /// format of `--snap` and the golden frames.

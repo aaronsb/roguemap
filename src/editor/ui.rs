@@ -5,7 +5,7 @@
 
 use super::fields::Kind;
 use super::keys::{self, Mode};
-use super::preview::{self, blit, pane_size, pane_title};
+use super::preview::{self, pane_size, pane_title};
 use super::{Editor, FieldEdit, Level, Pane};
 use crate::assets::Tier;
 use crate::canvas::{Canvas, Rgb};
@@ -226,7 +226,7 @@ fn draw_previews(cv: &mut Canvas, ed: &Editor) {
     // top border so the strip title keeps the full width.
     for (i, (tier, r)) in l.panes.iter().enumerate() {
         if let Some(p) = ed.preview.panes.get(i) {
-            blit(cv, &p.canvas, r.x, r.y);
+            cv.blit(&p.canvas, r.x, r.y);
         }
         let label = format!(" {} ", pane_title(*tier));
         let label = clip(&label, r.w);

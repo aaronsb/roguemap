@@ -98,6 +98,20 @@ impl Camera {
         (ZOOM_NAMES[i], ZOOM_RATIOS[i])
     }
 
+    /// The zoom the inset view shows while the main view is at `main`
+    /// (ADR-004): the other end of the scale, biased toward the close view.
+    /// Zoomed out at all — 1:2, 1:4 or 1:8 — the inset is 1:1; at 1:1 it is
+    /// 1:8. The two views never share a level.
+    pub fn inset_zoom(main: usize) -> usize {
+        let close = ZOOMS.len() - 1;
+        if main % ZOOMS.len() == close { 0 } else { close }
+    }
+
+    /// The ratio the inset draws at while the main view is at `main`.
+    pub fn inset_ratio(main: usize) -> &'static str {
+        ZOOM_RATIOS[Camera::inset_zoom(main)]
+    }
+
     /// Screen position of a world point; `z` is metres.
     pub fn project(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
         let (s, c) = self.angle.sin_cos();
@@ -345,6 +359,26 @@ mod tests {
             }
         }
         assert_eq!(cam.zoom_name(), ("close", "1:1"));
+    }
+
+    #[test]
+    fn the_inset_zoom_is_the_other_end_of_the_scale_biased_toward_the_close_view() {
+        // Zoomed out at all — 1:2, 1:4 or 1:8 — the inset shows 1:1; only
+        // at 1:1 does it show 1:8. The two views never share a level.
+        let close = ZOOMS.len() - 1;
+        for main in 0..ZOOMS.len() {
+            let inset = Camera::inset_zoom(main);
+            assert_eq!(inset, if main == close { 0 } else { close }, "main zoom {main}");
+            assert_ne!(inset, main, "the two views never share a level");
+        }
+        let mut cam = Camera::new();
+        for zoom in 0..ZOOMS.len() {
+            cam.set_zoom(zoom, 120, 40);
+            let (_, ratio) = cam.zoom_name();
+            let want = if ratio == "1:1" { "1:8" } else { "1:1" };
+            assert_eq!(Camera::inset_ratio(zoom), want, "main {ratio}");
+        }
+        assert_eq!([0, 1, 2, 3].map(Camera::inset_ratio), ["1:1", "1:1", "1:1", "1:8"]);
     }
 
     #[test]

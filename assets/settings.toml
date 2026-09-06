@@ -30,6 +30,13 @@ default = 0
 shortcut = "H"
 
 [[setting]]
+key = "inset"
+description = "The second view of ADR-004, following the player at the other end of the zoom scale: which corner it sits in, or off. It needs a hundred columns to show at all."
+label = "Inset"
+values = ["off", "bottom-right", "bottom-left", "top-right", "top-left"]
+default = 1
+
+[[setting]]
 key = "clock"
 description = "Whether the day clock runs."
 label = "Clock"

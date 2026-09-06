@@ -69,14 +69,18 @@ size = { cols = "fill", rows = "fill" }
 
 [[frame]]
 name = "inset"
-description = "The second view of ADR-004 at the other end of the zoom scale; the content is a stub, so the frame never shows yet."
+description = "The second view of ADR-004: the same scene at the other end of the zoom scale, following the player. The Inset settings row picks its corner or turns it off; below a hundred columns there is no room for it."
 title = "inset"
 content = "inset"
 anchor = "bottom_right"
 border = "chrome"
 z = 40
-priority = 40
-show = "never"
+# Below the bars: the inset draws over the tail of the line it sits on
+# rather than taking the whole line away, and yields to any pane opened
+# over it.
+priority = 15
+key = "n"
+show = { min_columns = 100 }
 background = "opaque"
 size = { cols = 0.25, rows = 0.3, min_cols = 20, min_rows = 8 }
 

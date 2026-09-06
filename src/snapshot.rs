@@ -10,7 +10,7 @@ use crate::assets::Assets;
 use crate::blocks::Stack;
 use crate::camera::Camera;
 use crate::canvas::Canvas;
-use crate::frame::FrameCtx;
+use crate::frame::{FrameCtx, Frames};
 use crate::map::{FixtureSpec, Flora, Map, Terrain};
 use crate::render::{Renderer, Scene};
 use crate::settings::Settings;
@@ -54,9 +54,10 @@ impl SnapArgs {
 /// storm that many days first), glyphs (petscii|ascii), rot, deg, zoom,
 /// size, fill (1 for an unbounded world), cx, cy (tile to centre on),
 /// popover (1), fire (1 to place a campfire at centre), player (1), hud
-/// (0|1), worldmap (1) with scale, open (frame names of ui.toml, comma
-/// separated), frames (N, to time rendering), scene (`scale` for the
-/// yardstick of ADR-004: a person, an oak and a house on flat ground).
+/// (0|1), inset (0 off, 1..4 the corner of the inset view), worldmap (1)
+/// with scale, open (frame names of ui.toml, comma separated), frames (N,
+/// to time rendering), scene (`scale` for the yardstick of ADR-004: a
+/// person, an oak and a house on flat ground).
 pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> Canvas {
     let a = SnapArgs::parse(args);
     let (sw, sh) = (w as i32, h as i32);
@@ -81,11 +82,10 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     settings.set("hud", (a.num("hud", 1.0) <= 0.5) as usize);
     let glyphs = a.text("glyphs").unwrap_or("petscii");
     settings.set("glyphs", settings.items[settings.find("glyphs").unwrap()].values.iter().position(|v| v == glyphs).unwrap_or(0));
+    settings.set("inset", a.num("inset", settings.get("inset") as f32) as usize);
     let opts = settings.apply(&mut map, &mut world);
     let mut frames = ui::frames(&assets);
-    let hud = settings.get("hud") == 0;
-    frames.set_open("hud-top", hud);
-    frames.set_open("hud-help", hud);
+    ui::apply_settings(&mut frames, &settings);
     frames.set_open("settings", a.flag("popover"));
     frames.set_open("worldmap", a.flag("worldmap"));
     // open=name,name opens any other frame of ui.toml.
@@ -147,25 +147,68 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         world.light_campfire(&map, mx, my);
     }
     let t = a.num("t", 0.0);
-    // frames=N renders N extra frames and prints the average time per frame.
+    let mut wmap = WorldMap::new();
+    wmap.scale = a.num("scale", 1.0) as usize;
+    wmap.cursor = (cx, cy);
+
+    // One whole frame: the scene, then the overlay frames over it. The
+    // inset view renders inside the second half, so its cost is in the
+    // number `frames=N` prints.
+    let base = FrameCtx { map: &map, world: &world, cam: &cam, ts, settings: &settings, wmap: &wmap, lights: 0, t, focused: false };
+    let one = |cv: &mut Canvas, renderer: &mut Renderer, frames: &mut Frames, t: f32| {
+        let mut lights = 0;
+        if !frames.is_open("worldmap") {
+            renderer.draw(cv, &Scene::new(base.map, base.ts, base.world, base.cam, t), &opts);
+            lights = base.world.lights.len() + renderer.frame_light_count();
+        }
+        let ctx = FrameCtx { lights, t, ..base };
+        frames.update(&ctx);
+        frames.draw(cv, &ctx);
+    };
+
+    // frames=N renders N frames first and prints the average time per frame.
     let repeats = a.num("frames", 0.0) as usize;
     if repeats > 0 {
         let start = Instant::now();
         for i in 0..repeats {
-            renderer.draw(&mut cv, &Scene::new(&map, ts, &world, &cam, t + i as f32 * 0.04), &opts);
+            one(&mut cv, &mut renderer, &mut frames, t + i as f32 * 0.04);
         }
         eprintln!("{:.2} ms/frame", start.elapsed().as_secs_f32() * 1000.0 / repeats as f32);
     }
-    let mut wmap = WorldMap::new();
-    wmap.scale = a.num("scale", 1.0) as usize;
-    wmap.cursor = (cx, cy);
-    let mut lights = 0;
-    if !frames.is_open("worldmap") {
-        renderer.draw(&mut cv, &Scene::new(&map, ts, &world, &cam, t), &opts);
-        lights = world.lights.len() + renderer.frame_light_count();
-    }
-    let ctx = FrameCtx { map: &map, world: &world, cam: &cam, ts, settings: &settings, wmap: &wmap, lights, focused: false };
-    frames.update(&ctx);
-    frames.draw(&mut cv, &ctx);
+    one(&mut cv, &mut renderer, &mut frames, t);
     cv
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::test_assets;
+
+    /// The glyphs of a frame, one line per row, so a title drawn into a
+    /// border can be read back.
+    fn glyphs(cv: &Canvas) -> String {
+        (0..cv.h).map(|y| (0..cv.w).map(|x| cv.cells[(y * cv.w + x) as usize].ch).collect::<String>()).collect::<Vec<String>>().join("\n")
+    }
+
+    fn shot(w: u16, h: u16, extra: &[&str]) -> String {
+        let mut args = vec!["fill=1", "cx=0", "cy=0", "t=3", "tod=12", "player=1"];
+        args.extend_from_slice(extra);
+        glyphs(&render(test_assets(), w, h, &args))
+    }
+
+    #[test]
+    fn the_inset_shows_on_a_wide_screen_at_the_other_end_of_the_scale() {
+        // Zoomed out, the inset is the close view; at 1:1 it is the far one.
+        assert!(shot(168, 71, &["zoom=1"]).contains("inset 1:1"), "the inset is titled with the ratio it draws at");
+        assert!(shot(168, 71, &["zoom=3"]).contains("inset 1:8"), "at 1:1 the inset shows 1:8");
+        // The floor size has no room for it, and the settings row can say
+        // no on any screen.
+        assert!(!shot(80, 25, &["zoom=1"]).contains("inset"), "no inset below a hundred columns");
+        assert!(!shot(168, 71, &["zoom=1", "inset=0"]).contains("inset"), "the settings row turns it off");
+        // The status bar names the zoom by ratio and name, not by index.
+        let hud = shot(168, 71, &["zoom=3"]);
+        let top = hud.lines().next().expect("a frame has rows");
+        assert!(top.contains("45deg  1:1 close  "), "{top}");
+        assert!(!top.contains("zoom "), "{top}");
+    }
 }

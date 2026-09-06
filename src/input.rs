@@ -100,6 +100,7 @@ pub const SCENE: &[Binding] = &[
     Binding { shift: false, keys: &[(Char('I'), Toggle("stats"))], label: "I", help: "stats" },
     Binding { shift: false, keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
     Binding { shift: false, keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
+    Binding { shift: false, keys: &[(Char('n'), Toggle("inset"))], label: "n", help: "inset" },
     Binding { shift: false, keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
 ];
 

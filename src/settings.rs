@@ -23,7 +23,7 @@ pub struct SettingItem {
 }
 
 /// Keys the engine reads; loading fails if one is missing.
-pub const REQUIRED_SETTINGS: [&str; 10] = ["traversal", "view", "glyphs", "hud", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
+pub const REQUIRED_SETTINGS: [&str; 11] = ["traversal", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
 
 pub struct Settings {
     pub items: Vec<SettingItem>,

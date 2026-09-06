@@ -73,17 +73,6 @@ impl Preview {
     }
 }
 
-/// Copy one canvas into another at an offset; cells off the target are
-/// dropped.
-pub fn blit(dst: &mut Canvas, src: &Canvas, x0: i32, y0: i32) {
-    for y in 0..src.h {
-        for x in 0..src.w {
-            let c = src.cells[(y * src.w + x) as usize];
-            dst.put(x0 + x, y0 + y, c.ch, c.fg, c.bg);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,7 +107,7 @@ mod tests {
         let mut dst = Canvas::new(4, 4);
         let mut src = Canvas::new(3, 3);
         src.text(0, 0, "abc", crate::canvas::Rgb(1, 1, 1), crate::canvas::Rgb(0, 0, 0));
-        blit(&mut dst, &src, 2, 3);
+        dst.blit(&src, 2, 3);
         assert_eq!(dst.cells[(3 * 4 + 2) as usize].ch, 'a');
         assert_eq!(dst.cells[(3 * 4 + 3) as usize].ch, 'b');
         let mut pv = Preview::default();

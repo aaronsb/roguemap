@@ -1,16 +1,19 @@
 //! The game's frame contents (ADR-005): the status bar, the help line, the
-//! settings form, the world map, the inset stub, and the inventory, stats,
+//! settings form, the world map, the inset view, and the inventory, stats,
 //! history and conversation panes. `frame.rs` owns the rectangles, the
 //! chrome and the focus; this module says what goes inside them and
 //! supplies the content kind for each row of `assets/ui.toml`.
 
 use std::any::Any;
+use std::cell::RefCell;
 
 use crate::assets::Assets;
+use crate::camera::Camera;
 use crate::canvas::{Canvas, Rgb};
-use crate::frame::{pad, Content, FrameCtx, Frames, Item, List, Rect, Text};
+use crate::frame::{pad, Anchor, Content, FrameCtx, Frames, Item, List, Rect, Text};
 use crate::input::{self, SCENE, SETTINGS};
 use crate::palette::{season_blend, SEASON_NAMES};
+use crate::render::{RenderOptions, Renderer, Scene};
 use crate::settings::Settings;
 
 /// Colours of the text chrome.
@@ -50,7 +53,7 @@ pub fn content_for(kind: &str) -> Option<Box<dyn Content>> {
         "help" => Box::new(Help),
         "settings" => Box::new(SettingsForm),
         "worldmap" => Box::new(WorldMapView),
-        "inset" => Box::new(Inset),
+        "inset" => Box::<Inset>::default(),
         "inventory" => Box::new(List::hinted("carrying nothing")),
         "stats" => Box::new(List::live(stats_items)),
         "history" => Box::new(List::ring(HISTORY, "nothing has happened yet")),
@@ -67,8 +70,27 @@ pub fn frames(assets: &Assets) -> Frames {
     Frames::new(&assets.frames, &content_for).expect("the loader checked every content kind")
 }
 
-/// Status bar: heading, zoom, season, clock, weather, glyph set, the light
-/// count and the tile under the player.
+/// The corners the `inset` settings row offers, in the order of its values
+/// after `off`.
+pub const INSET_CORNERS: [Anchor; 4] = [Anchor::BottomRight, Anchor::BottomLeft, Anchor::TopRight, Anchor::TopLeft];
+
+/// Push the settings rows that govern frames into the frame set: the HUD
+/// bars, and the inset view's corner or its absence. The `ui.toml` show
+/// rule still has the last word, so the inset stays hidden on a screen too
+/// narrow for it whatever the row says.
+pub fn apply_settings(frames: &mut Frames, settings: &Settings) {
+    let hud = settings.get("hud") == 0;
+    frames.set_open("hud-top", hud);
+    frames.set_open("hud-help", hud);
+    let corner = settings.get("inset");
+    frames.set_open("inset", corner != 0);
+    if let Some(&anchor) = corner.checked_sub(1).and_then(|i| INSET_CORNERS.get(i)) {
+        frames.set_anchor("inset", anchor);
+    }
+}
+
+/// Status bar: heading, the zoom as its ratio and name, season, clock,
+/// weather, glyph set, the light count and the tile under the player.
 pub struct Hud;
 
 impl Content for Hud {
@@ -85,10 +107,12 @@ impl Content for Hud {
             .unwrap_or_default();
         let wx = &world.weather;
         let weather = format!("cloud {:.0}% wind {:.0}% precip {:.0}%", wx.cover * 100.0, wx.wind * 100.0, wx.precip * 100.0);
+        let (zoom_name, ratio) = ctx.cam.zoom_name();
         let line = format!(
-            " roguemap  {}deg  zoom {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
+            " roguemap  {}deg  {} {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
             ctx.cam.degrees(),
-            ctx.cam.zoom,
+            ratio,
+            zoom_name,
             SEASON_NAMES[season_blend(world.season).0],
             s,
             world.tod.floor() as i32,
@@ -194,15 +218,67 @@ impl Content for WorldMapView {
     }
 }
 
-/// The second view of ADR-004, at the other end of the zoom scale. Its row
-/// in `ui.toml` shows never until that lands; the placeholder says so.
-pub struct Inset;
+/// The camera, renderer and canvas the inset draws with, at the size of
+/// the frame's interior.
+struct InsetView {
+    w: i32,
+    h: i32,
+    cam: Camera,
+    renderer: Renderer,
+    canvas: Canvas,
+}
+
+impl InsetView {
+    fn new(w: i32, h: i32) -> InsetView {
+        let (w, h) = (w.max(1), h.max(1));
+        InsetView { w, h, cam: Camera::new(), renderer: Renderer::new(w, h), canvas: Canvas::new(w as u16, h as u16) }
+    }
+}
+
+/// The second view of ADR-004: a camera and a renderer of its own over the
+/// same scene, following the player at the other end of the zoom scale.
+/// While the main view is zoomed out at all — 1:2, 1:4 or 1:8 — the inset
+/// shows 1:1; at 1:1 it shows 1:8, so the two never share a level. It draws
+/// the scene alone, with no HUD over it and with antialiasing and the cloud
+/// layer off, then blits into the frame's interior. Which corner it sits in,
+/// or whether it shows at all, is the `inset` settings row.
+///
+/// A content draws from `&self`, so the view it owns sits behind a
+/// `RefCell`; it is rebuilt whenever the interior changes size.
+pub struct Inset {
+    view: RefCell<InsetView>,
+}
+
+impl Default for Inset {
+    fn default() -> Inset {
+        Inset { view: RefCell::new(InsetView::new(1, 1)) }
+    }
+}
 
 impl Content for Inset {
-    fn draw(&self, cv: &mut Canvas, rect: Rect, _ctx: &FrameCtx) {
-        let label = "inset view (ADR-004)";
-        let x = rect.x + (rect.w - label.len() as i32).max(0) / 2;
-        cv.text(x, rect.y + rect.h / 2, label, CHROME.panel_dim, CHROME.panel);
+    fn draw(&self, cv: &mut Canvas, rect: Rect, ctx: &FrameCtx) {
+        if rect.is_empty() {
+            return;
+        }
+        let mut view = self.view.borrow_mut();
+        if (view.w, view.h) != (rect.w, rect.h) {
+            *view = InsetView::new(rect.w, rect.h);
+        }
+        let InsetView { w, h, cam, renderer, canvas } = &mut *view;
+        let (w, h) = (*w, *h);
+        cam.angle = ctx.cam.angle;
+        cam.set_zoom(Camera::inset_zoom(ctx.cam.zoom), w, h);
+        // The inset follows the player wherever they are; with nobody in
+        // the world it keeps the main view's centre.
+        let (mx, my) = ctx.world.player().map(|p| (p.mx, p.my)).unwrap_or_else(|| ctx.cam.center_tile(ctx.map, cv.w, cv.h));
+        cam.look_at(mx, my, ctx.map, w, h);
+        let scene = Scene::new(ctx.map, ctx.ts, ctx.world, cam, ctx.t);
+        renderer.draw(canvas, &scene, &RenderOptions { aa: false, clouds: false });
+        cv.blit(canvas, rect.x, rect.y);
+    }
+
+    fn title(&self, row: &str, ctx: &FrameCtx) -> Option<String> {
+        Some(format!("{row} {}", Camera::inset_ratio(ctx.cam.zoom)).trim().to_string())
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -319,6 +395,7 @@ mod tests {
                 settings: &self.settings,
                 wmap: &self.wmap,
                 lights: 0,
+                t: 0.0,
                 focused: false,
             }
         }
@@ -334,9 +411,14 @@ mod tests {
         for (cols, rows) in [(80, 25), (168, 71)] {
             let l = f.layout(cols, rows, &ctx);
             assert_eq!(l.rect(top), Some(Rect::new(0, 0, cols, 1)), "the status bar spans the top row");
-            assert_eq!(l.rect(help), Some(Rect::new(0, rows - 1, cols, 1)), "the help line sits on the last row");
-            assert_eq!(l.rect(inset), None, "the inset stub never shows");
-            assert_eq!(l.order, vec![top, help]);
+            assert_eq!(l.rect(help), Some(Rect::new(0, rows - 1, cols, 1)), "the help line sits on the last row: the inset ranks below it");
+            if cols < 100 {
+                assert_eq!(l.rect(inset), None, "no room for the inset below a hundred columns");
+                assert_eq!(l.order, vec![top, help]);
+            } else {
+                assert_eq!(l.rect(inset), Some(Rect::new(cols - cols / 4, rows - 21, cols / 4, 21)), "a quarter of the width in the bottom right corner");
+                assert_eq!(l.order, vec![top, help, inset], "and it draws over the tail of the help line");
+            }
         }
         // The popover sizes itself from the settings table and clears both bars.
         let (w, h) = settings_size(&fx.settings);
@@ -367,6 +449,73 @@ mod tests {
         assert_eq!(l.rect(f.index("inventory").unwrap()), None, "the inventory yields to it at 80x25");
         assert_eq!(l.rect(f.index("stats").unwrap()), None);
         assert!(l.rect(f.index("history").unwrap()).is_some(), "history clears it");
+    }
+
+    /// Draw the inset into a canvas of its own and return its cells.
+    fn inset_cells(inset: &Inset, fx: &Fixture, w: i32, h: i32) -> Vec<crate::canvas::Cell> {
+        let mut cv = Canvas::new(w as u16, h as u16);
+        inset.draw(&mut cv, Rect::new(0, 0, w, h), &fx.ctx());
+        cv.cells
+    }
+
+    #[test]
+    fn the_inset_follows_the_player_and_names_the_ratio_it_draws_at() {
+        let mut fx = Fixture::new();
+        fx.world.spawn_player(&fx.map, 2, 2);
+        let inset = Inset::default();
+        let here = inset_cells(&inset, &fx, 24, 10);
+
+        // The main view panning away leaves the inset where it was: it
+        // follows the player, not the camera it hangs off.
+        fx.cam.pan(3, 3);
+        assert_eq!(inset_cells(&inset, &fx, 24, 10), here, "panning the main view does not move the inset");
+
+        // Walking does move it.
+        let p = fx.world.player_mut().expect("the player was spawned");
+        p.mx += 4;
+        p.my += 4;
+        assert_ne!(inset_cells(&inset, &fx, 24, 10), here, "the inset followed the player");
+
+        // The title is the row's plus the ratio, which is the far end of
+        // the scale from the main view.
+        assert_eq!(inset.title("inset", &fx.ctx()), Some("inset 1:1".to_string()), "the main view starts at 1:8");
+        fx.cam.set_zoom(crate::tileset::ZOOMS.len() - 1, 24, 10);
+        assert_eq!(inset.title("inset", &fx.ctx()), Some("inset 1:8".to_string()), "and at 1:1 the inset shows 1:8");
+    }
+
+    #[test]
+    fn the_inset_settings_row_picks_a_corner_or_turns_the_view_off() {
+        let assets = test_assets();
+        let fx = Fixture::new();
+        let ctx = fx.ctx();
+        let mut f = frames(&assets);
+        let mut s = Settings::new(&assets);
+        let at = f.index("inset").expect("inset is a frame");
+        let row = s.find("inset").expect("inset is a settings row");
+        assert_eq!(s.label(row), "bottom-right", "the view starts in the bottom right corner");
+
+        // A quarter of the width by about a third of the height, in the
+        // corner the row names.
+        let (cols, rows) = (168, 71);
+        let (w, h) = (42, 21);
+        let corners = [(cols - w, rows - h), (0, rows - h), (cols - w, 0), (0, 0)];
+        for (i, (x, y)) in corners.iter().enumerate() {
+            s.set("inset", i + 1);
+            apply_settings(&mut f, &s);
+            assert_eq!(f.layout(cols, rows, &ctx).rect(at), Some(Rect::new(*x, *y, w, h)), "{}", s.label(row));
+        }
+
+        // Off hides it, whatever the screen.
+        s.set("inset", 0);
+        apply_settings(&mut f, &s);
+        assert_eq!(f.layout(cols, rows, &ctx).rect(at), None, "off hides the view");
+
+        // And below a hundred columns there is no room for it at all.
+        s.set("inset", 1);
+        apply_settings(&mut f, &s);
+        assert_eq!(f.layout(99, 71, &ctx).rect(at), None, "hidden below a hundred columns");
+        assert!(f.layout(100, 71, &ctx).rect(at).is_some(), "and shown at a hundred");
+        assert_eq!(f.layout(80, 25, &ctx).rect(at), None, "the floor size has no inset");
     }
 
     #[test]

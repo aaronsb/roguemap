@@ -255,6 +255,9 @@ pub struct FrameCtx<'a> {
     pub wmap: &'a WorldMap,
     /// Point lights the frame carried, placed and discovered.
     pub lights: usize,
+    /// Animation time in seconds, for contents that render a scene of their
+    /// own: the inset view builds its `Scene` with it.
+    pub t: f32,
     /// Whether this frame has focus.
     pub focused: bool,
 }
@@ -297,6 +300,14 @@ pub trait Content: Any {
     /// The interior size the content would like, for `auto` extents.
     fn preferred(&self, ctx: &FrameCtx) -> Option<(i32, i32)> {
         let _ = ctx;
+        None
+    }
+
+    /// What the top border says, given the row's own title. A content that
+    /// changes what it shows says so here: the inset view adds the ratio it
+    /// is drawing at.
+    fn title(&self, row: &str, ctx: &FrameCtx) -> Option<String> {
+        let _ = (row, ctx);
         None
     }
 
@@ -412,13 +423,13 @@ impl Layout {
     }
 }
 
-/// Fill and border. The interior is left to the content, which draws over
-/// the fill.
-pub fn draw_chrome(cv: &mut Canvas, rect: Rect, spec: &FrameSpec) {
+/// Fill and border, with `title` in the top edge. The interior is left to
+/// the content, which draws over the fill.
+pub fn draw_chrome(cv: &mut Canvas, rect: Rect, spec: &FrameSpec, title: &str) {
     if rect.is_empty() {
         return;
     }
-    let (fill, edge, title) = (CHROME.panel, CHROME.panel_dim, CHROME.panel_text);
+    let (fill, edge, label) = (CHROME.panel, CHROME.panel_dim, CHROME.panel_text);
     match spec.background {
         Background::None => {}
         Background::Opaque => {
@@ -453,8 +464,8 @@ pub fn draw_chrome(cv: &mut Canvas, rect: Rect, spec: &FrameSpec) {
         cv.put(x1, rect.y, g[2], edge, fill);
         cv.put(rect.x, y1, g[5], edge, fill);
         cv.put(x1, y1, g[7], edge, fill);
-        if !spec.title.is_empty() && rect.w > 5 {
-            cv.text(rect.x + 2, rect.y, &clip(&format!(" {} ", spec.title), rect.w - 3), title, fill);
+        if !title.is_empty() && rect.w > 5 {
+            cv.text(rect.x + 2, rect.y, &clip(&format!(" {title} "), rect.w - 3), label, fill);
         }
     }
 }
@@ -848,6 +859,15 @@ impl Frames {
         }
     }
 
+    /// Move a frame to another corner. The row in `ui.toml` gives the
+    /// anchor a frame starts at; a settings row may move it, as the inset
+    /// view's corner does.
+    pub fn set_anchor(&mut self, name: &str, anchor: Anchor) {
+        if let Some(i) = self.index(name) {
+            self.frames[i].spec.anchor = anchor;
+        }
+    }
+
     /// Flip a frame open or shut; returns whether it is now open.
     pub fn toggle(&mut self, name: &str) -> bool {
         let open = !self.is_open(name);
@@ -898,11 +918,12 @@ impl Frames {
         for &i in &layout.order {
             let Some(rect) = layout.rect(i) else { continue };
             let f = &self.frames[i];
-            draw_chrome(cv, rect, &f.spec);
+            let mut c = *ctx;
+            c.focused = self.focus == Some(i);
+            let title = f.content.title(&f.spec.title, &c);
+            draw_chrome(cv, rect, &f.spec, title.as_deref().unwrap_or(&f.spec.title));
             let inner = rect.inset(f.spec.border.pad());
             if !inner.is_empty() {
-                let mut c = *ctx;
-                c.focused = self.focus == Some(i);
                 f.content.draw(cv, inner, &c);
             }
         }

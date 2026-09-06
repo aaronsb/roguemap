@@ -1145,7 +1145,7 @@ mod tests {
         assert_eq!(a.blocks.len(), 6);
         assert_eq!(a.creatures[0].name, "player");
         assert_eq!(a.tilesets.len(), 2);
-        assert_eq!(a.settings.len(), 10);
+        assert_eq!(a.settings.len(), 11);
         assert_eq!(a.frames.len(), 9);
         let fire = a.light("campfire").unwrap();
         assert!(fire.radius > 0.0 && fire.intensity > 0.0);

@@ -39,6 +39,16 @@ is one command.
   over the water and a range at `RELIEF`, rising all the way and inverted
   by `relief_fraction`; generated heights stay inside that band and a
   tile's height is the field floored to whole metres.
+- **Inset view** (ADR-004, ADR-005). The bias rule sends each main zoom to
+  the other end of the scale: 1:2, 1:4 and 1:8 all put the inset at 1:1
+  and 1:1 puts it at 1:8, so the two views never share a level. The inset
+  follows the player and not the camera it hangs off — panning the main
+  view leaves it where it was, moving the player does not — and its title
+  is the row's plus the ratio it draws at. The `Inset` settings row places
+  it in each of the four corners and turns it off, and the show rule keeps
+  it off a screen under a hundred columns wide. Headless, a 168x71 frame
+  carries the inset and its title, an 80x25 one does not, and the status
+  bar names the zoom by ratio and name.
 - **Settlements.** Every generated building is a rectangle within its
   kind's footprint range and its level range, inside its own plot with a
   tile of margin; every tile of one carries its stack, its ground is

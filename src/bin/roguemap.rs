@@ -40,6 +40,9 @@ struct App {
     renderer: Renderer,
     /// One per value of the glyphs setting.
     tilesets: Vec<Tileset>,
+    /// The corner the inset view was last in, so the toggle key can put it
+    /// back where the settings row had it.
+    inset_corner: usize,
     /// Screen size in cells.
     sw: i32,
     sh: i32,
@@ -57,11 +60,13 @@ impl App {
         cam.set_zoom(Camera::fitting_zoom(&map, sw, sh), sw, sh);
         cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
+        let inset_corner = settings.get("inset").max(1);
         App {
             map,
             world,
             cam,
             settings,
+            inset_corner,
             wmap: WorldMap::new(),
             frames,
             renderer: Renderer::new(sw, sh),
@@ -82,16 +87,18 @@ impl App {
     /// rendered under one.
     fn frame(&mut self, cv: &mut Canvas, t: f32) {
         let opts = self.settings.apply(&mut self.map, &mut self.world);
-        let hud = self.settings.get("hud") == 0;
-        self.frames.set_open("hud-top", hud);
-        self.frames.set_open("hud-help", hud);
+        ui::apply_settings(&mut self.frames, &self.settings);
+        let corner = self.settings.get("inset");
+        if corner != 0 {
+            self.inset_corner = corner;
+        }
         let ts = &self.tilesets[self.settings.get("glyphs")];
         let mut lights = 0;
         if !self.frames.is_open("worldmap") {
             self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t), &opts);
             lights = self.world.lights.len() + self.renderer.frame_light_count();
         }
-        let ctx = FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts, settings: &self.settings, wmap: &self.wmap, lights, focused: false };
+        let ctx = FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts, settings: &self.settings, wmap: &self.wmap, lights, t, focused: false };
         self.frames.update(&ctx);
         self.frames.draw(cv, &ctx);
     }
@@ -105,8 +112,15 @@ impl App {
     }
 
     /// Open or close a frame. Opening the world map puts its cursor on the
-    /// player.
+    /// player. The inset view's own state is the `inset` settings row,
+    /// which is pushed back into the frame set every frame, so its key
+    /// flips the row between off and the corner it was last in.
     fn toggle(&mut self, name: &str) {
+        if name == "inset" {
+            let on = self.settings.get("inset") != 0;
+            self.settings.set("inset", if on { 0 } else { self.inset_corner });
+            return;
+        }
         if self.frames.toggle(name) && name == "worldmap" {
             self.wmap.cursor = self.world.player().map(|e| (e.mx, e.my)).unwrap_or((0, 0));
         }

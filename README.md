@@ -68,10 +68,11 @@ the help line at the bottom of the screen.
 | `I` | the stats pane |
 | `L` | the history log |
 | `C` | the conversation prompt |
+| `n` | the inset view: the same scene at the other end of the zoom scale |
 | `q` or `Esc` | quit |
 
-`Tab`, `m`, `i`, `I`, `L` and `C` each toggle a frame (see below): the same
-key opens and closes it, and `Esc` closes the focused frame and gives the
+`Tab`, `m`, `i`, `I`, `L`, `C` and `n` each toggle a frame (see below): the
+same key opens and closes it, and `Esc` closes the focused frame and gives the
 keys back to the scene.
 
 `Ctrl-C` quits from any mode. In the world map, arrows or `w a s d` /
@@ -95,11 +96,11 @@ size does not fit is dropped.
 
 | Frame | Key | Where | What |
 |---|---|---|---|
-| hud-top | | top row | status: heading, zoom, season, clock, weather, glyph set, lights, the tile under the player |
+| hud-top | | top row | status: heading, the zoom as its ratio and name, season, clock, weather, glyph set, lights, the tile under the player |
 | hud-help | | bottom row | the generated key help |
 | settings | `Tab` or `o` | centre | the settings table, sized to itself |
 | worldmap | `m` | full screen | biomes plotted top-down, with a teleport cursor |
-| inset | | bottom right | the second view of [ADR-004](docs/adr/ADR-004-world-scale.md); a stub, so it never shows yet |
+| inset | `n` | a corner | the second view of [ADR-004](docs/adr/ADR-004-world-scale.md): the same scene at the other end of the zoom scale, following the player; hidden below 100 columns |
 | inventory | `i` | left | what the character carries (empty for now) |
 | stats | `I` | right | position, biome, temperature, height, time, weather |
 | history | `L` | centre | the last fifty events: moves, campfires, teleports, weather changes, what was said |
@@ -108,6 +109,17 @@ size does not fit is dropped.
 `ui.toml` names each frame's toggle key and `src/input.rs` binds it to
 `Toggle(name)`; a test keeps the two in step. `roguemap --snap` takes
 `open=name,name` to render frames headless.
+
+The inset is a second camera and renderer over the same scene, following
+the player at the other end of the zoom scale: while the main view is
+zoomed out at all — 1:2, 1:4 or 1:8 — the inset shows 1:1, and at 1:1 it
+shows 1:8, so the two views never share a level. It draws the scene alone,
+with no HUD over it and with antialiasing and the cloud layer off, and the
+ratio it is drawing at is in its title. It takes a quarter of the screen
+width and about a third of its height, needs a hundred columns to show at
+all, and ranks below the bars, so it covers the tail of the line it sits
+on rather than taking that line away. The `Inset` settings row picks its
+corner or turns it off, and `n` flips between the two.
 
 ## Settings
 
@@ -120,6 +132,7 @@ right change it, `Esc` closes. Every row also has a shortcut key.
 | World view | island (a bounded map floating in the sky) or filled (terrain in every direction) |
 | Glyphs | petscii or ascii |
 | HUD | shown or hidden |
+| Inset | off, bottom-right (default), bottom-left, top-right, top-left |
 | Clock | running or paused |
 | Weather | auto, clear, cloudy, rain, storm |
 | Wind | auto, calm, breeze, windy, gale |
@@ -287,7 +300,8 @@ its footprint gives both scales:
 | far | 2x1 | 1:8 | 1.4 | 0.75 | one glyph |
 
 Heights project through rows per metre, so an 18 m oak stands 108 rows at
-1:1 with the person under its canopy, and 13 rows at 1:8. One keypress
+1:1 with the person under its canopy, and 13 rows at 1:8. The inset view
+always shows the other end of that scale (see Frames). One keypress
 moves one tile at every zoom — a whole block at 1:1, an eighth of one at
 1:8 — and shift with an arrow strides eight tiles.
 
@@ -311,7 +325,8 @@ Keys: `seed`, `size`, `fill` (1 for the filled world), `cx`, `cy` (tile to
 centre on), `zoom`, `rot` (quarter turns), `deg` (degrees), `t` (animation
 time), `tod`, `season`, `cover`, `wind`, `precip` (0..1), `simdays` (run a
 storm that many days first), `glyphs` (petscii or ascii), `player` (1),
-`fire` (1 for a campfire at the centre), `hud` (0 or 1), `popover` (1),
+`fire` (1 for a campfire at the centre), `hud` (0 or 1), `inset` (0 for
+none, 1 to 4 for the corner), `popover` (1),
 `worldmap` (1) with `scale`, `scene` (`scale` for the yardstick frame: a
 person between an oak and a house on flat ground), and `frames` (N, to time
 rendering). The output
