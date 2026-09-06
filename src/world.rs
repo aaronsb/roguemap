@@ -8,7 +8,36 @@
 
 use crate::biome::seasonal_temp;
 use crate::canvas::Rgb;
-use crate::noise::{smoothstep, value};
+use crate::map::{Map, Terrain};
+use crate::noise::{fbm, smoothstep, value};
+
+/// How a kind of light glows; a `Light` is one placed in the world.
+#[derive(Clone, Copy, Debug)]
+pub struct LightSpec {
+    pub color: [f32; 3],
+    pub radius: f32,
+    pub intensity: f32,
+    pub flicker: bool,
+}
+
+impl LightSpec {
+    /// Place this light at a tile, with its colour scaled by `strength`.
+    pub fn at(&self, mx: i32, my: i32, z: i32, strength: f32) -> Light {
+        Light {
+            mx,
+            my,
+            z,
+            color: [self.color[0] * strength, self.color[1] * strength, self.color[2] * strength],
+            radius: self.radius,
+            intensity: self.intensity,
+            flicker: self.flicker,
+        }
+    }
+}
+
+pub const CAMPFIRE: LightSpec = LightSpec { color: [1.0, 0.62, 0.22], radius: 7.5, intensity: 2.2, flicker: true };
+/// A lit window; its strength follows how dark the sky is.
+pub const WINDOW: LightSpec = LightSpec { color: [1.0, 0.75, 0.4], radius: 4.0, intensity: 0.8, flicker: false };
 
 /// A point light in map coordinates.
 #[derive(Clone, Copy, Debug)]
@@ -22,9 +51,16 @@ pub struct Light {
     pub flicker: bool,
 }
 
+/// The creature kind the player is; the creature table comes with the asset
+/// pass.
+pub const PLAYER: u8 = 0;
+
 /// A creature standing on a tile; drawn with the player sprite tier.
 #[derive(Clone, Copy, Debug)]
 pub struct Entity {
+    /// Index into the creature table the asset pass brings; the player is 0.
+    #[allow(dead_code)]
+    pub kind: u8,
     pub mx: i32,
     pub my: i32,
 }
@@ -40,6 +76,7 @@ pub struct Weather {
 
 /// Named weather presets: cover, precipitation.
 pub const WEATHER_PRESETS: [(f32, f32); 4] = [(0.15, 0.0), (0.75, 0.0), (0.9, 0.5), (1.0, 1.0)];
+pub const STORM: usize = 3;
 /// Named wind presets.
 pub const WIND_PRESETS: [f32; 4] = [0.05, 0.2, 0.55, 1.0];
 /// Day lengths in seconds.
@@ -108,10 +145,19 @@ impl World {
             return;
         }
         let ddays = dt / self.day_secs;
+        self.tick_clock(ddays);
+        self.tick_weather(ddays, dt);
+        self.tick_accumulation(ddays);
+    }
+
+    fn tick_clock(&mut self, ddays: f32) {
         self.tod = (self.tod + ddays * 24.0).rem_euclid(24.0);
         self.days += ddays;
+    }
 
-        // Targets: presets when set, else slow noise on the day clock.
+    /// Move the sky toward its targets: presets when set, else slow noise
+    /// on the day clock; then drift the clouds with the wind.
+    fn tick_weather(&mut self, ddays: f32, dt: f32) {
         let n = |k: f32, off: f32| value(self.days * k + off, 0.5, self.seed);
         let (cover_t, precip_t) = match self.weather_preset {
             Some(i) => WEATHER_PRESETS[i],
@@ -136,8 +182,11 @@ impl World {
         let speed = 0.6 * self.weather.wind * self.weather.wind;
         self.cloud_offset.0 += self.weather.wind_dir.cos() * speed * dt;
         self.cloud_offset.1 += self.weather.wind_dir.sin() * speed * dt;
+    }
 
-        // Snow and rain accumulate by temperature band, in day units.
+    /// Snow and rain accumulate by temperature band, in day units, and melt
+    /// or dry with warmth and sun.
+    fn tick_accumulation(&mut self, ddays: f32) {
         let daylight = self.daylight();
         let (precip, season) = (self.weather.precip, self.season);
         for (i, (snow, wet)) in self.snowpack.iter_mut().zip(self.wetness.iter_mut()).enumerate() {
@@ -154,6 +203,16 @@ impl World {
             let dry = (t + 5.0).max(0.5) * 0.08 * ddays * (0.5 + daylight);
             *wet = (*wet - dry).max(0.0);
         }
+    }
+
+    /// Step the clock by some hours, wrapping at midnight.
+    pub fn step_hour(&mut self, hours: f32) {
+        self.tod = (self.tod + hours).rem_euclid(24.0);
+    }
+
+    /// Step the season by a fraction of a year.
+    pub fn step_season(&mut self, quarters: f32) {
+        self.season += quarters;
     }
 
     fn band(temp: f32) -> usize {
@@ -234,6 +293,26 @@ impl World {
         1.05 - self.weather.cover * 0.85
     }
 
+    /// The cloud field at a point already offset by the drift.
+    fn cloud_field(x: f32, y: f32) -> f32 {
+        fbm(x * 0.07, y * 0.07, 0xC10D, 3)
+    }
+
+    /// Cloud density in `[0, 1)` over a map point, after the drift so far.
+    pub fn cloud_density(&self, x: f32, y: f32) -> f32 {
+        let (ox, oy) = self.cloud_offset;
+        Self::cloud_field(x + ox, y + oy)
+    }
+
+    /// How much of the sun a ground point loses to the cloud whose shadow
+    /// falls on it, 0 clear to 1 fully shaded.
+    pub fn cloud_shadow(&self, x: f32, y: f32) -> f32 {
+        let (ox, oy) = self.cloud_offset;
+        let (sx, sy) = self.shadow_shift();
+        let th = self.cloud_threshold();
+        smoothstep(th, th + 0.10, Self::cloud_field(x + ox + sx, y + oy + sy))
+    }
+
     /// Local gust strength at a tile, 0 still to 1 full sway. Calm air gives
     /// an occasional stir in one place; a gale moves everything.
     pub fn gust(&self, mx: f32, my: f32, t: f32) -> f32 {
@@ -250,7 +329,74 @@ impl World {
         Rgb(10, 12, 22).lerp(clear.lerp(overcast, self.weather.cover), self.skylight())
     }
 
-    pub fn add_campfire(&mut self, mx: i32, my: i32, z: i32) {
-        self.lights.push(Light { mx, my, z, color: [1.0, 0.62, 0.22], radius: 7.5, intensity: 2.2, flicker: true });
+    /// Light a campfire on a tile unless it is water or off the map.
+    /// Returns whether one was lit.
+    pub fn light_campfire(&mut self, map: &Map, mx: i32, my: i32) -> bool {
+        match map.get(mx, my) {
+            Some(tile) if tile.terrain != Terrain::Water => {
+                self.lights.push(CAMPFIRE.at(mx, my, tile.draw_z(), 1.0));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Put the player on the nearest land to a position.
+    pub fn spawn_player(&mut self, map: &Map, mx: i32, my: i32) {
+        let (mx, my) = map.nearest_land(mx, my);
+        self.entities.push(Entity { kind: PLAYER, mx, my });
+    }
+
+    /// The player is the first entity, by convention.
+    pub fn player(&self) -> Option<&Entity> {
+        self.entities.first()
+    }
+
+    pub fn player_mut(&mut self) -> Option<&mut Entity> {
+        self.entities.first_mut()
+    }
+
+    /// Move the player one step, refusing water and the map edge. Returns
+    /// whether it moved.
+    pub fn try_move(&mut self, map: &Map, dx: i32, dy: i32) -> bool {
+        let Some(p) = self.player_mut() else { return false };
+        let (nx, ny) = (p.mx + dx, p.my + dy);
+        match map.get(nx, ny) {
+            Some(t) if t.terrain != Terrain::Water => {
+                p.mx = nx;
+                p.my = ny;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_steps_wrap() {
+        let mut w = World::new(1);
+        w.tod = 23.5;
+        w.step_hour(1.0);
+        assert!((w.tod - 0.5).abs() < 1e-5);
+        w.step_hour(-1.0);
+        assert!((w.tod - 23.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn player_refuses_water() {
+        let map = Map::new(32, 32, 7);
+        let mut w = World::new(7);
+        w.spawn_player(&map, 16, 16);
+        let p = *w.player().unwrap();
+        assert_ne!(map.get(p.mx, p.my).unwrap().terrain, Terrain::Water);
+        for _ in 0..200 {
+            w.try_move(&map, 1, 0);
+        }
+        let p = *w.player().unwrap();
+        assert!(map.get(p.mx, p.my).is_some_and(|t| t.terrain != Terrain::Water));
     }
 }

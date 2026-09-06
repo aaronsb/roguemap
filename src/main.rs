@@ -1,162 +1,326 @@
 //! roguemap: an isometric, height-mapped terrain renderer for the terminal.
 
 mod biome;
+mod camera;
 mod canvas;
+mod input;
+mod lighting;
 mod map;
 mod noise;
+mod overlay;
 mod palette;
+mod raster;
 mod render;
 mod settings;
+mod sprite;
+mod sprites;
 mod terminal;
 mod tileset;
+mod ui;
 mod world;
 mod worldmap;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use settings::{Settings, CLOCK, DAY_LENGTH, GLYPHS, HUD, WEATHER, WIND, WORLD};
+use camera::Camera;
+use canvas::Canvas;
+use input::Action;
+use map::Map;
+use render::{RenderOptions, Renderer, Scene};
+use settings::{Settings, AA, CLOCK, CLOUDS, DAY_LENGTH, GLYPHS, HUD, VIEW, WEATHER, WIND};
+use tileset::Tileset;
+use world::World;
+use worldmap::WorldMap;
 
-/// Push the settings table into the objects that act on it.
-fn apply(settings: &Settings, map: &mut map::Map, world: &mut world::World, renderer: &mut render::Renderer) {
+/// Push the settings table into the objects that act on it, and return
+/// what the renderer needs to know.
+fn apply(settings: &Settings, map: &mut Map, world: &mut World) -> RenderOptions {
     map.bounded = !settings.filled();
     world.auto_time = settings.get(CLOCK) == 0;
     world.weather_preset = settings.get(WEATHER).checked_sub(1);
     world.wind_preset = settings.get(WIND).checked_sub(1);
     world.day_secs = world::DAY_LENGTHS[settings.get(DAY_LENGTH)];
-    renderer.show_hud = settings.get(HUD) == 0;
+    RenderOptions { aa: settings.get(AA) == 0, clouds: settings.get(CLOUDS) == 0 }
+}
+
+/// Whether the main loop goes on after a key.
+enum Flow {
+    Continue,
+    Quit,
+}
+
+/// Everything the interactive session holds.
+struct App {
+    map: Map,
+    world: World,
+    cam: Camera,
+    settings: Settings,
+    wmap: WorldMap,
+    renderer: Renderer,
+    tilesets: [Tileset; 2],
+    /// Screen size in cells.
+    sw: i32,
+    sh: i32,
+}
+
+impl App {
+    fn new(seed: u64, size: usize, sw: i32, sh: i32) -> App {
+        let mut map = Map::new(size, size, seed);
+        let mut world = World::new(seed);
+        let settings = Settings::new();
+        apply(&settings, &mut map, &mut world);
+        let mut cam = Camera::new();
+        cam.set_zoom(Camera::fitting_zoom(&map, sw, sh), sw, sh);
+        cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
+        world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
+        App {
+            map,
+            world,
+            cam,
+            settings,
+            wmap: WorldMap::new(),
+            renderer: Renderer::new(sw, sh),
+            tilesets: [Tileset::petscii(), Tileset::ascii()],
+            sw,
+            sh,
+        }
+    }
+
+    fn resize(&mut self, w: i32, h: i32) {
+        self.sw = w;
+        self.sh = h;
+        self.renderer.resize(w, h);
+    }
+
+    /// Draw the current mode into `cv` at animation time `t`.
+    fn frame(&mut self, cv: &mut Canvas, t: f32) {
+        let opts = apply(&self.settings, &mut self.map, &mut self.world);
+        let ts = &self.tilesets[self.settings.get(GLYPHS)];
+        if self.wmap.open {
+            let player = self.world.player().map(|e| (e.mx, e.my));
+            self.wmap.draw(cv, &self.map, &self.world, player);
+            return;
+        }
+        self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t), &opts);
+        if self.settings.get(HUD) == 0 {
+            ui::hud(cv, &self.map, ts, &self.world, &self.cam, self.world.lights.len() + self.renderer.frame_light_count());
+        }
+        if self.settings.open {
+            ui::popover(cv, &self.settings);
+        }
+    }
+
+    /// Dispatch a key press to the table for the current mode.
+    fn handle_key(&mut self, k: KeyEvent) -> Flow {
+        if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
+            return Flow::Quit;
+        }
+        if self.wmap.open {
+            if let Some(a) = input::lookup(input::WORLDMAP, k.code) {
+                self.worldmap_action(a);
+            }
+        } else if self.settings.open {
+            if let Some(a) = input::lookup(input::SETTINGS, k.code) {
+                self.settings_action(a);
+            }
+        } else if let Some(a) = input::lookup(input::SCENE, k.code) {
+            return self.scene_action(a);
+        }
+        Flow::Continue
+    }
+
+    fn scene_action(&mut self, a: Action) -> Flow {
+        let (sw, sh) = (self.sw, self.sh);
+        match a {
+            Action::Quit => return Flow::Quit,
+            Action::OpenSettings => self.settings.open = true,
+            Action::OpenWorldMap => {
+                self.wmap.cursor = self.world.player().map(|e| (e.mx, e.my)).unwrap_or((0, 0));
+                self.wmap.open = true;
+            }
+            Action::Walk(dx, dy) => self.walk((dx, dy)),
+            Action::Pan(dx, dy) => self.cam.pan(dx, dy),
+            Action::Centre => {
+                if let Some(p) = self.world.player() {
+                    self.cam.look_at(p.mx, p.my, &self.map, sw, sh);
+                }
+            }
+            Action::RotateQuarter(steps) => self.cam.rotate(steps, sw, sh),
+            Action::RotateDegrees(deg) => self.cam.rotate_by(deg.to_radians(), sw, sh),
+            Action::Zoom(steps) => self.cam.zoom_by(steps, sw, sh),
+            Action::Cycle(item) => self.settings.cycle(item, 1),
+            Action::StepSeason(q) => self.world.step_season(q),
+            Action::StepHour(h) => self.world.step_hour(h),
+            Action::Campfire => self.light_campfire(),
+            Action::ClearFires => self.world.lights.clear(),
+            _ => {}
+        }
+        Flow::Continue
+    }
+
+    fn settings_action(&mut self, a: Action) {
+        match a {
+            Action::Close => self.settings.open = false,
+            Action::CursorMove(dir) => self.settings.move_cursor(dir),
+            Action::Adjust(dir) => self.settings.cycle(self.settings.cursor, dir),
+            _ => {}
+        }
+    }
+
+    fn worldmap_action(&mut self, a: Action) {
+        match a {
+            Action::Close => self.wmap.open = false,
+            Action::CursorStep(dx, dy) => self.wmap.move_cursor(dx, dy),
+            Action::Extent(dir) => self.wmap.step_extent(dir),
+            Action::Teleport => {
+                let (tx, ty) = self.map.nearest_land(self.wmap.cursor.0, self.wmap.cursor.1);
+                if let Some(p) = self.world.player_mut() {
+                    p.mx = tx;
+                    p.my = ty;
+                }
+                self.cam.look_at(tx, ty, &self.map, self.sw, self.sh);
+                self.wmap.open = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Move the player one step and keep the camera on them. In screen
+    /// space a key moves the figure that way on screen, which is a diagonal
+    /// in map space; in map-axes mode keys follow the map's own north and
+    /// east.
+    fn walk(&mut self, dir: (i32, i32)) {
+        let (dx, dy) = if self.settings.screen_space() { self.cam.screen_dir_to_map(dir.0, dir.1) } else { dir };
+        self.world.try_move(&self.map, dx, dy);
+        self.cam.follow(&self.world, &self.map, self.sw, self.sh);
+    }
+
+    /// Light a campfire on the tile at the screen centre.
+    fn light_campfire(&mut self) {
+        let (mx, my) = self.cam.center_tile(&self.map, self.sw, self.sh);
+        self.world.light_campfire(&self.map, mx, my);
+    }
+}
+
+/// `key=value` arguments of a headless snapshot.
+struct SnapArgs {
+    kv: HashMap<String, String>,
+}
+
+impl SnapArgs {
+    fn parse(args: &[String]) -> SnapArgs {
+        let mut kv = HashMap::new();
+        for a in args {
+            if let Some((k, v)) = a.split_once('=') {
+                kv.insert(k.to_string(), v.to_string());
+            }
+        }
+        SnapArgs { kv }
+    }
+
+    fn num(&self, key: &str, default: f32) -> f32 {
+        self.kv.get(key).and_then(|v| v.parse::<f32>().ok()).unwrap_or(default)
+    }
+
+    fn flag(&self, key: &str) -> bool {
+        self.num(key, 0.0) > 0.5
+    }
+
+    fn text(&self, key: &str) -> Option<&str> {
+        self.kv.get(key).map(|s| s.as_str())
+    }
 }
 
 /// Headless mode: `--snap W H OUT [key=value...]` renders one frame and dumps it.
 /// Keys: seed, t, tod, season, cover, wind, precip (0..1), simdays (run a
 /// storm that many days first), glyphs (petscii|ascii),
-/// rot, zoom, size, fill (1 for an unbounded world), cx, cy (tile to centre
-/// on), popover (1), fire (1 to place a campfire at centre), player (1), hud (0|1).
+/// rot, deg, zoom, size, fill (1 for an unbounded world), cx, cy (tile to
+/// centre on), popover (1), fire (1 to place a campfire at centre), player
+/// (1), hud (0|1), worldmap (1) with scale, frames (N, to time rendering).
 fn snapshot(args: &[String]) -> std::io::Result<()> {
     let w: u16 = args[0].parse().unwrap_or(200);
     let h: u16 = args[1].parse().unwrap_or(60);
     let out = &args[2];
-    let mut kv = std::collections::HashMap::new();
-    for a in &args[3..] {
-        if let Some((k, v)) = a.split_once('=') {
-            kv.insert(k.to_string(), v.to_string());
-        }
-    }
-    let get = |k: &str, d: f32| kv.get(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(d);
-    let seed = get("seed", 7.0) as u64;
-    let size = get("size", 32.0) as usize;
-    let mut map = map::Map::new(size, size, seed);
-    map.bounded = get("fill", 0.0) < 0.5;
+    let a = SnapArgs::parse(&args[3..]);
+    let (sw, sh) = (w as i32, h as i32);
+    let seed = a.num("seed", 7.0) as u64;
+    let size = a.num("size", 32.0) as usize;
+    let mut map = Map::new(size, size, seed);
+    let mut world = World::new(seed);
+
     let mut settings = Settings::new();
-    settings.set(WORLD, (!map.bounded) as usize);
-    settings.open = get("popover", 0.0) > 0.5;
-    let ts = if kv.get("glyphs").map(|s| s.as_str()) == Some("ascii") { tileset::Tileset::ascii() } else { tileset::Tileset::petscii() };
-    let mut cv = canvas::Canvas::new(w, h);
-    let mut renderer = render::Renderer::new(w as i32, h as i32);
-    renderer.show_hud = get("hud", 1.0) > 0.5;
-    let mut cam = render::Camera::new();
-    cam.angle = std::f32::consts::FRAC_PI_4 + get("rot", 0.0) * std::f32::consts::FRAC_PI_2 + get("deg", 0.0).to_radians();
-    let zoom = kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| render::Camera::fitting_zoom(&map, w as i32, h as i32));
-    cam.set_zoom(zoom, &map, w as i32, h as i32);
-    cam.look_at(get("cx", map.w as f32 / 2.0) as i32, get("cy", map.h as f32 / 2.0) as i32, &map, w as i32, h as i32);
-    let mut world = world::World::new(seed);
-    world.tod = get("tod", 13.0);
-    world.season = get("season", 1.0);
-    world.weather.cover = get("cover", 0.3);
-    world.weather.wind = get("wind", 0.2);
-    world.weather.precip = get("precip", 0.0);
-    // Optionally run a storm for some days first to build accumulations.
-    let warm = get("simdays", 0.0);
+    settings.set(VIEW, (a.num("fill", 0.0) >= 0.5) as usize);
+    settings.set(HUD, (a.num("hud", 1.0) <= 0.5) as usize);
+    settings.set(GLYPHS, (a.text("glyphs") == Some("ascii")) as usize);
+    settings.open = a.flag("popover");
+    let opts = apply(&settings, &mut map, &mut world);
+    let tilesets = [Tileset::petscii(), Tileset::ascii()];
+    let ts = &tilesets[settings.get(GLYPHS)];
+
+    let mut cv = Canvas::new(w, h);
+    let mut renderer = Renderer::new(sw, sh);
+    let mut cam = Camera::new();
+    cam.angle = std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians();
+    let zoom = a.kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| Camera::fitting_zoom(&map, sw, sh));
+    cam.set_zoom(zoom, sw, sh);
+    let (cx, cy) = (a.num("cx", map.w as f32 / 2.0) as i32, a.num("cy", map.h as f32 / 2.0) as i32);
+    cam.look_at(cx, cy, &map, sw, sh);
+
+    let (tod, precip) = (a.num("tod", 13.0), a.num("precip", 0.0));
+    world.tod = tod;
+    world.season = a.num("season", 1.0);
+    world.weather.cover = a.num("cover", 0.3);
+    world.weather.wind = a.num("wind", 0.2);
+    world.weather.precip = precip;
+    // Optionally run a storm for some days first to build accumulations,
+    // at one simulated day per second of clock.
+    let warm = a.num("simdays", 0.0);
     if warm > 0.0 {
         world.day_secs = 1.0;
-        world.weather_preset = Some(3);
+        world.weather_preset = Some(world::STORM);
         let mut acc = 0.0;
         while acc < warm {
             world.tick(0.05);
             acc += 0.05;
         }
-        world.tod = get("tod", 13.0);
-        world.weather.precip = get("precip", 0.0);
+        world.tod = tod;
+        world.weather.precip = precip;
     }
-    if get("player", 0.0) > 0.5 {
-        world.entities.push(spawn(&map));
+    if a.flag("player") {
+        world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
     }
-    if get("fire", 0.0) > 0.5 {
-        let (mx, my) = cam.center_tile(&map, w as i32, h as i32);
-        let z = map.get(mx, my).map(|t| t.draw_z()).unwrap_or(map::SEA);
-        world.add_campfire(mx, my, z);
+    if a.flag("fire") {
+        let (mx, my) = cam.center_tile(&map, sw, sh);
+        world.light_campfire(&map, mx, my);
     }
+    let t = a.num("t", 0.0);
     // frames=N renders N extra frames and prints the average time per frame.
-    let frames = get("frames", 0.0) as usize;
+    let frames = a.num("frames", 0.0) as usize;
     if frames > 0 {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         for i in 0..frames {
-            renderer.draw(&mut cv, &map, &ts, &world, &cam, &settings, get("t", 0.0) + i as f32 * 0.04);
+            renderer.draw(&mut cv, &Scene::new(&map, ts, &world, &cam, t + i as f32 * 0.04), &opts);
         }
         eprintln!("{:.2} ms/frame", start.elapsed().as_secs_f32() * 1000.0 / frames as f32);
     }
-    if get("worldmap", 0.0) > 0.5 {
-        let mut wm = worldmap::WorldMap::new();
-        wm.scale = get("scale", 1.0) as usize;
-        wm.cursor = (get("cx", map.w as f32 / 2.0) as i32, get("cy", map.h as f32 / 2.0) as i32);
-        wm.draw(&mut cv, &map, &world, world.entities.first().map(|e| (e.mx, e.my)));
+    if a.flag("worldmap") {
+        let mut wm = WorldMap::new();
+        wm.scale = a.num("scale", 1.0) as usize;
+        wm.cursor = (cx, cy);
+        wm.draw(&mut cv, &map, &world, world.player().map(|e| (e.mx, e.my)));
     } else {
-        renderer.draw(&mut cv, &map, &ts, &world, &cam, &settings, get("t", 0.0));
+        renderer.draw(&mut cv, &Scene::new(&map, ts, &world, &cam, t), &opts);
+        if settings.get(HUD) == 0 {
+            ui::hud(&mut cv, &map, ts, &world, &cam, world.lights.len() + renderer.frame_light_count());
+        }
+        if settings.open {
+            ui::popover(&mut cv, &settings);
+        }
     }
     cv.dump(out)
-}
-
-/// Nearest land tile to a position, searching outward in rings.
-fn nearest_land(map: &map::Map, cx: i32, cy: i32) -> (i32, i32) {
-    for r in 0..64i32 {
-        for dy in -r..=r {
-            for dx in -r..=r {
-                if dx.abs() != r && dy.abs() != r {
-                    continue;
-                }
-                if let Some(t) = map.get(cx + dx, cy + dy) {
-                    if t.terrain != map::Terrain::Water {
-                        return (cx + dx, cy + dy);
-                    }
-                }
-            }
-        }
-    }
-    (cx, cy)
-}
-
-/// Find a land tile near the map centre for the player to start on.
-fn spawn(map: &map::Map) -> world::Entity {
-    let (mx, my) = nearest_land(map, map.w as i32 / 2, map.h as i32 / 2);
-    world::Entity { mx, my }
-}
-
-/// Move the player one step, refusing water and the map edge. In screen
-/// space a key moves the figure that way on screen, which is a diagonal in
-/// map space; in map-axes mode keys follow the map's own north and east.
-fn walk(world: &mut world::World, map: &map::Map, cam: &render::Camera, settings: &Settings, dir: (i32, i32)) {
-    let (dx, dy) = if settings.screen_space() { cam.screen_dir_to_map(dir.0, dir.1) } else { dir };
-    if let Some(p) = world.entities.first_mut() {
-        let (nx, ny) = (p.mx + dx, p.my + dy);
-        if let Some(t) = map.get(nx, ny) {
-            if t.terrain != map::Terrain::Water {
-                p.mx = nx;
-                p.my = ny;
-            }
-        }
-    }
-}
-
-/// Recentre when the player leaves the middle of the screen.
-fn follow(cam: &mut render::Camera, world: &world::World, map: &map::Map, sw: i32, sh: i32) {
-    if let Some(p) = world.entities.first() {
-        let z = map.get(p.mx, p.my).map(|t| t.draw_z()).unwrap_or(0);
-        let (sx, sy) = cam.project_tile(p.mx, p.my, z);
-        if sx < sw / 5 || sx > sw * 4 / 5 || sy < sh / 5 || sy > sh * 4 / 5 {
-            cam.look_at(p.mx, p.my, map, sw, sh);
-        }
-    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -166,19 +330,9 @@ fn main() -> std::io::Result<()> {
     }
     let seed: u64 = argv.get(1).and_then(|s| s.parse().ok()).unwrap_or(7);
     let size: usize = argv.get(2).and_then(|s| s.parse().ok()).unwrap_or(32);
-    let mut map = map::Map::new(size, size, seed);
-    let tilesets = [tileset::Tileset::petscii(), tileset::Tileset::ascii()];
-    let mut settings = Settings::new();
-    let mut wmap = worldmap::WorldMap::new();
 
     let mut term = terminal::Terminal::new()?;
-    let (sw, sh) = (term.width(), term.height());
-    let mut renderer = render::Renderer::new(sw, sh);
-    let mut cam = render::Camera::new();
-    cam.set_zoom(render::Camera::fitting_zoom(&map, sw, sh), &map, sw, sh);
-    cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
-    let mut world = world::World::new(seed);
-    world.entities.push(spawn(&map));
+    let mut app = App::new(seed, size, term.width(), term.height());
 
     let start = Instant::now();
     let frame = Duration::from_millis(40);
@@ -187,101 +341,22 @@ fn main() -> std::io::Result<()> {
         let now = Instant::now();
         let dt = (now - last).as_secs_f32();
         last = now;
-        world.tick(dt);
+        app.world.tick(dt);
         let t = start.elapsed().as_secs_f32();
 
-        let (sw, sh) = (term.width(), term.height());
-        apply(&settings, &mut map, &mut world, &mut renderer);
-        let ts = &tilesets[settings.get(GLYPHS)];
-        if wmap.open {
-            let player = world.entities.first().map(|e| (e.mx, e.my));
-            wmap.draw(term.canvas(), &map, &world, player);
-        } else {
-            renderer.draw(term.canvas(), &map, ts, &world, &cam, &settings, t);
-        }
+        app.frame(term.canvas(), t);
         term.present()?;
 
         while event::poll(frame.saturating_sub(now.elapsed()))? {
             match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press && wmap.open => match k.code {
-                    KeyCode::Esc | KeyCode::Char('m') | KeyCode::Char('q') => wmap.open = false,
-                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => wmap.move_cursor(0, -1),
-                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => wmap.move_cursor(0, 1),
-                    KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('a') => wmap.move_cursor(-1, 0),
-                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('d') => wmap.move_cursor(1, 0),
-                    KeyCode::Char('z') => wmap.scale = (wmap.scale + 1) % worldmap::SCALES.len(),
-                    KeyCode::Char('Z') => wmap.scale = (wmap.scale + worldmap::SCALES.len() - 1) % worldmap::SCALES.len(),
-                    KeyCode::Enter | KeyCode::Char('t') => {
-                        let (tx, ty) = nearest_land(&map, wmap.cursor.0, wmap.cursor.1);
-                        if let Some(p) = world.entities.first_mut() {
-                            p.mx = tx;
-                            p.my = ty;
-                        }
-                        cam.look_at(tx, ty, &map, sw, sh);
-                        wmap.open = false;
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    if let Flow::Quit = app.handle_key(k) {
+                        return Ok(());
                     }
-                    _ => {}
-                },
-                Event::Key(k) if k.kind == KeyEventKind::Press && settings.open => match k.code {
-                    KeyCode::Esc | KeyCode::Tab | KeyCode::Char('q') => settings.open = false,
-                    KeyCode::Up | KeyCode::Char('k') => settings.cursor = (settings.cursor + settings::ITEMS.len() - 1) % settings::ITEMS.len(),
-                    KeyCode::Down | KeyCode::Char('j') => settings.cursor = (settings.cursor + 1) % settings::ITEMS.len(),
-                    KeyCode::Left | KeyCode::Char('h') => settings.cycle(settings.cursor, -1),
-                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char(' ') => settings.cycle(settings.cursor, 1),
-                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    _ => {}
-                },
-                Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
-                    KeyCode::Tab | KeyCode::Char('o') => settings.open = true,
-                    KeyCode::Char('m') => {
-                        wmap.cursor = world.entities.first().map(|e| (e.mx, e.my)).unwrap_or((0, 0));
-                        wmap.open = true;
-                    }
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    KeyCode::Left => cam.ox += (2 * cam.hw) as f32,
-                    KeyCode::Right => cam.ox -= (2 * cam.hw) as f32,
-                    KeyCode::Up => cam.oy += (2 * cam.hh) as f32,
-                    KeyCode::Down => cam.oy -= (2 * cam.hh) as f32,
-                    KeyCode::Char('(') => cam.rotate_by(-5.0f32.to_radians(), sw, sh),
-                    KeyCode::Char(')') => cam.rotate_by(5.0f32.to_radians(), sw, sh),
-                    KeyCode::Char('z') => cam.set_zoom(cam.zoom + 1, &map, sw, sh),
-                    KeyCode::Char('Z') => cam.set_zoom(cam.zoom + tileset::ZOOMS.len() - 1, &map, sw, sh),
-                    KeyCode::Char('c') => {
-                        if let Some(p) = world.entities.first() {
-                            cam.look_at(p.mx, p.my, &map, sw, sh);
-                        }
-                    }
-                    KeyCode::Char('w') | KeyCode::Char('k') => { walk(&mut world, &map, &cam, &settings, (0, -1)); follow(&mut cam, &world, &map, sw, sh); }
-                    KeyCode::Char('s') | KeyCode::Char('j') => { walk(&mut world, &map, &cam, &settings, (0, 1)); follow(&mut cam, &world, &map, sw, sh); }
-                    KeyCode::Char('a') | KeyCode::Char('h') => { walk(&mut world, &map, &cam, &settings, (-1, 0)); follow(&mut cam, &world, &map, sw, sh); }
-                    KeyCode::Char('d') | KeyCode::Char('l') => { walk(&mut world, &map, &cam, &settings, (1, 0)); follow(&mut cam, &world, &map, sw, sh); }
-                    KeyCode::Char('r') => cam.rotate(1, &map, sw, sh),
-                    KeyCode::Char('R') => cam.rotate(-1, &map, sw, sh),
-                    KeyCode::Char('g') => settings.cycle(GLYPHS, 1),
-                    KeyCode::Char('v') => settings.cycle(WORLD, 1),
-                    KeyCode::Char('[') => world.season -= 0.25,
-                    KeyCode::Char(']') => world.season += 0.25,
-                    KeyCode::Char(',') => world.tod = (world.tod - 1.0).rem_euclid(24.0),
-                    KeyCode::Char('.') => world.tod = (world.tod + 1.0).rem_euclid(24.0),
-                    KeyCode::Char('p') => settings.cycle(CLOCK, 1),
-                    KeyCode::Char('W') => settings.cycle(WEATHER, 1),
-                    KeyCode::Char('f') => {
-                        let (mx, my) = cam.center_tile(&map, sw, sh);
-                        if let Some(tile) = map.get(mx, my) {
-                            if tile.terrain != map::Terrain::Water {
-                                world.add_campfire(mx, my, tile.draw_z());
-                            }
-                        }
-                    }
-                    KeyCode::Char('F') => world.lights.clear(),
-                    KeyCode::Char('H') => settings.cycle(HUD, 1),
-                    _ => {}
-                },
+                }
                 Event::Resize(w, h) => {
                     term.resize(w, h);
-                    renderer.resize(w as i32, h as i32);
+                    app.resize(w as i32, h as i32);
                 }
                 _ => {}
             }

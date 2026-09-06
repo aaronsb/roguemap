@@ -36,26 +36,35 @@ Anything from 80x25 upward works.
 
 ## Keys
 
+The table follows the binding table in `src/input.rs`, which also generates
+the help line at the bottom of the screen.
+
 | Key | Action |
 |---|---|
 | `Tab` or `o` | open the settings window |
-| `m` | open the world map; arrows move the cursor, `z` changes extent, `Enter` teleports |
+| `m` | open the world map |
 | `w a s d` or `h j k l` | walk the player; the camera follows |
-| `v` | toggle island / filled world view |
-| arrows | pan |
+| arrows | pan by one tile |
 | `c` | centre on the player |
 | `r` / `R` | rotate a quarter turn about the screen centre |
 | `(` / `)` | rotate five degrees |
 | `z` / `Z` | zoom in / out through seven tile sizes, 2x1 to 16x4 cells |
+| `v` | toggle island / filled world view |
 | `g` | toggle PETSCII / ASCII glyphs |
 | `[` / `]` | step the season by a quarter |
 | `,` / `.` | step the clock by an hour |
-| `p` | pause or resume the clock (a day is two minutes) |
-| `W` | cycle weather: clear, rain, snow |
+| `p` | pause or resume the clock (a day is ten minutes by default) |
+| `W` | cycle weather: auto, clear, cloudy, rain, storm |
 | `f` | light a campfire at the screen centre |
 | `F` | put out all fires |
 | `H` | toggle the HUD |
-| `q` | quit |
+| `q` or `Esc` | quit |
+
+`Ctrl-C` quits from any mode. In the world map, arrows or `w a s d` /
+`h j k l` move the cursor, `z` / `Z` change the extent, `Enter` or `t`
+teleports, and `m`, `Esc` or `q` close it. In the settings window, up and
+down (or `k` / `j`) pick a row, left and right (or `h` / `l`, `Enter`,
+space) change it, and `Esc`, `Tab` or `q` close it.
 
 ## Settings
 
@@ -71,7 +80,7 @@ right change it, `Esc` closes. Every row also has a shortcut key.
 | Clock | running or paused |
 | Weather | auto, clear, cloudy, rain, storm |
 | Wind | auto, calm, breeze, windy, gale |
-| Day length | 2 minutes, 10 minutes, 1 hour, 24 hours |
+| Day length | 2 minutes, 10 minutes (default), 1 hour, 24 hours |
 | Cloud layer | shown or hidden |
 | Antialias | on or off (PETSCII glyphs only) |
 
@@ -125,10 +134,14 @@ conifers and broadleaf canopies twenty-odd cells wide at 16x4. The player is
 roguemap --snap WIDTH HEIGHT out.cells key=value...
 ```
 
-Keys: `seed`, `size`, `t`, `tod`, `season`, `weather`, `glyphs`, `rot`,
-`zoom`, `fire`, `hud`. The output lists one cell per line as codepoint and
-foreground and background colour; `tools/cells2png.py` renders it with the
-Unscii font.
+Keys: `seed`, `size`, `fill` (1 for the filled world), `cx`, `cy` (tile to
+centre on), `zoom`, `rot` (quarter turns), `deg` (degrees), `t` (animation
+time), `tod`, `season`, `cover`, `wind`, `precip` (0..1), `simdays` (run a
+storm that many days first), `glyphs` (petscii or ascii), `player` (1),
+`fire` (1 for a campfire at the centre), `hud` (0 or 1), `popover` (1),
+`worldmap` (1) with `scale`, and `frames` (N, to time rendering). The output
+lists one cell per line as codepoint and foreground and background colour;
+`tools/cells2png.py` renders it with the Unscii font.
 
 ## Canonical look
 

@@ -1,10 +1,14 @@
-//! Climate, biomes, tree species and building materials as data tables.
+//! Climate, biomes, tree species, building kinds and materials as data
+//! tables.
 //!
 //! Climate is temperature and precipitation. A simplified Köppen scheme maps
 //! the pair to a biome, and the biome names its ground colour, how many trees
 //! it carries, which species, and what its buildings are made of.
 
 use crate::canvas::Rgb;
+use crate::map::Terrain;
+use crate::palette::season_blend;
+use crate::world::{LightSpec, WINDOW};
 
 /// Shape a species is drawn with; the tileset builds sprites per form.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -17,11 +21,33 @@ pub enum Form {
 
 pub const FORMS: [Form; 4] = [Form::Pine, Form::Broadleaf, Form::Scrub, Form::Cactus];
 
+/// Which of a form's sprite variants a species draws. Each form has four
+/// variants per zoom: a smaller pair then a larger pair.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SizeClass {
+    /// Always the smaller pair.
+    Small,
+    /// Either pair, chosen by the tile's variant.
+    Mixed,
+    /// Always the larger pair.
+    Large,
+}
+
+impl SizeClass {
+    /// Index of the first sprite of the pair a tile variant draws from.
+    pub fn pair(self, variant: u8) -> usize {
+        match self {
+            SizeClass::Small => 0,
+            SizeClass::Large => 2,
+            SizeClass::Mixed => (variant as usize / 2 % 2) * 2,
+        }
+    }
+}
+
 pub struct Species {
     pub name: &'static str,
     pub form: Form,
-    /// Size relative to the zoom's base tree size.
-    pub scale: f32,
+    pub size_class: SizeClass,
     /// Canopy colour by season: spring, summer, autumn, winter.
     pub canopy: [Rgb; 4],
     pub canopy_glyph: [Rgb; 4],
@@ -32,40 +58,42 @@ const fn evergreen(c: Rgb, g: Rgb) -> ([Rgb; 4], [Rgb; 4]) {
 }
 
 macro_rules! species {
-    ($name:expr, $form:expr, $scale:expr, ev $c:expr, $g:expr) => {{
+    ($name:expr, $form:expr, $size:expr, ev $c:expr, $g:expr) => {{
         let (canopy, canopy_glyph) = evergreen($c, $g);
-        Species { name: $name, form: $form, scale: $scale, canopy, canopy_glyph }
+        Species { name: $name, form: $form, size_class: $size, canopy, canopy_glyph }
     }};
-    ($name:expr, $form:expr, $scale:expr, $c:expr, $g:expr) => {
-        Species { name: $name, form: $form, scale: $scale, canopy: $c, canopy_glyph: $g }
+    ($name:expr, $form:expr, $size:expr, $c:expr, $g:expr) => {
+        Species { name: $name, form: $form, size_class: $size, canopy: $c, canopy_glyph: $g }
     };
 }
+
+use SizeClass::{Large, Mixed, Small};
 
 pub const SPECIES: &[Species] = &[
     species!(
         "oak",
         Form::Broadleaf,
-        1.0,
+        Mixed,
         [Rgb(72, 142, 60), Rgb(40, 110, 50), Rgb(180, 100, 40), Rgb(105, 82, 64)],
         [Rgb(130, 200, 100), Rgb(80, 160, 80), Rgb(230, 150, 60), Rgb(140, 118, 96)]
     ),
     species!(
         "birch",
         Form::Broadleaf,
-        0.8,
+        Small,
         [Rgb(120, 190, 90), Rgb(90, 160, 70), Rgb(220, 180, 60), Rgb(150, 140, 130)],
         [Rgb(180, 230, 140), Rgb(150, 210, 120), Rgb(250, 220, 110), Rgb(210, 205, 200)]
     ),
-    species!("pine", Form::Pine, 1.0, ev Rgb(30, 92, 50), Rgb(70, 140, 80)),
-    species!("spruce", Form::Pine, 1.3, ev Rgb(22, 72, 46), Rgb(56, 118, 74)),
-    species!("juniper", Form::Scrub, 0.5, ev Rgb(70, 110, 70), Rgb(120, 160, 110)),
-    species!("sagebrush", Form::Scrub, 0.4, ev Rgb(130, 140, 110), Rgb(180, 190, 150)),
-    species!("saguaro", Form::Cactus, 0.9, ev Rgb(78, 138, 78), Rgb(150, 200, 130)),
-    species!("kapok", Form::Broadleaf, 1.5, ev Rgb(30, 100, 45), Rgb(70, 150, 80)),
+    species!("pine", Form::Pine, Mixed, ev Rgb(30, 92, 50), Rgb(70, 140, 80)),
+    species!("spruce", Form::Pine, Large, ev Rgb(22, 72, 46), Rgb(56, 118, 74)),
+    species!("juniper", Form::Scrub, Small, ev Rgb(70, 110, 70), Rgb(120, 160, 110)),
+    species!("sagebrush", Form::Scrub, Small, ev Rgb(130, 140, 110), Rgb(180, 190, 150)),
+    species!("saguaro", Form::Cactus, Mixed, ev Rgb(78, 138, 78), Rgb(150, 200, 130)),
+    species!("kapok", Form::Broadleaf, Large, ev Rgb(30, 100, 45), Rgb(70, 150, 80)),
     species!(
         "acacia",
         Form::Broadleaf,
-        0.9,
+        Mixed,
         [Rgb(110, 140, 60), Rgb(100, 130, 55), Rgb(130, 120, 50), Rgb(120, 110, 60)],
         [Rgb(170, 200, 100), Rgb(160, 190, 90), Rgb(190, 170, 80), Rgb(170, 160, 100)]
     ),
@@ -88,6 +116,43 @@ pub const MATERIALS: &[Material] = &[
 pub const ADOBE: usize = 0;
 pub const WOOD: usize = 1;
 pub const STONE: usize = 2;
+
+/// What a building kind is made of.
+#[derive(Clone, Copy, Debug)]
+pub enum MaterialRule {
+    /// The tile's local material: the biome's, or stone in the highlands.
+    Local,
+    /// One material everywhere.
+    #[allow(dead_code)]
+    Fixed(usize),
+}
+
+/// A kind of building: where it is placed, what it is made of and whether
+/// it glows at night.
+pub struct BuildingKind {
+    /// Name, the key the asset pass will load the row by.
+    #[allow(dead_code)]
+    pub name: &'static str,
+    /// Settlement field value a tile needs before one may stand on it.
+    pub settle_min: f32,
+    /// Percentage of qualifying tiles that carry one.
+    pub chance: u64,
+    /// Terrain kinds it stands on.
+    pub terrain: &'static [Terrain],
+    pub material: MaterialRule,
+    pub light: Option<LightSpec>,
+}
+
+pub const HOUSE: usize = 0;
+
+pub const BUILDINGS: &[BuildingKind] = &[BuildingKind {
+    name: "house",
+    settle_min: 0.64,
+    chance: 14,
+    terrain: &[Terrain::Grass, Terrain::Dirt, Terrain::Sand],
+    material: MaterialRule::Local,
+    light: Some(WINDOW),
+}];
 
 /// Ground cover kinds; the tileset carries a glyph triple for each.
 pub const COVER_GRASS: usize = 0;
@@ -128,6 +193,8 @@ pub const BIOMES: &[Biome] = &[
 
 /// Where a prop may stand.
 pub struct Prop {
+    /// Name, the key the asset pass will load the row by.
+    #[allow(dead_code)]
     pub name: &'static str,
     /// Rows for the mid zooms and for the closest zooms.
     pub small: &'static [&'static str],
@@ -137,14 +204,14 @@ pub struct Prop {
     /// Chance per 4x4 sub-cell of a qualifying tile.
     pub density: f32,
     /// Terrain kinds the prop stands on.
-    pub terrain: &'static [crate::map::Terrain],
+    pub terrain: &'static [Terrain],
     /// Ground cover kinds it needs, empty for any.
     pub cover: &'static [usize],
     /// Whether the tile must touch water.
     pub near_water: bool,
 }
 
-use crate::map::Terrain as T;
+use Terrain as T;
 
 pub const PROPS: &[Prop] = &[
     Prop { name: "boulder", small: &["o"], large: &[" ▄▄ ", "████"], color: Rgb(118, 118, 124), glyph: Rgb(150, 150, 158), density: 0.05, terrain: &[T::Rock, T::Dirt, T::Snow], cover: &[], near_water: false },
@@ -183,11 +250,24 @@ pub fn classify(temp: f32, precip: f32) -> usize {
     }
 }
 
+/// Pick from a table of `(index, weight)` pairs by a roll, returning the
+/// chosen index; zero when the table is empty.
+pub fn weighted_pick(table: &[(usize, u8)], roll: u64) -> usize {
+    let total: u32 = table.iter().map(|&(_, w)| w as u32).sum();
+    let mut pick = (roll % total.max(1) as u64) as u32;
+    for &(ix, w) in table {
+        if pick < w as u32 {
+            return ix;
+        }
+        pick -= w as u32;
+    }
+    0
+}
+
 /// Blend a four-season table at a continuous season value in `[0, 4)`.
 pub fn seasonal(table: &[Rgb; 4], season: f32) -> Rgb {
-    let s = season.rem_euclid(4.0);
-    let i = s.floor() as usize % 4;
-    table[i].lerp(table[(i + 1) % 4], s - s.floor())
+    let (i, j, f) = season_blend(season);
+    table[i].lerp(table[j], f)
 }
 
 /// Seasonal modulation of a biome's summer ground colour.
@@ -211,7 +291,6 @@ pub fn vigour(annual: f32, season: f32) -> f32 {
 pub fn seasonal_temp(annual: f32, season: f32) -> f32 {
     annual + 9.0 * ((season - 1.0) * std::f32::consts::FRAC_PI_2).cos()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -238,6 +317,22 @@ mod tests {
                 assert!(sp < SPECIES.len() && w > 0, "{}", b.name);
             }
         }
+        for k in BUILDINGS {
+            if let MaterialRule::Fixed(m) = k.material {
+                assert!(m < MATERIALS.len(), "{}", k.name);
+            }
+            assert!(!k.terrain.is_empty(), "{}", k.name);
+        }
+    }
+
+    #[test]
+    fn weighted_pick_honours_weights_and_empty_tables() {
+        let table = [(4, 1), (9, 3)];
+        assert_eq!(weighted_pick(&table, 0), 4);
+        assert_eq!(weighted_pick(&table, 1), 9);
+        assert_eq!(weighted_pick(&table, 3), 9);
+        assert_eq!(weighted_pick(&table, 4), 4);
+        assert_eq!(weighted_pick(&[], 17), 0);
     }
 
     #[test]

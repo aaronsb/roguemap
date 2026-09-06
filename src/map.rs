@@ -5,13 +5,14 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::biome::{self, BIOMES};
+use crate::biome::{self, Biome, BuildingKind, Material, Species, BIOMES, BUILDINGS, HOUSE, MATERIALS, SPECIES, STONE};
 use crate::noise::{fbm, hash};
 
 /// Tiles below this height are water; the water surface is drawn at this level.
 pub const SEA: i32 = 3;
-/// Tiles at or above this height are snow-covered rock.
-pub const SNOW: i32 = 12;
+/// Height from which terrain is bare rock; the treeline sits a little below
+/// it and buildings up there are built of stone.
+pub const ALPINE_Z: i32 = 12;
 pub const MAX_Z: i32 = 14;
 
 const CHUNK: i32 = 32;
@@ -28,24 +29,66 @@ pub enum Terrain {
     Snow,
 }
 
+impl Terrain {
+    /// Index into the plain-surface tables for sand, dirt, rock and snow;
+    /// water and grass have bespoke rules.
+    pub fn surface(self) -> Option<usize> {
+        match self {
+            Terrain::Sand => Some(0),
+            Terrain::Dirt => Some(1),
+            Terrain::Rock => Some(2),
+            Terrain::Snow => Some(3),
+            Terrain::Water | Terrain::Grass => None,
+        }
+    }
+}
+
+/// A tree standing on a tile.
+#[derive(Clone, Copy, Debug)]
+pub struct Flora {
+    /// Index into the species table.
+    pub species: u8,
+    /// Sprite variant, 0..=3.
+    pub variant: u8,
+}
+
+impl Flora {
+    pub fn species(&self) -> &'static Species {
+        &SPECIES[self.species as usize % SPECIES.len()]
+    }
+}
+
+/// A building standing on a tile.
+#[derive(Clone, Copy, Debug)]
+pub struct Structure {
+    /// Index into the building table.
+    pub kind: u8,
+    /// Sprite variant, 0..=3.
+    pub variant: u8,
+}
+
+impl Structure {
+    pub fn kind(&self) -> &'static BuildingKind {
+        &BUILDINGS[self.kind as usize % BUILDINGS.len()]
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Tile {
     pub z: i32,
     pub terrain: Terrain,
-    /// Tree sprite variant, if a tree stands here.
-    pub tree: Option<u8>,
+    pub tree: Option<Flora>,
     /// Grass tuft density, 0..=3.
     pub grass: u8,
     /// Per-tile random seed for stable texture and sway phase.
     pub seed: u32,
     /// For water: tiles in the connected body, capped. Small ponds stay calm.
-    pub body: u16,
+    pub body_size: u16,
     /// Index into the biome table.
     pub biome: u8,
-    /// Species index for the tree here, if any.
-    pub species: u8,
-    /// Building sprite variant, if a building stands here.
-    pub building: Option<u8>,
+    pub building: Option<Structure>,
+    /// Index into the material table: what is built here is made of this.
+    pub material: u8,
     /// Annual mean temperature, degrees Celsius.
     pub temp: i8,
     /// Whether a cardinal neighbour is water.
@@ -59,6 +102,32 @@ impl Tile {
     pub fn draw_z(&self) -> i32 {
         self.z.max(SEA)
     }
+
+    pub fn biome(&self) -> &'static Biome {
+        &BIOMES[self.biome as usize % BIOMES.len()]
+    }
+
+    /// The species of the tree here, if any. Read by the asset pass's
+    /// flora tables.
+    #[allow(dead_code)]
+    pub fn species(&self) -> Option<&'static Species> {
+        self.tree.map(|f| f.species())
+    }
+
+    pub fn material(&self) -> &'static Material {
+        &MATERIALS[self.material as usize % MATERIALS.len()]
+    }
+}
+
+/// Climate at a tile: smooth and floored height, annual mean temperature,
+/// precipitation and the biome they classify to.
+#[derive(Clone, Copy, Debug)]
+pub struct Climate {
+    pub hf: f32,
+    pub z: i32,
+    pub temp: f32,
+    pub precip: f32,
+    pub biome: usize,
 }
 
 pub struct Map {
@@ -76,31 +145,95 @@ struct Chunk {
     max_z: i32,
 }
 
+/// Terrain kind from the height and climate at a tile.
+fn terrain_for(z: i32, temp: f32, near_water: bool, patch: f32) -> Terrain {
+    if z < SEA {
+        Terrain::Water
+    } else if z == SEA || (z == SEA + 1 && near_water) {
+        Terrain::Sand
+    } else if temp <= -16.0 {
+        Terrain::Snow
+    } else if z >= ALPINE_Z - 2 {
+        Terrain::Rock
+    } else if patch > 0.72 {
+        Terrain::Dirt
+    } else {
+        Terrain::Grass
+    }
+}
+
+/// Local building material: stone on rock and near the alpine zone,
+/// otherwise the biome's.
+fn material_for(terrain: Terrain, z: i32, biome: &Biome) -> usize {
+    if terrain == Terrain::Rock || z >= ALPINE_Z - 3 {
+        STONE
+    } else {
+        biome.material
+    }
+}
+
 impl Map {
     pub fn new(w: usize, h: usize, seed: u64) -> Map {
         Map { w, h, seed, bounded: true, chunks: RefCell::new(HashMap::new()) }
     }
 
-    /// The tile at a position, generating its chunk on first touch.
-    pub fn get(&self, x: i32, y: i32) -> Option<Tile> {
-        if self.bounded && (x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32) {
-            return None;
+    /// Whether a position exists on this map.
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        !self.bounded || (x >= 0 && y >= 0 && x < self.w as i32 && y < self.h as i32)
+    }
+
+    /// The nearest position that exists on this map.
+    pub fn clamp(&self, x: i32, y: i32) -> (i32, i32) {
+        if self.bounded {
+            (x.clamp(0, self.w as i32 - 1), y.clamp(0, self.h as i32 - 1))
+        } else {
+            (x, y)
         }
+    }
+
+    /// Run `f` on the chunk containing a position, generating it on first
+    /// touch.
+    fn with_chunk<R>(&self, x: i32, y: i32, f: impl FnOnce(&Chunk) -> R) -> R {
         let key = (x.div_euclid(CHUNK), y.div_euclid(CHUNK));
         let mut chunks = self.chunks.borrow_mut();
         let chunk = chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1));
-        Some(chunk.tiles[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize])
+        f(chunk)
+    }
+
+    /// The tile at a position, generating its chunk on first touch.
+    pub fn get(&self, x: i32, y: i32) -> Option<Tile> {
+        if !self.contains(x, y) {
+            return None;
+        }
+        Some(self.with_chunk(x, y, |c| c.tiles[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize]))
     }
 
     /// Tallest drawn height in the chunk containing a position, generating
     /// it if needed; zero outside a bounded map.
     pub fn ceiling(&self, x: i32, y: i32) -> i32 {
-        if self.bounded && (x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32) {
+        if !self.contains(x, y) {
             return 0;
         }
-        let key = (x.div_euclid(CHUNK), y.div_euclid(CHUNK));
-        let mut chunks = self.chunks.borrow_mut();
-        chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1)).max_z
+        self.with_chunk(x, y, |c| c.max_z)
+    }
+
+    /// Nearest land tile to a position, searching outward in rings.
+    pub fn nearest_land(&self, cx: i32, cy: i32) -> (i32, i32) {
+        for r in 0..64i32 {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs() != r && dy.abs() != r {
+                        continue;
+                    }
+                    if let Some(t) = self.get(cx + dx, cy + dy) {
+                        if t.terrain != Terrain::Water {
+                            return (cx + dx, cy + dy);
+                        }
+                    }
+                }
+            }
+        }
+        (cx, cy)
     }
 
     /// Smooth height at a fractional position, in height units. A slow
@@ -114,7 +247,7 @@ impl Map {
         let n = ((n - 0.5) * 1.6 + 0.5).clamp(0.0, 0.999);
         let mut z = n.powf(1.15) * (MAX_Z as f32 + 1.0);
 
-        if z > SEA as f32 + 1.0 && z < (SNOW - 2) as f32 {
+        if z > SEA as f32 + 1.0 && z < (ALPINE_Z - 2) as f32 {
             let r = crate::noise::value(xf * 0.012 + 5.0, yf * 0.012 + 9.0, self.seed ^ 0x51E);
             let d = (r - 0.5).abs();
             if d < 0.008 {
@@ -148,7 +281,6 @@ impl Map {
         (fbm(xf * 0.6 + 3.0, yf * 0.6 + 1.0, self.seed ^ 0xD7, octaves) - 0.5) * 0.9
     }
 
-
     /// Tile height: the smooth field floored at the tile centre.
     pub fn height(&self, x: i32, y: i32) -> i32 {
         self.height_smooth(x as f32 + 0.5, y as f32 + 0.5).floor() as i32
@@ -167,7 +299,7 @@ impl Map {
             Terrain::Sand
         } else if temp <= -16.0 {
             Terrain::Snow
-        } else if h >= (SNOW - 2) as f32 {
+        } else if h >= (ALPINE_Z - 2) as f32 {
             Terrain::Rock
         } else if self.patch(xf, yf) > 0.72 {
             Terrain::Dirt
@@ -195,60 +327,46 @@ impl Map {
         ((big * 0.8 + local * 0.2 - 0.5) * 1.6 + 0.5).clamp(0.0, 1.0) * 100.0
     }
 
-    /// Classify one tile from the height field and climate around it.
-    fn tile(&self, x: i32, y: i32) -> Tile {
+    /// Height and climate at a tile, without generating its chunk.
+    pub fn climate(&self, x: i32, y: i32) -> Climate {
         let hf = self.height_smooth(x as f32 + 0.5, y as f32 + 0.5);
         let z = hf.floor() as i32;
         let temp = self.temperature(x, y, z);
         let precip = self.precipitation(x, y);
-        let biome_ix = biome::classify(temp, precip);
-        let biome = &BIOMES[biome_ix];
+        Climate { hf, z, temp, precip, biome: biome::classify(temp, precip) }
+    }
+
+    /// Whether a building stands at a tile, from the settlement field and
+    /// the kind's placement rule.
+    fn place_building(&self, x: i32, y: i32, hv: u64, terrain: Terrain, z: i32) -> Option<Structure> {
+        let kind = &BUILDINGS[HOUSE];
+        let settle = fbm(x as f32 * 0.05 + 7.0, y as f32 * 0.05, self.seed ^ 0xB1, 2);
+        if kind.terrain.contains(&terrain) && z > SEA && settle > kind.settle_min && (hv >> 40) % 100 < kind.chance {
+            Some(Structure { kind: HOUSE as u8, variant: ((hv >> 48) % 4) as u8 })
+        } else {
+            None
+        }
+    }
+
+    /// Classify one tile from the height field and climate around it.
+    fn tile(&self, x: i32, y: i32) -> Tile {
+        let climate = self.climate(x, y);
+        let z = climate.z;
+        let temp = climate.temp;
+        let biome = &BIOMES[climate.biome];
         let near_water = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.is_water(x + dx, y + dy));
         let patch = self.patch(x as f32 + 0.5, y as f32 + 0.5);
-        let terrain = if z < SEA {
-            Terrain::Water
-        } else if z == SEA || (z == SEA + 1 && near_water) {
-            Terrain::Sand
-        } else if temp <= -16.0 {
-            Terrain::Snow
-        } else if z >= SNOW - 2 {
-            Terrain::Rock
-        } else if patch > 0.72 {
-            Terrain::Dirt
-        } else {
-            Terrain::Grass
-        };
+        let terrain = terrain_for(z, temp, near_water, patch);
 
         let hv = hash(x as i64, y as i64, self.seed);
         let forest = fbm(x as f32 * 0.08, y as f32 * 0.08, self.seed ^ 0xF0, 3);
         let density = biome.tree_density * crate::noise::smoothstep(0.3, 0.7, forest);
-        let mut species = 0u8;
         let tree = if terrain == Terrain::Grass && z > SEA && !biome.species.is_empty() && (hv % 1000) as f32 / 1000.0 < density {
-            let total: u32 = biome.species.iter().map(|&(_, w)| w as u32).sum();
-            let mut pick = ((hv >> 16) % total.max(1) as u64) as u32;
-            for &(sp, w) in biome.species {
-                if pick < w as u32 {
-                    species = sp as u8;
-                    break;
-                }
-                pick -= w as u32;
-            }
-            Some(((hv >> 8) % 4) as u8)
+            Some(Flora { species: biome::weighted_pick(biome.species, hv >> 16) as u8, variant: ((hv >> 8) % 4) as u8 })
         } else {
             None
         };
-
-        let settle = fbm(x as f32 * 0.05 + 7.0, y as f32 * 0.05, self.seed ^ 0xB1, 2);
-        let building = if tree.is_none()
-            && matches!(terrain, Terrain::Grass | Terrain::Dirt | Terrain::Sand)
-            && z > SEA
-            && settle > 0.64
-            && (hv >> 40) % 100 < 14
-        {
-            Some(((hv >> 48) % 4) as u8)
-        } else {
-            None
-        };
+        let building = if tree.is_none() { self.place_building(x, y, hv, terrain, z) } else { None };
 
         let grass = ((fbm(x as f32 * 0.15, y as f32 * 0.15, self.seed ^ 0xA7, 2) * 4.0) as u8).min(biome.grass);
         Tile {
@@ -257,13 +375,13 @@ impl Map {
             tree,
             grass,
             seed: (hv >> 32) as u32,
-            body: 0,
-            biome: biome_ix as u8,
-            species,
+            body_size: 0,
+            biome: climate.biome as u8,
             building,
+            material: material_for(terrain, z, biome) as u8,
             temp: temp.round().clamp(-60.0, 60.0) as i8,
             near_water,
-            hf,
+            hf: climate.hf,
         }
     }
 
@@ -294,7 +412,7 @@ impl Map {
                 }
                 for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                     let p = (x + dx, y + dy);
-                    if self.bounded && (p.0 < 0 || p.1 < 0 || p.0 >= self.w as i32 || p.1 >= self.h as i32) {
+                    if !self.contains(p.0, p.1) {
                         continue;
                     }
                     if !seen.contains(&p) && self.is_water(p.0, p.1) {
@@ -308,7 +426,7 @@ impl Map {
                 let (lx, ly) = (x - x0, y - y0);
                 if lx >= 0 && ly >= 0 && lx < CHUNK && ly < CHUNK {
                     let j = (ly * CHUNK + lx) as usize;
-                    tiles[j].body = size;
+                    tiles[j].body_size = size;
                     done[j] = true;
                 }
             }
@@ -345,5 +463,35 @@ mod tests {
                 assert!(m.get(x, y).unwrap().draw_z() <= m.ceiling(x, y));
             }
         }
+    }
+
+    #[test]
+    fn bounds_helpers_follow_bounded() {
+        let mut m = Map::new(8, 8, 3);
+        assert!(m.contains(0, 0) && m.contains(7, 7));
+        assert!(!m.contains(-1, 0) && !m.contains(8, 0));
+        assert_eq!(m.clamp(-5, 20), (0, 7));
+        m.bounded = false;
+        assert!(m.contains(-100, 100));
+        assert_eq!(m.clamp(-5, 20), (-5, 20));
+    }
+
+    #[test]
+    fn climate_agrees_with_tiles() {
+        let m = Map::new(32, 32, 7);
+        for &(x, y) in &[(0, 0), (31, 31), (5, 17), (16, 16)] {
+            let c = m.climate(x, y);
+            let t = m.get(x, y).unwrap();
+            assert_eq!(c.z, t.z);
+            assert_eq!(c.biome, t.biome as usize);
+            assert_eq!(c.hf, t.hf);
+        }
+    }
+
+    #[test]
+    fn nearest_land_is_never_water() {
+        let m = Map::new(32, 32, 7);
+        let (x, y) = m.nearest_land(0, 0);
+        assert_ne!(m.get(x, y).unwrap().terrain, Terrain::Water);
     }
 }

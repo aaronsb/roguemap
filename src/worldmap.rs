@@ -3,13 +3,20 @@
 
 use crate::biome::{self, BIOMES};
 use crate::canvas::{Canvas, Rgb};
-use crate::map::{Map, SEA, SNOW};
+use crate::input::{self, WORLDMAP};
+use crate::map::{Map, ALPINE_Z, SEA};
+use crate::palette::{Palette, ROCK, SAND, SPRING};
+use crate::ui::CHROME;
 use crate::world::World;
 
 /// Tiles per cell horizontally at each extent; vertically twice that, to
 /// keep proportions on 1:2 cells.
 pub const SCALES: [i32; 3] = [1, 4, 16];
 pub const SCALE_NAMES: [&str; 3] = ["small", "medium", "large"];
+
+/// The map keeps the spring palette in every season so the legend and the
+/// plot stay readable under winter snow.
+const PLOT: Palette = SPRING;
 
 pub struct WorldMap {
     pub open: bool,
@@ -34,29 +41,43 @@ impl WorldMap {
         self.cursor.1 += dy * sy;
     }
 
+    /// Step through the extents, wrapping.
+    pub fn step_extent(&mut self, dir: i32) {
+        let n = SCALES.len() as i32;
+        self.scale = (self.scale as i32 + dir).rem_euclid(n) as usize;
+    }
+
     /// Colour of one sampled tile: water by depth, snow and rock by height
-    /// and cold, otherwise the biome's ground colour.
+    /// and cold, otherwise the biome's ground colour. Coarser than the
+    /// scene's surface colour: no dirt, no shoreline sand, and a stronger
+    /// height lift so relief reads at sixteen tiles per cell.
     fn sample(map: &Map, world: &World, x: i32, y: i32) -> Rgb {
-        let z = map.height(x, y);
-        if z < SEA {
-            let depth = ((SEA - z) as f32 / 3.0).clamp(0.0, 1.0);
-            return Rgb(46, 128, 176).lerp(Rgb(16, 48, 104), depth);
+        let c = map.climate(x, y);
+        if c.z < SEA {
+            let depth = ((SEA - c.z) as f32 / 3.0).clamp(0.0, 1.0);
+            return PLOT.water_shallow.lerp(PLOT.water_deep, depth);
         }
-        let temp = map.temperature(x, y, z);
-        let precip = map.precipitation(x, y);
-        let b = &BIOMES[biome::classify(temp, precip)];
-        let mut c = biome::ground_color(b, world.season);
-        if z >= SNOW - 2 {
-            c = Rgb(124, 124, 130);
-        } else if z == SEA {
-            c = Rgb(196, 180, 130);
+        let mut col = biome::ground_color(&BIOMES[c.biome], world.season);
+        if c.z >= ALPINE_Z - 2 {
+            col = PLOT.surfaces[ROCK].color;
+        } else if c.z == SEA {
+            col = PLOT.surfaces[SAND].color;
         }
-        let lift = 0.8 + (z - SEA) as f32 * 0.03;
-        c.scale(lift).lerp(Rgb(228, 232, 240), world.snow_at(temp))
+        let lift = 0.8 + (c.z - SEA) as f32 * 0.03;
+        col.scale(lift).lerp(PLOT.snow(), world.snow_at(c.temp))
     }
 
     /// Draw the map over the whole canvas.
     pub fn draw(&self, cv: &mut Canvas, map: &Map, world: &World, player: Option<(i32, i32)>) {
+        self.plot(cv, map, world, player);
+        Self::crosshair(cv);
+        self.header(cv, map);
+        Self::legend(cv, world);
+    }
+
+    /// Biome colours per cell, averaged over a 2x2 sub-sample at the coarse
+    /// extents so they do not alias, with the player marked.
+    fn plot(&self, cv: &mut Canvas, map: &Map, world: &World, player: Option<(i32, i32)>) {
         let (w, h) = (cv.w, cv.h);
         let (sx, sy) = self.stride();
         let (cx, cy) = self.cursor;
@@ -66,13 +87,11 @@ impl WorldMap {
         for row in 0..h {
             for col in 0..w {
                 let (x, y) = (x0 + col * sx, y0 + row * sy);
-                let inside = !map.bounded || (x >= 0 && y >= 0 && x < map.w as i32 && y < map.h as i32);
-                let c = if !inside {
+                let c = if !map.contains(x, y) {
                     void
                 } else if sx == 1 {
                     Self::sample(map, world, x, y)
                 } else {
-                    // Average a 2x2 sub-sample so coarse extents do not alias.
                     let (hx, hy) = (sx / 2, sy / 2);
                     let cs = [
                         Self::sample(map, world, x, y),
@@ -90,8 +109,11 @@ impl WorldMap {
             let (col, row) = ((px - x0) / sx, (py - y0) / sy);
             cv.glyph(col, row, '@', Rgb(255, 255, 255));
         }
-        // Crosshair at the cursor.
-        let (ccol, crow) = (w / 2, h / 2);
+    }
+
+    /// Crosshair at the cursor, which is always the screen centre.
+    fn crosshair(cv: &mut Canvas) {
+        let (ccol, crow) = (cv.w / 2, cv.h / 2);
         let white = Rgb(255, 255, 255);
         for d in 2..5 {
             cv.glyph(ccol - d, crow, '─', white);
@@ -100,12 +122,14 @@ impl WorldMap {
             cv.glyph(ccol, crow + (d + 1) / 2, '│', white);
         }
         cv.glyph(ccol, crow, '┼', white);
+    }
 
-        // Header and legend.
-        let z = map.height(cx, cy);
-        let temp = map.temperature(cx, cy, z);
-        let precip = map.precipitation(cx, cy);
-        let b = &BIOMES[biome::classify(temp, precip)];
+    /// Extent, cursor position and the climate under it.
+    fn header(&self, cv: &mut Canvas, map: &Map) {
+        let (sx, sy) = self.stride();
+        let (cx, cy) = self.cursor;
+        let c = map.climate(cx, cy);
+        let b = &BIOMES[c.biome];
         let lead = b.species.first().map(|&(sp, _)| biome::SPECIES[sp].name).unwrap_or("none");
         let header = format!(
             " world map  {}  1 cell = {}x{} tiles  cursor {},{}  {} ({})  {:.0}C  precip {:.0}  z{}  trees: {}  builds: {} ",
@@ -116,23 +140,28 @@ impl WorldMap {
             cy,
             b.name,
             b.koppen,
-            temp,
-            precip,
-            z,
+            c.temp,
+            c.precip,
+            c.z,
             lead,
             biome::MATERIALS[b.material].name
         );
-        cv.text(0, 0, &header, Rgb(220, 220, 230), Rgb(30, 32, 44));
+        cv.text(0, 0, &header, CHROME.text, CHROME.bar);
+    }
+
+    /// Biome swatches along the bottom row, then the key hints.
+    fn legend(cv: &mut Canvas, world: &World) {
+        let (w, h) = (cv.w, cv.h);
         let mut x = 0;
         for b in BIOMES {
             let sw = biome::ground_color(b, world.season);
             cv.put(x, h - 1, ' ', sw, sw);
             cv.put(x + 1, h - 1, ' ', sw, sw);
             let label = format!(" {} ", b.koppen);
-            cv.text(x + 2, h - 1, &label, Rgb(200, 200, 210), Rgb(30, 32, 44));
+            cv.text(x + 2, h - 1, &label, CHROME.legend, CHROME.bar);
             x += 2 + label.len() as i32;
         }
-        let hint = " arrows move  z extent  enter teleport  m/esc close ";
-        cv.text((w - hint.len() as i32).max(x), h - 1, hint, Rgb(160, 160, 176), Rgb(30, 32, 44));
+        let hint = input::help_line(WORLDMAP, "  ");
+        cv.text((w - hint.len() as i32).max(x), h - 1, &hint, CHROME.dim, CHROME.bar);
     }
 }
