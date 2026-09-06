@@ -137,5 +137,9 @@ The editor is its own binary, `roguemap-edit`, sharing the library crate
 with the game so previews use the real renderer (ADR-003). It lists assets
 by table, previews one at every zoom tier in a chosen biome and season,
 edits rows in place and art files as a grid, and writes back to the asset
-directory. Until it lands the binary is a stub, and the tables are edited
-by hand with `ROGUEMAP_ASSETS`.
+directory after validating the whole set as the game loads it. `make
+edit` opens it on `./assets-export`; the keys are in the README. Tables
+can still be edited by hand with `ROGUEMAP_ASSETS`; the editor writes the
+same files, through the same serialiser as `to_files`, keeping row order
+and the leading comment block of each file (comments inside the body do
+not survive a save).

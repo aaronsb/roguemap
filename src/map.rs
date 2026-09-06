@@ -133,6 +133,26 @@ pub struct Climate {
     pub biome: usize,
 }
 
+/// A small flat map for previews and tests (ADR-003): every tile is at one
+/// height, in one biome, of one terrain, with no generated trees or
+/// buildings. Subjects are placed on it with `Map::set_tile`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FixtureSpec {
+    pub w: usize,
+    pub h: usize,
+    /// Tile height; the smooth field sits half a unit above it.
+    pub z: i32,
+    /// Index into the biome table.
+    pub biome: usize,
+    pub terrain: Terrain,
+    /// Annual mean temperature, degrees Celsius.
+    pub temp: i8,
+    /// Grass tuft density, 0..=3.
+    pub grass: u8,
+    /// Index into the material table.
+    pub material: usize,
+}
+
 pub struct Map {
     pub w: usize,
     pub h: usize,
@@ -143,6 +163,9 @@ pub struct Map {
     pub assets: Rc<Assets>,
     /// Material index of stone, for the highlands.
     stone: usize,
+    /// When set, the continuous fields are flat and every tile is the
+    /// fixture's; the generator is bypassed.
+    fixture: Option<FixtureSpec>,
     chunks: RefCell<HashMap<(i32, i32), Chunk>>,
 }
 
@@ -182,7 +205,32 @@ fn material_for(terrain: Terrain, z: i32, biome: &Biome, stone: usize) -> usize 
 impl Map {
     pub fn new(w: usize, h: usize, seed: u64, assets: Rc<Assets>) -> Map {
         let stone = assets.material_index("stone").expect("the loader requires a stone material");
-        Map { w, h, seed, bounded: true, assets, stone, chunks: RefCell::new(HashMap::new()) }
+        Map { w, h, seed, bounded: true, assets, stone, fixture: None, chunks: RefCell::new(HashMap::new()) }
+    }
+
+    /// A bounded flat map from a fixture spec; see `FixtureSpec`.
+    pub fn fixture(spec: FixtureSpec, assets: Rc<Assets>) -> Map {
+        let mut m = Map::new(spec.w, spec.h, 1, assets);
+        m.fixture = Some(spec);
+        m
+    }
+
+    /// Whether this map is a fixture rather than generated terrain.
+    pub fn is_fixture(&self) -> bool {
+        self.fixture.is_some()
+    }
+
+    /// Replace the tile at a position, generating its chunk first. Off-map
+    /// positions are ignored. The chunk ceiling grows to cover the tile.
+    pub fn set_tile(&mut self, x: i32, y: i32, tile: Tile) {
+        if !self.contains(x, y) {
+            return;
+        }
+        let key = (x.div_euclid(CHUNK), y.div_euclid(CHUNK));
+        let mut chunks = self.chunks.borrow_mut();
+        let chunk = chunks.entry(key).or_insert_with(|| self.generate_chunk(key.0, key.1));
+        chunk.tiles[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize] = tile;
+        chunk.max_z = chunk.max_z.max(tile.draw_z());
     }
 
     /// Whether a position exists on this map.
@@ -250,6 +298,9 @@ impl Map {
     /// another slow field. Tile heights are this field floored at the tile
     /// centre, so the column geometry is a terrace of it.
     pub fn height_smooth(&self, xf: f32, yf: f32) -> f32 {
+        if let Some(f) = &self.fixture {
+            return f.z as f32 + 0.5;
+        }
         let local = fbm(xf * 0.045, yf * 0.045, self.seed, 4);
         let n = self.control_height(xf, yf) * 0.62 + local * 0.38;
         let n = ((n - 0.5) * 1.6 + 0.5).clamp(0.0, 0.999);
@@ -283,7 +334,7 @@ impl Map {
     /// under one height unit, so it never changes a tile's terrace but gives
     /// slopes, shorelines and patches sub-tile shape.
     pub fn detail(&self, xf: f32, yf: f32, octaves: u32) -> f32 {
-        if octaves == 0 {
+        if octaves == 0 || self.fixture.is_some() {
             return 0.0;
         }
         (fbm(xf * 0.6 + 3.0, yf * 0.6 + 1.0, self.seed ^ 0xD7, octaves) - 0.5) * 0.9
@@ -308,6 +359,9 @@ impl Map {
 
     /// Surface kind at a fractional position from the continuous fields.
     pub fn surface_at(&self, xf: f32, yf: f32, h: f32, temp: f32) -> Terrain {
+        if let Some(f) = &self.fixture {
+            return f.terrain;
+        }
         if h < SEA as f32 {
             Terrain::Water
         } else if h < SEA as f32 + 0.45 || (h < SEA as f32 + 1.3 && self.shore(xf, yf)) {
@@ -346,6 +400,9 @@ impl Map {
     pub fn climate(&self, x: i32, y: i32) -> Climate {
         let hf = self.height_smooth(x as f32 + 0.5, y as f32 + 0.5);
         let z = hf.floor() as i32;
+        if let Some(f) = &self.fixture {
+            return Climate { hf, z, temp: f.temp as f32, precip: 50.0, biome: f.biome };
+        }
         let temp = self.temperature(x, y, z);
         let precip = self.precipitation(x, y);
         let biome = self.assets.koppen[biome::classify(temp, precip)];
@@ -367,6 +424,23 @@ impl Map {
 
     /// Classify one tile from the height field and climate around it.
     fn tile(&self, x: i32, y: i32) -> Tile {
+        if let Some(f) = &self.fixture {
+            let hv = hash(x as i64, y as i64, self.seed);
+            return Tile {
+                z: f.z,
+                terrain: f.terrain,
+                tree: None,
+                grass: f.grass,
+                seed: (hv >> 32) as u32,
+                body_size: 0,
+                biome: f.biome as u8,
+                building: None,
+                material: f.material as u8,
+                temp: f.temp,
+                near_water: false,
+                hf: f.z as f32 + 0.5,
+            };
+        }
         let climate = self.climate(x, y);
         let z = climate.z;
         let temp = climate.temp;
@@ -586,6 +660,33 @@ mod tests {
             assert_eq!(c.biome, t.biome as usize);
             assert_eq!(c.hf, t.hf);
         }
+    }
+
+    #[test]
+    fn fixture_is_flat_and_takes_placed_tiles() {
+        let assets = test_assets();
+        let spec = FixtureSpec { w: 12, h: 12, z: 6, biome: 5, terrain: Terrain::Grass, temp: 12, grass: 2, material: 1 };
+        let mut m = Map::fixture(spec, assets);
+        assert!(m.is_fixture());
+        for (x, y) in [(0, 0), (11, 11), (6, 6)] {
+            let t = m.get(x, y).unwrap();
+            assert_eq!((t.z, t.terrain, t.biome, t.material, t.temp, t.grass), (6, Terrain::Grass, 5, 1, 12, 2));
+            assert!(t.tree.is_none() && t.building.is_none());
+            assert_eq!(t.hf, 6.5);
+            assert_eq!(m.height(x, y), 6);
+            assert_eq!(m.climate(x, y).biome, 5);
+        }
+        assert_eq!(m.detail(3.3, 4.4, 3), 0.0);
+        assert_eq!(m.surface_at(3.3, 4.4, 0.0, -30.0), Terrain::Grass);
+        assert!(m.get(12, 0).is_none());
+        let mut t = m.get(6, 6).unwrap();
+        t.tree = Some(Flora { species: 2, variant: 1 });
+        t.z = 9;
+        m.set_tile(6, 6, t);
+        assert_eq!(m.get(6, 6).unwrap().tree.map(|f| f.species), Some(2));
+        assert_eq!(m.ceiling(6, 6), 9);
+        m.set_tile(40, 40, t);
+        assert!(m.get(40, 40).is_none());
     }
 
     #[test]

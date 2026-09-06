@@ -74,6 +74,17 @@ pub struct Entity {
     pub my: i32,
 }
 
+/// A ground prop placed by hand rather than by the hashed scatter, at a
+/// fractional map position; drawn by the prop pass after the scattered
+/// ones, at every zoom. The editor's previews use these (ADR-003).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacedProp {
+    pub x: f32,
+    pub y: f32,
+    /// Index into the prop table.
+    pub prop: usize,
+}
+
 /// Current sky and wind, all in `[0, 1]` except direction in radians.
 #[derive(Clone, Copy, Debug)]
 pub struct Weather {
@@ -113,6 +124,8 @@ pub struct World {
     wetness: [f32; BANDS],
     pub lights: Vec<Light>,
     pub entities: Vec<Entity>,
+    /// Props placed by hand, drawn whatever the zoom.
+    pub placed: Vec<PlacedProp>,
     seed: u64,
 }
 
@@ -144,6 +157,7 @@ impl World {
             wetness: [0.0; BANDS],
             lights: Vec::new(),
             entities: Vec::new(),
+            placed: Vec::new(),
             seed,
         }
     }

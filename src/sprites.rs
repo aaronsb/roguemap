@@ -181,7 +181,7 @@ impl Renderer {
     pub(crate) fn prop_pass(&mut self, sc: &Scene) {
         let (assets, map, world, cam) = (sc.assets, sc.map, sc.world, sc.cam);
         let props = &assets.props;
-        if props.iter().all(|p| (cam.zoom as u8) < p.min_zoom) {
+        if world.placed.is_empty() && props.iter().all(|p| (cam.zoom as u8) < p.min_zoom) {
             return;
         }
         let (fx, fy) = cam.forward();
@@ -213,6 +213,11 @@ impl Renderer {
                     }
                 }
             }
+        }
+        // Hand-placed props draw at every zoom: they are explicit, not scattered.
+        for pl in world.placed.iter().filter(|pl| pl.prop < props.len()) {
+            let Some(tile) = map.get(pl.x.floor() as i32, pl.y.floor() as i32) else { continue };
+            items.push((pl.x * fx + pl.y * fy, pl.x, pl.y, tile.hf.max(SEA as f32), pl.prop));
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (depth, x, y, z, pi) in items {

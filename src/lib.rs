@@ -8,6 +8,7 @@ pub mod assets;
 pub mod biome;
 pub mod camera;
 pub mod canvas;
+pub mod editor;
 pub mod input;
 pub mod lighting;
 pub mod map;

@@ -1,9 +1,10 @@
 # roguemap task runner. `make help` lists targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help build run term test test-assets test-golden lint format check clean snap screenshots fonts golden golden-bytes golden-check golden-record assets-export
+.PHONY: help build run term test test-assets test-golden lint format check clean snap screenshots fonts golden golden-bytes golden-check golden-record assets-export edit edit-snap
 
 BIN      := target/release/roguemap
+EDIT     := target/release/roguemap-edit
 SEED     ?= 7
 SIZE     ?= 32
 # Snapshot geometry in cells; matches the Konsole launcher.
@@ -64,6 +65,14 @@ golden-record: ## Rewrite tests/golden/*.frame from the current code (say which 
 assets-export: build ## Write the embedded asset tables to ./assets-export for editing (ROGUEMAP_ASSETS=assets-export to load them)
 	./$(BIN) --export-assets assets-export
 
+edit: build ## Open the asset editor on ./assets-export, exporting the embedded set first if it is missing
+	@[ -d assets-export ] || ./$(BIN) --export-assets assets-export
+	./$(EDIT) assets-export
+
+# One-off editor screen: make edit-snap OUT=editor.png ARGS="table=species row=oak grid=1"
+edit-snap: build ## Render one editor screen to OUT (ARGS="key=value ...": table row biome season tod glyphs tier pattern grid)
+	./edit-snap.sh $(OUT) $(ARGS)
+
 fonts: ## Report fonts covering the Symbols for Legacy Computing block
 	@fc-list ':charset=1fb00' family | sort -u
 
@@ -83,3 +92,4 @@ screenshots: build ## Render the documentation screenshots into docs/screenshots
 	./snap.sh $(SHOTS)/worldmap.png fill=1 worldmap=1 scale=2 cx=0 cy=0
 	./snap.sh $(SHOTS)/settings.png popover=1 zoom=1
 	./snap.sh $(SHOTS)/ascii.png zoom=2 fill=1 cx=0 cy=0 t=3 tod=12 glyphs=ascii
+	./edit-snap.sh $(SHOTS)/editor.png table=species row=oak

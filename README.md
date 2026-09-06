@@ -100,8 +100,75 @@ the embedded set to `./assets-export` as a starting point. The layout and
 the art format are in [docs/assets.md](docs/assets.md), every row property
 in [docs/properties.md](docs/properties.md), and the decision in
 [ADR-001](docs/adr/ADR-001-assets-as-files.md). The crate is a library plus
-two binaries: `roguemap` (the game) and `roguemap-edit` (the editor of
-ADR-003, a stub for now).
+two binaries: `roguemap` (the game) and `roguemap-edit` (the editor below).
+
+## Editor
+
+```
+roguemap-edit DIR              edit the asset tables in DIR
+roguemap-edit --export DIR     write the embedded set to DIR, then edit it
+make edit                      the same on ./assets-export
+```
+
+The editor ([ADR-003](docs/adr/ADR-003-asset-editor.md)) edits a directory
+of assets with previews drawn by the game's own renderer. With no
+directory it uses `ROGUEMAP_ASSETS`; with neither it exits with a message,
+since the embedded set has nowhere to be written back to.
+
+![editor](docs/screenshots/editor.png)
+
+The left pane lists the tables and the current table's rows, with art
+files under the row that names them. Across the top, one preview pane per
+sprite tier (tiny 2x1, small 4x1, medium 8x2, large 16x4) draws a flat
+fixture in the chosen biome and season with the selected row placed at
+its centre: a tree, a block pattern, four of a prop, a creature, a lit
+light at night, a house in a material. Below is the row form, or the art
+grid, then a status line. Below 120x50 the strip shows one tier (`t`
+cycles) and the panes shrink to fit; 80x25 is the floor, as for the game.
+
+Saving validates the whole set exactly as the game loads it. An error
+names the file and row, jumps there, and nothing is written. Files are
+written atomically, row order and a leading comment block are kept, and
+the directory is reloaded afterwards so the preview shows what the game
+will load.
+
+| Key | Normal mode |
+|---|---|
+| `Tab` / `Shift-Tab` | cycle the panes: tables, rows, form |
+| arrows or `h j k l` | move; left and right switch table, or cycle a choice field |
+| `Enter` | edit the field under the cursor; on an art entry, open the grid |
+| `n` / `d` | add a row (a copy named `-copy`) / delete the row, after `y` |
+| `x` | clear an optional field so its default applies |
+| `u` / `U` | undo / redo |
+| `s` / `S` | save the current table's file / every changed file |
+| `b` / `B` | cycle the preview biome |
+| `[` / `]` and `,` / `.` | step the season and the hour, as in the game |
+| `g`, `r` / `R`, `W` | glyph set, rotate a quarter turn, weather preset, as in the game |
+| `t`, `P`, `a` | preview tier (small screens), block pattern or tree variant, animate |
+| `q` | quit, asking once if anything is unsaved |
+
+Field mode: text and numbers get a line editor (`Left`, `Right`, `Home`,
+`End`, `Backspace`, `Delete`); enum, reference and boolean fields cycle
+with `Left` / `Right`; colours pick a channel with `Left` / `Right` and
+step it with `Up` / `Down` (1) or `PgUp` / `PgDn` (16), four groups for a
+seasonal colour; terrain and cover lists are checklists toggled with
+`Space`; other lists are typed as TOML or comma-separated names. `Enter`
+commits (a value that fails its check stays open with the reason; a
+reference to a missing row is kept with a warning and refused at save),
+`Esc` cancels.
+
+Grid mode: arrows move, a printable key places itself and advances,
+`Space` clears, `i` / `X` insert or delete a row, `>` / `<` widen or
+narrow, `c` sets `center` to the cursor column, `B` sets `base_rows` from
+the cursor row down, `p` opens a glyph picker (the tileset's roles and the
+Symbols for Legacy Computing block), `Tab` undoes, `Esc` returns. The art
+header (`name`, `tier`, `center`, `base_rows`, `min_zoom`) is edited in
+the form. `Ctrl-C` quits from any mode.
+
+Headless: `roguemap-edit --snap W H out.cells key=value...` renders one
+editor screen with `table`, `row`, `biome`, `season`, `tod`, `glyphs`,
+`tier`, `pattern`, `deg`, `pane` and `grid=1`; `make edit-snap
+OUT=editor.png ARGS="table=props row=campfire grid=1"` turns it into a PNG.
 
 ## World
 
