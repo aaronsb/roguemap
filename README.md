@@ -118,6 +118,20 @@ Keys: `seed`, `size`, `t`, `tod`, `season`, `weather`, `glyphs`, `rot`,
 foreground and background colour; `tools/cells2png.py` renders it with the
 Unscii font.
 
+## Canonical look
+
+The snapshot renderer is the reference for how the game should look.
+`tools/cells2png.py` draws the cell dump with Unscii 16 at exactly 16 pixels,
+so every cell is 8x16 pixels with no smoothing and the 24-bit colours come
+straight from the cell buffer. `make screenshots` and `make snap` produce
+that look.
+
+A terminal emulator matches it when its font is Unscii at a pixel height of
+16, its line spacing is zero, font antialiasing is off, and bold does not
+brighten colours. `./term.sh` opens Konsole configured that way, deriving
+the point size from the screen DPI (12 points at 96 DPI). Any other emulator
+with the same font settings will render the same pixels.
+
 ## Fonts
 
 The PETSCII tileset needs a font covering U+1FB00 to U+1FBFF. Unscii 16 Full
