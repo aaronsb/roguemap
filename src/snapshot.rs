@@ -124,14 +124,20 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         world.weather.precip = precip;
     }
     if scale {
+        // The three yardsticks side by side: a 2 m person, an 18 m oak and a
+        // house of four tiles by three under one roof.
         let (mx, my) = (map.w as i32 / 2, map.h as i32 / 2);
         let oak = assets.species.iter().position(|s| s.name == "oak").unwrap_or(0) as u8;
         let house = assets.blocks.iter().position(|b| b.name == "house").unwrap_or(0) as u8;
-        if let Some(mut t) = map.get(mx - 3, my) {
+        if let Some(mut t) = map.get(mx - 4, my) {
             t.tree = Some(Flora { species: oak, variant: 2 });
-            map.set_tile(mx - 3, my, t);
+            map.set_tile(mx - 4, my, t);
         }
-        map.set_stack(mx + 3, my, Some(Stack { kind: house, levels: 1 }));
+        for dy in 0..3 {
+            for dx in 0..4 {
+                map.set_stack(mx + 3 + dx, my - 1 + dy, Some(Stack { kind: house, levels: 1 }));
+            }
+        }
         world.spawn_player(&map, mx, my);
     } else if a.flag("player") {
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);

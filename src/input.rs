@@ -200,7 +200,7 @@ mod tests {
         assert!(scene.len() > 120, "the scene help line already runs past 120 columns");
         assert_eq!(
             &scene[..120],
-            " tab settings  m world map  wasd/hjkl walk  arrows pan  c centre  r/R ( ) rotate  z/Z zoom  v fill  g glyphs  [ ] season"
+            " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run eight  c centre  r/R ( ) rotate  z/Z zoom  v fi"
         );
         for frame in ["inventory", "stats", "history", "conversation"] {
             assert!(SCENE.iter().flat_map(|b| b.keys).any(|&(_, a)| a == Toggle(frame)), "{frame} has no toggle key");

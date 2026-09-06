@@ -667,6 +667,9 @@ impl Assets {
                 return Err(ctx.row(i, &b.name, format!("grass {} is above 3", b.grass)));
             }
             unit(&ctx, i, &b.name, "tree_density", Some(b.tree_density))?;
+            if !(0.1..=8.0).contains(&b.spacing) {
+                return Err(ctx.row(i, &b.name, format!("spacing {} is outside 0.1..8, the factor on a species' own spacing", b.spacing)));
+            }
             let mut sp = Vec::new();
             for (name, w) in &b.species {
                 let ix = reference(&ctx, i, &b.name, "species", &species_names, name)?;
@@ -685,6 +688,7 @@ impl Assets {
                 seasonal: b.seasonal,
                 grass: b.grass,
                 tree_density: b.tree_density,
+                spacing: b.spacing,
                 species: sp,
                 material: reference(&ctx, i, &b.name, "material", &material_names, &b.material)?,
             });
@@ -769,6 +773,13 @@ impl Assets {
                 [lo, hi] if (0.0..=1.0).contains(lo) && (0.0..=1.0).contains(hi) && lo < hi => Some([*lo, *hi]),
                 _ => return Err(ctx.row(i, &b.name, format!("windows {:?} must be empty or a rising pair within 0..1", b.windows))),
             };
+            let [[wmin, dmin], [wmax, dmax]] = b.footprint;
+            if wmin == 0 || dmin == 0 || wmin > wmax || dmin > dmax {
+                return Err(ctx.row(i, &b.name, format!("footprint {:?} must be a positive [[w, d], [w, d]] smallest to largest, in tiles", b.footprint)));
+            }
+            if wmax > 14 || dmax > 14 {
+                return Err(ctx.row(i, &b.name, format!("footprint {:?} is wider than a settlement plot (14 tiles)", b.footprint)));
+            }
             if b.levels[0] > b.levels[1] || b.levels[1] > b.max_levels {
                 return Err(ctx.row(i, &b.name, format!("levels {:?} must rise and stay within max_levels {}", b.levels, b.max_levels)));
             }
@@ -783,6 +794,7 @@ impl Assets {
                 terrain: b.terrain.clone(),
                 size: b.size,
                 levels: b.levels,
+                footprint: b.footprint,
                 level_height,
                 roof: b.roof,
                 pitch: b.pitch,
@@ -1564,8 +1576,13 @@ mod tests {
         assert!(e.msg.contains("dome"), "{e}");
         let e = replace_in("blocks.toml", "window_pitch = 1.0", "window_pitch = 0.0").unwrap_err();
         assert!(e.msg.contains("window_pitch"), "{e}");
-        let e = replace_in("blocks.toml", "chance = 14", "chance = 140").unwrap_err();
+        let e = replace_in("blocks.toml", "chance = 45", "chance = 450").unwrap_err();
         assert!(e.msg.contains("percentage"), "{e}");
+        // A footprint is a rising pair of tile sizes.
+        let e = replace_in("blocks.toml", "footprint = [[3, 2], [5, 3]]", "footprint = [[5, 2], [3, 3]]").unwrap_err();
+        assert!(e.msg.contains("footprint"), "{e}");
+        let e = replace_in("blocks.toml", "footprint = [[3, 2], [5, 3]]", "footprint = [[3, 2], [20, 3]]").unwrap_err();
+        assert!(e.msg.contains("plot"), "{e}");
         // Windows may be turned off, and level_height defaults to the size.
         let a = replace_in("blocks.toml", "windows = [0.5, 1.0]", "windows = []").unwrap();
         assert_eq!(a.block("house").unwrap().windows, None);

@@ -274,7 +274,7 @@ mod tests {
         let a = test_assets();
         for f in &a.frames {
             let Some(key) = f.key else { continue };
-            match lookup(SCENE, key) {
+            match lookup(SCENE, key, false) {
                 Some(Action::Toggle(name)) => assert_eq!(name, f.name, "{key:?} toggles the wrong frame"),
                 other => panic!("ui.toml gives {} the key {key:?}, which input.rs binds to {other:?}", f.name),
             }

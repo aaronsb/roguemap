@@ -459,6 +459,40 @@ impl Renderer {
         c
     }
 
+    /// A tree's own canopy colour: its species' colour, brightened or
+    /// dimmed by an eighth and nudged toward yellow or blue, so a stand is
+    /// not one flat green (ADR-002's volumes, ADR-004's scale).
+    fn canopy_tint(&self, c: Rgb, v: &crate::volume::Volume) -> Rgb {
+        let i = v.instance;
+        let hue = 1.0 + 0.10 * i.hue;
+        Rgb(
+            (c.0 as f32 * i.tint * hue).clamp(0.0, 255.0) as u8,
+            (c.1 as f32 * i.tint).clamp(0.0, 255.0) as u8,
+            (c.2 as f32 * i.tint / hue).clamp(0.0, 255.0) as u8,
+        )
+    }
+
+    /// How many other crowns stand over a canopy point, up to three: where
+    /// crowns meet, the surface is deep in the canopy and lit less.
+    fn crowns_over(&self, hit: &Hit) -> f32 {
+        let grid = self.grid();
+        let Some(g) = grid.geo(hit.mx, hit.my) else { return 0.0 };
+        let mut n = 0.0;
+        for (vi, v) in grid.volumes_at(g) {
+            if vi == hit.which || v.top() < hit.h - 0.5 {
+                continue;
+            }
+            let (dx, dy) = (hit.x - v.cx, hit.y - v.cy);
+            if dx * dx + dy * dy < v.radius * v.radius {
+                n += 1.0;
+                if n >= 3.0 {
+                    break;
+                }
+            }
+        }
+        n
+    }
+
     /// The material a stack on a tile is built of.
     fn material<'a>(&self, sc: &Scene<'a>, tile: &Tile, kind: u8) -> &'a crate::biome::Material {
         let b = &sc.assets.blocks[kind as usize % sc.assets.blocks.len()];
@@ -498,8 +532,14 @@ impl Renderer {
             HitKind::Canopy => {
                 let v = &self.grid().volumes[hit.which as usize];
                 let sp = &sc.assets.species[v.species as usize % sc.assets.species.len()];
-                let c = biome::seasonal(&sp.canopy, world.season).lerp(pal.snow(), snow * 0.7 * sp.physical.snow_cover);
-                c.scale(1.0 + 0.3 * hit.sun * daylight)
+                let live = biome::seasonal(&sp.canopy, world.season).lerp(pal.snow(), snow * 0.7 * sp.physical.snow_cover);
+                // A snag has no foliage: grey-brown wood where the crown was.
+                let base = if v.dead { pal.trunk.lerp(Rgb(146, 138, 124), 0.45) } else { self.canopy_tint(live, v) };
+                // The crown's own relief: the sun side lightens toward the
+                // tip, and where crowns meet the surface takes less light.
+                let up = ((hit.h - v.h0) / v.height.max(1e-3)).clamp(0.0, 1.0);
+                let crowded = self.crowns_over(hit);
+                base.scale((1.0 + 0.45 * hit.sun * daylight) * (0.9 + 0.22 * up) * (1.0 - 0.13 * crowded))
             }
             HitKind::Trunk => pal.trunk,
         }
@@ -667,7 +707,8 @@ impl Renderer {
                 let v = &self.grid().volumes[hit.which as usize];
                 let sp = &sc.assets.species[v.species as usize % sc.assets.species.len()];
                 let snow = sc.world.snow_at(hit.tile.temp as f32);
-                let glyph = biome::seasonal(&sp.canopy_glyph, sc.world.season).lerp(pal.snow_glyph(), snow * 0.5);
+                let live = biome::seasonal(&sp.canopy_glyph, sc.world.season).lerp(pal.snow_glyph(), snow * 0.5);
+                let glyph = if v.dead { pal.trunk_glyph } else { self.canopy_tint(live, v) };
                 let art = &ts.art;
                 // The set's outline where the crown turns away sideways.
                 if hit.nsx.abs() > 0.7 && sp.form != Form::Cactus {

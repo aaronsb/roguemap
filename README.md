@@ -254,10 +254,17 @@ names each kind's size, levels, roof profile (flat, gable or hip), material
 rule, faces and light, and a tile carries a stack of one kind. Same-kind
 neighbours merge into one building whose roof continues across the seam
 and whose gable rides the longer run; walls get window rows and a door on
-an open face, and lit windows are lights at night. Trees are volumes from
+an open face, and lit windows are lights at night. The generator lays
+whole buildings: the world is cut into settlement plots of sixteen tiles,
+each holding at most one house of three by two to five by three tiles, a
+2x2 tower, a barn or a field, with a tile of margin so two never merge,
+and a clearing of trees around it. Trees are volumes from
 `assets/species.toml`: a size in metres and a canopy shape, tested by the
-ray walk so crowns occlude correctly at any angle and merge in a dense
-stand. Terrain steps, buildings and crowns cast shadows along the sun's
+ray walk so crowns occlude correctly at any angle. They stand apart by
+their crowns — three quarters of a crown's width, times the biome's own
+spacing factor — and every tree takes its own height, crown and canopy
+colour from its tile's seed, with a few standing dead, so a stand reads as
+trees rather than one mass. Terrain steps, buildings and crowns cast shadows along the sun's
 direction, the one the cloud shadows use. The note is
 [docs/structures.md](docs/structures.md); the decision
 [ADR-002](docs/adr/ADR-002-block-geometry-structures-and-trees.md). Sizes

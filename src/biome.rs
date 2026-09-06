@@ -134,6 +134,8 @@ pub struct Block {
     pub size: [f32; 3],
     /// Levels a generated stack has, `[min, max]`.
     pub levels: [u8; 2],
+    /// Smallest and largest ground the generator gives one, in tiles.
+    pub footprint: [[u8; 2]; 2],
     /// Metres per level; zero for ground kinds.
     pub level_height: f32,
     pub roof: Roof,
@@ -172,8 +174,11 @@ pub struct Biome {
     pub seasonal: bool,
     /// Grass tuft density, 0..=3.
     pub grass: u8,
-    /// Fraction of eligible tiles carrying a tree in the densest patches.
+    /// Fraction of eligible sites carrying a tree in the densest patches.
     pub tree_density: f32,
+    /// Factor on each species' spacing here: under one the crowns of a
+    /// dense stand overlap, over one they stand apart.
+    pub spacing: f32,
     /// Species indices with relative weights, in file order.
     pub species: Vec<(usize, u8)>,
     /// Index into the material table.
@@ -239,7 +244,10 @@ impl Species {
     /// by shape unless the row says otherwise.
     pub fn volume(&self) -> (Shape, Dims) {
         let shape = self.shape.unwrap_or_else(|| Shape::for_form(self.form));
-        let d = Dims::from_size(shape, self.size);
+        // A species grown from an L-system prunes its stand-in to the same
+        // height its branches start at.
+        let prune = self.lsystem.as_ref().map(|g| g.prune_height).filter(|p| *p > 0.0);
+        let d = Dims::pruned(shape, self.size, prune.unwrap_or_else(|| crate::volume::prune_height(shape)));
         (
             shape,
             Dims {
@@ -249,6 +257,17 @@ impl Species {
                 trunk_radius: self.trunk_radius.unwrap_or(d.trunk_radius),
             },
         )
+    }
+
+    /// How far this species stands from its own kind, in metres: its
+    /// `spacing` when the row gives one, else three quarters of the crown's
+    /// width, so a 7 m spruce keeps five metres and a 3 m juniper two.
+    pub fn spacing(&self) -> f32 {
+        if self.physical.spacing > 0.0 {
+            self.physical.spacing
+        } else {
+            0.75 * 0.5 * (self.size[0] + self.size[1])
+        }
     }
 
     /// How much of an instance's foliage is out, in 0..1: an evergreen keeps

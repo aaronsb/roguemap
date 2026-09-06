@@ -7,7 +7,7 @@ use crate::blocks::{self, door_face, label_runs, merges, ridge_along_x, Column, 
 use crate::map::{Tile, MAX_Z, SEA, TILE_METRES};
 use crate::noise::{hash01, ifloor};
 use crate::render::Scene;
-use crate::volume::{size_scale, variant_scale, Volume};
+use crate::volume::{instance, size_scale, stands_dead, variant_scale, Volume};
 
 /// Highest anything can reach above the ground, in metres: the tallest tree
 /// or roof over the highest terrain.
@@ -168,7 +168,12 @@ impl HeightGrid {
                     let Some(flora) = t.tree else { continue };
                     let sp = flora.species(assets);
                     let (shape, dims) = sp.volume();
-                    let s = size_scale(sp.size_class) * variant_scale(flora.variant);
+                    // The species' size, its class and variant, and this
+                    // tree's own quarter either way.
+                    let inst = instance(t.seed);
+                    let kind = size_scale(sp.size_class) * variant_scale(flora.variant);
+                    let s = kind * inst.height;
+                    let sr = kind * inst.radius;
                     let seed = t.seed as u64;
                     let jx = (hash01(x as i64, y as i64, seed ^ 0x11) - 0.5) * 0.3;
                     let jy = (hash01(x as i64, y as i64, seed ^ 0x22) - 0.5) * 0.3;
@@ -197,10 +202,12 @@ impl HeightGrid {
                         ground,
                         h0: ground + dims.trunk * s,
                         height: dims.height * s,
-                        radius: dims.radius * s / TILE_METRES,
+                        radius: dims.radius * sr / TILE_METRES,
                         trunk_radius: dims.trunk_radius * s / TILE_METRES,
                         shear,
                         species: flora.species,
+                        instance: inst,
+                        dead: stands_dead(t.seed, sp.dead_chance),
                         mx: x,
                         my: y,
                     };

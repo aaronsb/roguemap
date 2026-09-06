@@ -76,6 +76,10 @@ fn one_level() -> [u8; 2] {
     [1, 1]
 }
 
+fn one_tile() -> [[u8; 2]; 2] {
+    [[1, 1], [1, 1]]
+}
+
 fn default_windows() -> Vec<f32> {
     vec![0.5, 1.0]
 }
@@ -210,6 +214,12 @@ pub struct BiomeRow {
     pub grass: u8,
     #[serde(default)]
     pub tree_density: f32,
+    /// How far this biome's trees stand apart, as a factor on the species'
+    /// own spacing: a rainforest or a boreal stand lets crowns overlap
+    /// (0.4), a temperate wood keeps them touching (0.7), a savanna sets
+    /// them wide apart (2). One when absent.
+    #[serde(default = "one")]
+    pub spacing: f32,
     /// `[[species name, weight], ...]`; order is load-bearing for the pick.
     #[serde(default)]
     pub species: Vec<(String, u8)>,
@@ -478,6 +488,11 @@ pub struct BlockRow {
     /// kinds.
     #[serde(default = "one_level")]
     pub levels: [u8; 2],
+    /// Ground the generator gives one of these, in tiles: `[[w, d], [w, d]]`
+    /// smallest and largest. A house is 3x2 to 5x3 tiles (6 to 10 m by 4 to
+    /// 6 m), a tower 2x2, a field a whole plot. One tile when absent.
+    #[serde(default = "one_tile")]
+    pub footprint: [[u8; 2]; 2],
     /// Metres per level; the height in `size` when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level_height: Option<f32>,

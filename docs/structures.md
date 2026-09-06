@@ -21,6 +21,7 @@ identity properties are in [properties.md](properties.md)):
 | name | required | house, tower, barn, road, field, wall |
 | size | required | `[w, d, h]` metres of one tile of the kind at one level: 2 by 2 by the level height |
 | levels | [1, 1] | levels the generator gives a stack, `[min, max]`; `[0, 0]` for ground kinds |
+| footprint | [[1, 1], [1, 1]] | smallest and largest ground one covers, in tiles: house 3x2 to 5x3, tower 2x2, barn 4x3 to 6x3, field 6x6 to 12x8 |
 | level_height | size's h | metres per level |
 | roof | flat | none, flat, gable, hip; gables ridge along the longer run |
 | pitch | 1.0 | metres of rise per metre of run from the eaves |
@@ -36,10 +37,19 @@ identity properties are in [properties.md](properties.md)):
 | deck | false | reserved for bridges: the top at the bank height over water |
 | settle_min, chance | 1.0, 0 | the generator's rule: settlement field a tile needs, and the percentage of qualifying tiles that carry one; chance 0 means placed only by hand |
 
-A tile's structure is `Stack { kind, levels }`. The generator places the
-first kind in table order whose rule passes, with more levels deeper into
-the settlement; `Map::set_stack` places or clears one by hand and lifts
-the chunk ceiling. Towns and roads wait for the settlement system.
+A tile's structure is `Stack { kind, levels }`, and a building is a
+rectangle of tiles all carrying the same one. The world is cut into
+settlement plots of sixteen tiles square; each plot holds at most one
+building, a pure function of the plot and the seed: the first kind in
+table order whose rule passes the settlement field and its own roll, sized
+from its `footprint` range, set inside the plot with a tile of margin so
+buildings of neighbouring plots never touch and merge, on ground of a
+terrain the kind stands on and flat within two metres. Deeper into the
+settlement a building has more levels. Its own tiles take the stack and
+the ring two tiles around it is cleared of trees, so a house in a wood
+stands in a clearing. `Map::set_stack` places or clears one tile by hand
+and lifts the chunk ceiling. Roads and walls have no chance and are placed
+by hand.
 
 ## Geometry
 
@@ -96,6 +106,10 @@ alternating rows.
   ground level, centred on the door face, which is the open face toward an
   adjacent road, else the first open face in `(+y, +x, -y, -x)` rotated by
   the tile's seed.
+- Canopy: the species' seasonal colour, tinted by the instance, lit by
+  the crown's normal toward the sun, lightened toward the tip so a spire
+  reads as a spire, and darkened where other crowns stand over the same
+  point, which gives a stand its depth.
 - Roof: the material's roof colour, snow-covered by the kind's
   `snow_cover`, shaded by the slope's normal so the two sides of a gable
   differ; from zoom 4 the `roof_fill` glyph at 35% density.
@@ -112,8 +126,22 @@ crown radius is half the spread; the shape says how much of the height is
 trunk (a quarter for a cone, four tenths for an ellipsoid, none for a
 dome or cactus); a row may give `radius`, `height`, `trunk` and
 `trunk_radius` in metres instead. The size class scales a species (small
-0.8, mixed 1, large 1.15) and the tile's variant scales each tree (0.8 to
-1.1); the trunk is jittered within its tile by the tile's seed.
+0.8, mixed 1, large 1.15), the tile's variant scales each tree (0.8 to
+1.1), and the tile's seed gives every instance its own height and crown
+radius a quarter either way, a canopy an eighth brighter or dimmer and
+slightly warmer or cooler, and a chance (the species' `dead_chance`) of
+standing dead: a grey-brown snag with no foliage that still casts. The
+trunk is jittered within its tile by the tile's seed.
+
+Trees stand apart by their crowns. A species' `spacing` is three quarters
+of its crown width unless the row says otherwise, and the biome's own
+factor multiplies it (0.4 where crowns interlock, 2 in a savanna). A tile
+carries a tree only if it is the highest draw of the tiles within that
+spacing, and then only at the biome's `tree_density`: a dense stand keeps
+trunks and gaps between its crowns instead of reading as one mass. The
+crown itself starts at the species' prune height above the ground, a
+fifth of the height for a conifer and a third for a broadleaf, so there is
+bare trunk under the canopy.
 
 Each volume is registered on every tile its footprint touches, tallest
 first. A ray segment tests the volumes of its sample's tile until their

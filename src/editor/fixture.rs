@@ -17,10 +17,12 @@ pub const SIZE: usize = 12;
 pub const GROUND_Z: i32 = SEA + 3;
 
 /// Block footprints `P` cycles through, as offsets from the centre tile.
+/// The first is the ground the generator gives a house, so the preview
+/// shows what the game builds; the rest exercise merging.
 pub const PATTERNS: [(&str, &[(i32, i32)]); 4] = [
+    ("4x3", &[(-2, -1), (-1, -1), (0, -1), (1, -1), (-2, 0), (-1, 0), (0, 0), (1, 0), (-2, 1), (-1, 1), (0, 1), (1, 1)]),
     ("1x1", &[(0, 0)]),
     ("1x3", &[(-1, 0), (0, 0), (1, 0)]),
-    ("2x2", &[(0, 0), (1, 0), (0, 1), (1, 1)]),
     ("L", &[(0, -1), (0, 0), (0, 1), (1, 1)]),
 ];
 
@@ -176,9 +178,11 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                     map.set_tile(cx + dx, cy + dy, t);
                 }
             }
-            let mut t = centre;
-            t.stack = Some(Stack { kind: house, levels: 1 });
-            map.set_tile(cx, cy, t);
+            for (dx, dy) in PATTERNS[0].1 {
+                let mut t = map.get(cx + dx, cy + dy).expect("inside the fixture");
+                t.stack = Some(Stack { kind: house, levels: 1 });
+                map.set_tile(cx + dx, cy + dy, t);
+            }
             top = assets.blocks[house as usize].level_height + assets.blocks[house as usize].max_rise;
             let trees: Vec<&str> = b.species.iter().filter_map(|(i, _)| assets.species.get(*i).map(|sp| sp.name.as_str())).collect();
             let material = assets.materials.get(b.material).map(|m| m.name.as_str()).unwrap_or("?");
@@ -189,14 +193,14 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             };
         }
         TableKind::Materials if subject.row < assets.materials.len() && !assets.blocks.is_empty() => {
-            for (dx, dy) in PATTERNS[2].1 {
+            for (dx, dy) in PATTERNS[0].1 {
                 let mut t = map.get(cx + dx, cy + dy).expect("inside the fixture");
                 t.material = subject.row as u8;
                 t.stack = Some(Stack { kind: house, levels: 1 });
                 map.set_tile(cx + dx, cy + dy, t);
             }
             top = assets.blocks[house as usize].level_height + assets.blocks[house as usize].max_rise;
-            caption = format!("showing a 2x2 house built of {}", assets.materials[subject.row].name);
+            caption = format!("showing a 4x3 house built of {}", assets.materials[subject.row].name);
         }
         TableKind::Blocks if subject.row < assets.blocks.len() => {
             let (name, offsets) = PATTERNS[s.pattern % PATTERNS.len()];
@@ -283,10 +287,14 @@ mod tests {
         let f = build(&a, Subject { kind: TableKind::Species, row: oak }, &s);
         assert_eq!(f.map.get(f.cx, f.cy).unwrap().tree.map(|t| t.species as usize), Some(oak));
         assert!(f.map.is_fixture());
-        let f = build(&a, Subject { kind: TableKind::Blocks, row: 0 }, &PreviewSettings { pattern: 2, ..s.clone() });
+        // The first pattern is the ground the generator gives a house: four
+        // tiles by three, all of one kind and level count, so it merges.
+        let f = build(&a, Subject { kind: TableKind::Blocks, row: 0 }, &PreviewSettings { pattern: 0, ..s.clone() });
         assert_eq!(f.map.get(f.cx + 1, f.cy + 1).unwrap().stack.map(|st| st.kind), Some(0));
-        assert!(f.map.get(f.cx - 1, f.cy).unwrap().stack.is_none());
+        assert!(f.map.get(f.cx + 2, f.cy).unwrap().stack.is_none(), "the pattern is four wide, not five");
         assert_eq!(f.map.get(f.cx, f.cy).unwrap().stack, f.map.get(f.cx + 1, f.cy + 1).unwrap().stack, "one level count across the pattern, so it merges");
+        let f = build(&a, Subject { kind: TableKind::Blocks, row: 0 }, &PreviewSettings { pattern: 1, ..s.clone() });
+        assert!(f.map.get(f.cx + 1, f.cy).unwrap().stack.is_none(), "a lone tile is one tile");
         let f = build(&a, Subject { kind: TableKind::Props, row: 0 }, &s);
         assert_eq!(f.world.placed.len(), 4);
         assert!(f.world.placed.iter().all(|p| p.x.floor() as i32 == f.cx && p.y.floor() as i32 == f.cy));

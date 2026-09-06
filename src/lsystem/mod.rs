@@ -326,6 +326,8 @@ impl TreeModel {
                 trunk_radius: 0.0,
                 shear: (0.0, 0.0),
                 species,
+                instance: crate::volume::instance(0),
+                dead: self.state == State::Dead,
                 mx,
                 my,
             })

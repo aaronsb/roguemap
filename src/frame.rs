@@ -915,7 +915,7 @@ impl Frames {
         let Some(i) = self.focus else { return Flow::Pass };
         let mut flow = self.frames[i].content.key(key);
         if flow == Flow::Pass {
-            if let Some(a) = input::lookup(input::FRAME, key) {
+            if let Some(a) = input::lookup(input::FRAME, key, false) {
                 flow = self.frames[i].content.input(a);
             }
         }

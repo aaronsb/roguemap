@@ -49,18 +49,35 @@ pub struct Dims {
     pub trunk_radius: f32,
 }
 
+/// Fraction of a tree's height with no live crown under it: a tree
+/// self-prunes as it grows, so a conifer carries its crown from a fifth of
+/// its height and a broadleaf from a third, and from beside or below there
+/// is bare trunk under the canopy. A shrub or a cactus has none. The
+/// L-system's own `prune_height` overrides it for a species that has one.
+pub fn prune_height(shape: Shape) -> f32 {
+    match shape {
+        Shape::Cone => 0.2,
+        Shape::Ellipsoid | Shape::Lsystem => 0.35,
+        Shape::Dome | Shape::Cactus => 0.0,
+    }
+}
+
 impl Dims {
     /// Dimensions from a mature tree's spread and height `[w, d, h]` in
-    /// metres: the crown radius is the mean half-spread, and the shape
-    /// says how much of the height is trunk.
+    /// metres: the crown radius is the mean half-spread, and the shape's
+    /// prune height says how much of the height is bare trunk.
     pub fn from_size(shape: Shape, size: [f32; 3]) -> Dims {
+        Dims::pruned(shape, size, prune_height(shape))
+    }
+
+    /// The same with the crown base given as a fraction of the height.
+    pub fn pruned(shape: Shape, size: [f32; 3], prune: f32) -> Dims {
         let radius = 0.25 * (size[0] + size[1]);
         let h = size[2];
+        let prune = prune.clamp(0.0, 0.8);
         match shape {
-            Shape::Cone => Dims { radius, height: 0.75 * h, trunk: 0.25 * h, trunk_radius: 0.02 * h },
-            Shape::Ellipsoid | Shape::Lsystem => Dims { radius, height: 0.6 * h, trunk: 0.4 * h, trunk_radius: 0.02 * h },
-            Shape::Dome => Dims { radius, height: h, trunk: 0.0, trunk_radius: 0.0 },
-            Shape::Cactus => Dims { radius, height: h, trunk: 0.0, trunk_radius: 0.0 },
+            Shape::Dome | Shape::Cactus => Dims { radius, height: h, trunk: 0.0, trunk_radius: 0.0 },
+            _ => Dims { radius, height: (1.0 - prune) * h, trunk: prune * h, trunk_radius: 0.02 * h },
         }
     }
 }
@@ -77,6 +94,30 @@ pub fn size_scale(size: SizeClass) -> f32 {
 /// Scale of a tile's variant, so a stand has old and young trees.
 pub fn variant_scale(variant: u8) -> f32 {
     [0.8, 0.9, 1.0, 1.1][variant as usize % 4]
+}
+
+/// One instance's own scales from its tile's seed: height, crown radius
+/// and canopy brightness, each a quarter either way (an eighth for the
+/// colour), so no two trees in a stand are the same tree.
+pub fn instance(seed: u32) -> Instance {
+    let unit = |k: u32| ((seed.wrapping_mul(k) >> 9) % 1024) as f32 / 1024.0;
+    Instance { height: 0.75 + 0.5 * unit(0x9E3779B1), radius: 0.75 + 0.5 * unit(0x85EBCA77), tint: 0.88 + 0.24 * unit(0xC2B2AE35), hue: unit(0x27D4EB2F) - 0.5 }
+}
+
+/// The variation one tree carries over its species.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Instance {
+    pub height: f32,
+    pub radius: f32,
+    /// Brightness factor on the canopy colour.
+    pub tint: f32,
+    /// Hue shift in `-0.5..0.5`, a nudge toward yellow or blue.
+    pub hue: f32,
+}
+
+/// Whether an instance of a species stands dead, from its tile's seed.
+pub fn stands_dead(seed: u32, dead_chance: f32) -> bool {
+    ((seed.wrapping_mul(0x165667B1) >> 11) % 1024) as f32 / 1024.0 < dead_chance
 }
 
 /// One tree standing in the world for this frame.
@@ -99,6 +140,11 @@ pub struct Volume {
     pub shear: (f32, f32),
     /// Index into the species table.
     pub species: u8,
+    /// What this tree carries over its species: colour and, through the
+    /// dimensions above, size.
+    pub instance: Instance,
+    /// A snag: no foliage, a grey-brown crown, and it still casts.
+    pub dead: bool,
     pub mx: i32,
     pub my: i32,
 }
@@ -306,7 +352,7 @@ mod tests {
     use super::*;
 
     fn oak() -> Volume {
-        Volume { shape: Shape::Ellipsoid, cx: 0.0, cy: 0.0, ground: 0.0, h0: 1.0, height: 2.0, radius: 0.6, trunk_radius: 0.1, shear: (0.0, 0.0), species: 0, mx: 0, my: 0 }
+        Volume { shape: Shape::Ellipsoid, cx: 0.0, cy: 0.0, ground: 0.0, h0: 1.0, height: 2.0, radius: 0.6, trunk_radius: 0.1, shear: (0.0, 0.0), species: 0, instance: instance(0), dead: false, mx: 0, my: 0 }
     }
 
     #[test]

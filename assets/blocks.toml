@@ -1,12 +1,13 @@
 [[block]]
 name = "house"
-description = "A small dwelling with a gable roof, a door on an open side and windows that glow at night. Built of the local material; two houses side by side make one longer house."
+description = "A dwelling of three to five tiles by two or three under one gable roof, with a door on an open side and windows that glow at night. Built of the local material; the tiles of one house merge into one building."
 category = "dwelling"
-settle_min = 0.64
-chance = 14
+settle_min = 0.55
+chance = 45
 terrain = ["grass", "dirt", "sand"]
 size = [2.0, 2.0, 3.0]
 levels = [1, 2]
+footprint = [[3, 2], [5, 3]]
 roof = "gable"
 pitch = 1.0
 max_rise = 2.0
@@ -22,13 +23,14 @@ tags = ["flammable", "wooden"]
 
 [[block]]
 name = "tower"
-description = "A tall square tower of three levels under a low hipped cap, built of stone wherever it stands. Watchtowers and keeps are stacks of it."
+description = "A tall square tower of three to five levels under a low hipped cap, built of stone wherever it stands. It stands on two tiles by two; watchtowers and keeps are stacks of it."
 category = "dwelling"
-settle_min = 0.82
-chance = 2
+settle_min = 0.68
+chance = 8
 terrain = ["grass", "dirt", "rock"]
 size = [2.0, 2.0, 4.0]
-levels = [3, 3]
+levels = [3, 5]
+footprint = [[2, 2], [2, 2]]
 roof = "hip"
 pitch = 0.6
 max_rise = 1.5
@@ -43,13 +45,14 @@ tags = ["stone"]
 
 [[block]]
 name = "barn"
-description = "A long, tall-roofed barn of one high level with a wide door and no windows. Built of the local material; barns in a row share one roof."
+description = "A long, tall-roofed barn of one high level, four to six tiles by three, with a wide door and no windows. Built of the local material; its tiles share one roof."
 category = "workplace"
-settle_min = 0.7
-chance = 4
+settle_min = 0.58
+chance = 20
 terrain = ["grass", "dirt"]
 size = [2.0, 2.0, 5.0]
 levels = [1, 1]
+footprint = [[4, 3], [6, 3]]
 roof = "gable"
 pitch = 1.2
 max_rise = 3.0
@@ -69,6 +72,7 @@ category = "way"
 terrain = ["grass", "dirt", "sand", "rock"]
 size = [2.0, 2.0, 0.1]
 levels = [0, 0]
+footprint = [[1, 1], [1, 1]]
 roof = "none"
 material = "by_biome"
 merge = true
@@ -81,13 +85,14 @@ tags = ["stone"]
 
 [[block]]
 name = "field"
-description = "Tilled ground: no height, the earth turned in rows beside the houses. Planted by the settlement system on flat grass."
+description = "Tilled ground: no height, the earth turned in rows beside the houses. The settlement system plants a plot of six by six to twelve by eight tiles on flat grass."
 category = "workplace"
-settle_min = 0.6
-chance = 6
+settle_min = 0.5
+chance = 35
 terrain = ["grass"]
 size = [2.0, 2.0, 0.2]
 levels = [0, 0]
+footprint = [[6, 6], [12, 8]]
 roof = "none"
 material = "by_biome"
 merge = true
@@ -104,6 +109,7 @@ category = "way"
 terrain = ["grass", "dirt", "sand", "rock", "snow"]
 size = [2.0, 2.0, 1.5]
 levels = [1, 1]
+footprint = [[1, 1], [1, 1]]
 roof = "flat"
 material = "stone"
 merge = true

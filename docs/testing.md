@@ -39,6 +39,11 @@ is one command.
   over the water and a range at `RELIEF`, rising all the way and inverted
   by `relief_fraction`; generated heights stay inside that band and a
   tile's height is the field floored to whole metres.
+- **Settlements.** Every generated building is a rectangle within its
+  kind's footprint range and its level range, inside its own plot with a
+  tile of margin; every tile of one carries its stack, its ground is
+  cleared of trees, and the ring around it is clear, so two buildings
+  never merge.
 - **Asset units.** Every distance in the tables is metres: the person is
   2 m, a house level 3 m, an oak 18 m, the campfire's light reaches 8 m,
   and every size, crown, roof rise, reach, sight and light radius sits in

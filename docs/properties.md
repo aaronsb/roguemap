@@ -79,9 +79,12 @@ occupied, asleep, carrying.
 | max_slope | metres per metre | none | blocks, props | Refuses steep ground; buildings want flat tiles. |
 | density | 0..1 | required for props | props | Chance per placement cell where the rules pass. |
 | cluster | 0..1 | 0 | props, species | Tendency to appear beside its own kind; 0 is independent, 1 is only in groups. |
+| spacing | metres | from size | species | How far a tree stands from its own kind: three quarters of its crown width when the row says nothing, so a 7 m spruce keeps five metres and a 3 m juniper two. The biome's own `spacing` factor multiplies it. |
+| spacing | factor | 1 | biomes | How far apart this biome's trees stand, on each species' own spacing: a rainforest or a boreal stand lets crowns overlap (0.4), a temperate wood keeps them touching (0.7), a savanna sets them wide (2). |
 | spacing | metres | 0 | blocks, creatures | Minimum distance from another of the same kind. |
 | levels | count pair | [1, 1] | blocks | Levels the generator gives a stack, `[min, max]`; `[0, 0]` for ground kinds. |
-| settle_min, chance | 0..1, percent | 1.0, 0 | blocks | The generator's rule: settlement field a tile needs, and the share of qualifying tiles that carry one. |
+| footprint | [[w, d], [w, d]] tiles | [[1, 1], [1, 1]] | blocks | Smallest and largest ground one of these covers: a house 3x2 to 5x3 tiles, a tower 2x2, a barn 4x3 to 6x3, a field 6x6 to 12x8. The generator picks a size in the range and lays whole tiles of one kind and level count, which merge into one building. |
+| settle_min, chance | 0..1, percent | 1.0, 0 | blocks | The generator's rule: the settlement field a plot needs, and the share of qualifying plots that carry one. A plot is sixteen tiles square and holds at most one building, with a tile of margin, so buildings never touch. |
 
 ## Physical
 
@@ -123,6 +126,7 @@ occupied, asleep, carrying.
 | decay | days | none | props, blocks | Time from ruined to gone. |
 | sway | 0..1 | species 1, others 0 | species, props | How much wind moves it. |
 | sheds | bool | true for deciduous | species | Whether it drops leaves in autumn. |
+| prune_height | 0..1 | 0.2 conifer, 0.35 broadleaf | species | Fraction of the height carrying no live crown: a tree self-prunes as it grows, so there is bare trunk under the canopy. The L-system's own value, when a species has one, is what the canopy volume uses. |
 
 ## Creatures
 

@@ -12,7 +12,7 @@ use crate::assets::Assets;
 use crate::biome::{self, Biome, Block, Material, Species};
 use crate::blocks::Stack;
 use crate::noise::{fbm, hash};
-use crate::volume::{size_scale, variant_scale};
+use crate::volume::{instance, size_scale, variant_scale};
 
 /// Sea level: heights are metres above it, so the shoreline is zero.
 pub const SEA: i32 = 0;
@@ -71,6 +71,12 @@ pub fn relief_fraction(metres: f32) -> f32 {
 }
 
 const CHUNK: i32 = 32;
+/// Tiles of a settlement plot: at most one building stands in each, with a
+/// tile of margin, so buildings of neighbouring plots never touch.
+const PLOT: i32 = 16;
+/// Tiles of cleared ground around a building: no tree grows against a
+/// wall, so a house in a wood stands in its own clearing.
+const CLEARING: i32 = 2;
 /// Water bodies larger than this are treated as open water.
 const BODY_CAP: usize = 200;
 
@@ -178,7 +184,7 @@ impl Tile {
         if let Some(f) = self.tree {
             let sp = f.species(assets);
             let (_, d) = sp.volume();
-            let s = size_scale(sp.size_class) * variant_scale(f.variant);
+            let s = size_scale(sp.size_class) * variant_scale(f.variant) * instance(self.seed).height;
             top = top.max(ground + 0.5 + (d.trunk + d.height) * s);
         }
         top
@@ -233,6 +239,18 @@ pub struct Map {
     /// Stacks placed by hand or by the settlement system, over the
     /// generated ones.
     stacks: RefCell<HashMap<(i32, i32), Option<Stack>>>,
+}
+
+/// A building the generator puts on a plot: a rectangle of tiles in
+/// tiles, all carrying one stack, which the geometry merges into one
+/// building (ADR-002).
+#[derive(Clone, Copy, Debug)]
+struct Building {
+    x0: i32,
+    y0: i32,
+    w: i32,
+    d: i32,
+    stack: Stack,
 }
 
 /// A generated block of tiles with the ceiling over everything in it.
@@ -474,6 +492,28 @@ impl Map {
         self.height_smooth(x as f32 + 0.5, y as f32 + 0.5).floor() as i32
     }
 
+    /// Whether a tile is the site of its own neighbourhood: no tile within
+    /// `radius` tiles has a higher draw. Trees are placed on these sites, so
+    /// crowns of the species' spacing never overlap however dense the
+    /// forest field is, and the gaps between them are trunk and grass.
+    fn stands_clear(&self, x: i32, y: i32, radius: f32) -> bool {
+        let draw = |px: i32, py: i32| hash(px as i64, py as i64, self.seed ^ 0x7EE5);
+        let r = radius.clamp(0.5, 6.0);
+        let n = r.floor() as i32;
+        let mine = draw(x, y);
+        for dy in -n..=n {
+            for dx in -n..=n {
+                if (dx, dy) == (0, 0) || (dx * dx + dy * dy) as f32 > r * r {
+                    continue;
+                }
+                if draw(x + dx, y + dy) > mine {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Dirt patch field, above 0.72 is bare earth.
     pub fn patch(&self, xf: f32, yf: f32) -> f32 {
         fbm(xf * 0.13, yf * 0.13, self.seed ^ 0x51, 3)
@@ -540,26 +580,103 @@ impl Map {
         Climate { hf, z, temp, precip, biome }
     }
 
-    /// The stack the generator puts on a tile: the first block kind, in
-    /// table order, whose placement rule passes the settlement field, with
-    /// more levels deeper into the settlement.
-    fn place_stack(&self, x: i32, y: i32, hv: u64, terrain: Terrain, z: i32) -> Option<Stack> {
-        let settle = fbm(x as f32 * 0.05 + 7.0, y as f32 * 0.05, self.seed ^ 0xB1, 2);
-        self.assets.blocks.iter().enumerate().find_map(|(i, kind)| {
-            if kind.chance > 0 && kind.terrain.contains(&terrain) && z > SEA && settle > kind.settle_min && (hv >> 40) % 100 < kind.chance {
-                let [lo, hi] = kind.levels;
-                let span = (hi - lo) as u64 + 1;
-                let deep = ((settle - kind.settle_min) * 6.0).clamp(0.0, 1.0);
-                let roll = ((hv >> 48) % 100) as f32 / 100.0;
-                let extra = ((roll * (0.4 + deep)) * span as f32) as u64;
-                Some(Stack { kind: i as u8, levels: lo + extra.min(span - 1) as u8 })
-            } else {
-                None
-            }
-        })
+    /// The settlement field at a ground point: how built-up the country is
+    /// there, in 0..1. It runs over tens of tiles, so a village is a
+    /// cluster of plots rather than one lone house.
+    fn settlement(&self, xf: f32, yf: f32) -> f32 {
+        fbm(xf * 0.03 + 7.0, yf * 0.03, self.seed ^ 0xB1, 2)
     }
 
-    /// Classify one tile from the height field and climate around it.
+    /// The building of a settlement plot, a pure function of the plot and
+    /// the seed: the first block kind, in table order, whose rule passes
+    /// the settlement field and its own roll, sized from its footprint
+    /// range and set inside the plot's margin so two buildings never touch
+    /// and merge into one. `None` where nothing is built.
+    fn plot_building(&self, px: i32, py: i32) -> Option<Building> {
+        let hv = hash(px as i64, py as i64, self.seed ^ 0xB1D6);
+        let (cx, cy) = (px * PLOT + PLOT / 2, py * PLOT + PLOT / 2);
+        let settle = self.settlement(cx as f32, cy as f32);
+        let (kind, b) = self.assets.blocks.iter().enumerate().find(|(i, k)| {
+            let roll = hash(px as i64, py as i64, self.seed ^ (0x5E77 + *i as u64)) % 100;
+            k.chance > 0 && settle > k.settle_min && roll < k.chance
+        })?;
+        let span = |lo: u8, hi: u8, bits: u32| lo as i32 + ((hv >> bits) % (hi as u64 - lo as u64 + 1)) as i32;
+        let [[wmin, dmin], [wmax, dmax]] = b.footprint;
+        let (w, d) = (span(wmin, wmax, 8), span(dmin, dmax, 12));
+        // Inside the plot with a tile of margin all round.
+        let (room_x, room_y) = (PLOT - w - 2, PLOT - d - 2);
+        if room_x < 1 || room_y < 1 {
+            return None;
+        }
+        let x0 = px * PLOT + 1 + ((hv >> 16) % room_x as u64) as i32;
+        let y0 = py * PLOT + 1 + ((hv >> 24) % room_y as u64) as i32;
+        // The plot must be land the kind stands on, and flat enough that one
+        // roof covers it: every corner within two metres of the first tile.
+        if !b.terrain.contains(&self.terrain_at(x0, y0)) {
+            return None;
+        }
+        let base = self.height(x0, y0);
+        if base <= SEA {
+            return None;
+        }
+        for (cx, cy) in [(x0 + w - 1, y0), (x0, y0 + d - 1), (x0 + w - 1, y0 + d - 1), (x0 + w / 2, y0 + d / 2)] {
+            if (self.height(cx, cy) - base).abs() > 2 {
+                return None;
+            }
+        }
+        // Deeper into the settlement, taller.
+        let [lo, hi] = b.levels;
+        let deep = ((settle - b.settle_min) * 6.0).clamp(0.0, 1.0);
+        let roll = ((hv >> 48) % 100) as f32 / 100.0;
+        let span = (hi - lo) as u64 + 1;
+        let extra = ((roll * (0.4 + deep)) * span as f32) as u64;
+        let levels = lo + extra.min(span - 1) as u8;
+        Some(Building { x0, y0, w, d, stack: Stack { kind: kind as u8, levels } })
+    }
+
+    /// Terrain at a tile without generating its chunk, as `tile` classifies
+    /// it: the settlement generator asks before any tile exists.
+    fn terrain_at(&self, x: i32, y: i32) -> Terrain {
+        let c = self.climate(x, y);
+        let near_water = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.is_water(x + dx, y + dy));
+        terrain_for(c.z, c.temp, near_water, self.patch(x as f32 + 0.5, y as f32 + 0.5))
+    }
+
+    /// Paint the buildings of every plot the chunk touches onto its tiles.
+    /// A building stands on whole tiles of one kind and level count, so the
+    /// geometry merges it into one house with one roof and one door, and
+    /// its ground is cleared of trees.
+    fn build_plots(&self, tiles: &mut [Tile], x0: i32, y0: i32) {
+        let (px0, py0) = ((x0 - PLOT).div_euclid(PLOT), (y0 - PLOT).div_euclid(PLOT));
+        let (px1, py1) = ((x0 + CHUNK).div_euclid(PLOT), (y0 + CHUNK).div_euclid(PLOT));
+        for py in py0..=py1 {
+            for px in px0..=px1 {
+                let Some(b) = self.plot_building(px, py) else { continue };
+                // The building stands in a clearing: its own tiles carry the
+                // stack, and the ring around it is cleared of trees, so a
+                // house in a wood is not buried in one.
+                for ty in b.y0 - CLEARING..b.y0 + b.d + CLEARING {
+                    for tx in b.x0 - CLEARING..b.x0 + b.w + CLEARING {
+                        let (lx, ly) = (tx - x0, ty - y0);
+                        if lx < 0 || ly < 0 || lx >= CHUNK || ly >= CHUNK {
+                            continue;
+                        }
+                        let t = &mut tiles[(ly * CHUNK + lx) as usize];
+                        if t.terrain == Terrain::Water {
+                            continue;
+                        }
+                        t.tree = None;
+                        let inside = (b.x0..b.x0 + b.w).contains(&tx) && (b.y0..b.y0 + b.d).contains(&ty);
+                        if inside {
+                            t.stack = Some(b.stack);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Classify one tile from the height field and climate around it.    /// Classify one tile from the height field and climate around it.
     fn tile(&self, x: i32, y: i32) -> Tile {
         if let Some(f) = &self.fixture {
             let hv = hash(x as i64, y as i64, self.seed);
@@ -589,13 +706,20 @@ impl Map {
         let hv = hash(x as i64, y as i64, self.seed);
         let forest = fbm(x as f32 * 0.08, y as f32 * 0.08, self.seed ^ 0xF0, 3);
         let density = biome.tree_density * crate::noise::smoothstep(0.3, 0.7, forest);
-        let tree = if terrain == Terrain::Grass && z > SEA && !biome.species.is_empty() && (hv % 1000) as f32 / 1000.0 < density {
-            Some(Flora { species: biome::weighted_pick(&biome.species, hv >> 16) as u8, variant: ((hv >> 8) % 4) as u8 })
+        // A tree needs room for its crown: the sites are the tiles that win
+        // their species' spacing, and the biome's density is the fraction of
+        // those that carry one.
+        let tree = if terrain == Terrain::Grass && z > SEA && !biome.species.is_empty() {
+            let si = biome::weighted_pick(&biome.species, hv >> 16);
+            let spacing = self.assets.species[si].spacing() * biome.spacing / TILE_METRES;
+            if self.stands_clear(x, y, spacing) && (hv % 1000) as f32 / 1000.0 < density {
+                Some(Flora { species: si as u8, variant: ((hv >> 8) % 4) as u8 })
+            } else {
+                None
+            }
         } else {
             None
         };
-        let stack = if tree.is_none() { self.place_stack(x, y, hv, terrain, z) } else { None };
-
         let grass = ((fbm(x as f32 * 0.15, y as f32 * 0.15, self.seed ^ 0xA7, 2) * 4.0) as u8).min(biome.grass);
         Tile {
             z,
@@ -605,7 +729,7 @@ impl Map {
             seed: (hv >> 32) as u32,
             body_size: 0,
             biome: climate.biome as u8,
-            stack,
+            stack: None,
             material: material_for(terrain, z, biome, self.stone) as u8,
             temp: temp.round().clamp(-60.0, 60.0) as i8,
             near_water,
@@ -617,6 +741,9 @@ impl Map {
         let (x0, y0) = (cx * CHUNK, cy * CHUNK);
         let mut tiles: Vec<Tile> = (0..CHUNK * CHUNK).map(|i| self.tile(x0 + i % CHUNK, y0 + i / CHUNK)).collect();
         self.label_water_bodies(&mut tiles, x0, y0);
+        if self.fixture.is_none() {
+            self.build_plots(&mut tiles, x0, y0);
+        }
         let placed = self.stacks.borrow();
         if !placed.is_empty() {
             for (i, t) in tiles.iter_mut().enumerate() {
@@ -907,6 +1034,51 @@ mod tests {
             }
         }
         assert!(lowest < 0.0 && highest > 40.0, "the sample holds sea bed and highlands: {lowest} to {highest}");
+    }
+
+    #[test]
+    fn the_generator_builds_whole_buildings_on_plots() {
+        // Every generated building is a rectangle of one kind and one level
+        // count, so the geometry merges it into one house with one roof,
+        // and two buildings never touch.
+        let mut m = Map::new(8, 8, 7, test_assets());
+        m.bounded = false;
+        let mut plots = 0;
+        let mut seen: Vec<(i32, i32, i32, i32)> = Vec::new();
+        for py in -12..12 {
+            for px in -12..12 {
+                let Some(b) = m.plot_building(px, py) else { continue };
+                plots += 1;
+                let kind = &m.assets.blocks[b.stack.kind as usize];
+                let [[wmin, dmin], [wmax, dmax]] = kind.footprint;
+                assert!((wmin as i32..=wmax as i32).contains(&b.w) && (dmin as i32..=dmax as i32).contains(&b.d), "{} is {}x{} tiles", kind.name, b.w, b.d);
+                assert!((kind.levels[0]..=kind.levels[1]).contains(&b.stack.levels), "{}: {} levels", kind.name, b.stack.levels);
+                // Inside its own plot with a tile of margin.
+                assert!(b.x0 > px * PLOT && b.x0 + b.w < (px + 1) * PLOT, "{} runs into the next plot", kind.name);
+                assert!(b.y0 > py * PLOT && b.y0 + b.d < (py + 1) * PLOT);
+                seen.push((b.x0, b.y0, b.w, b.d));
+                if plots <= 40 {
+                    let c = m.climate(b.x0, b.y0);
+                    eprintln!("plot ({px}, {py}): {} {}x{} at ({}, {}) levels {} biome {}", kind.name, b.w, b.d, b.x0, b.y0, b.stack.levels, m.assets.biomes[c.biome].name);
+                }
+            }
+        }
+        assert!(plots > 10, "the sample holds buildings ({plots} plots)");
+        // Every tile of a building carries its stack, and the tiles around
+        // it are clear, so nothing merges across the gap.
+        let (x0, y0, w, d) = seen[0];
+        for y in y0 - 1..y0 + d + 1 {
+            for x in x0 - 1..x0 + w + 1 {
+                let inside = (x0..x0 + w).contains(&x) && (y0..y0 + d).contains(&y);
+                let t = m.get(x, y).unwrap();
+                if inside {
+                    assert!(t.stack.is_some() || t.terrain == Terrain::Water, "({x}, {y}) is part of the building");
+                    assert!(t.tree.is_none(), "a building clears its ground");
+                } else {
+                    assert!(t.stack.is_none(), "({x}, {y}) is the margin around the building");
+                }
+            }
+        }
     }
 
     #[test]

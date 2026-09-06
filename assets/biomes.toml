@@ -8,6 +8,7 @@ ground_glyph = [110, 190, 100]
 seasonal = false
 grass = 3
 tree_density = 0.9
+spacing = 0.4
 species = [["kapok", 6], ["oak", 2]]
 material = "wood"
 
@@ -21,6 +22,7 @@ ground_glyph = [210, 195, 110]
 seasonal = false
 grass = 2
 tree_density = 0.15
+spacing = 2.0
 species = [["acacia", 5], ["juniper", 1]]
 material = "adobe"
 
@@ -34,6 +36,7 @@ ground_glyph = [170, 140, 90]
 seasonal = false
 grass = 0
 tree_density = 0.05
+spacing = 2.5
 species = [["saguaro", 5], ["sagebrush", 1]]
 material = "adobe"
 
@@ -47,6 +50,7 @@ ground_glyph = [210, 200, 130]
 seasonal = true
 grass = 1
 tree_density = 0.08
+spacing = 2.2
 species = [["sagebrush", 4], ["juniper", 2]]
 material = "adobe"
 
@@ -60,6 +64,7 @@ ground_glyph = [190, 200, 110]
 seasonal = true
 grass = 2
 tree_density = 0.35
+spacing = 1.1
 species = [["juniper", 4], ["oak", 2]]
 material = "stone"
 
@@ -73,6 +78,7 @@ ground_glyph = [150, 210, 100]
 seasonal = true
 grass = 3
 tree_density = 0.6
+spacing = 0.7
 species = [["oak", 5], ["birch", 3], ["pine", 1]]
 material = "wood"
 
@@ -86,6 +92,7 @@ ground_glyph = [120, 170, 100]
 seasonal = true
 grass = 1
 tree_density = 0.7
+spacing = 0.4
 species = [["spruce", 5], ["pine", 3], ["birch", 1]]
 material = "wood"
 
@@ -99,6 +106,7 @@ ground_glyph = [170, 180, 140]
 seasonal = true
 grass = 1
 tree_density = 0.05
+spacing = 1.6
 species = [["juniper", 3], ["sagebrush", 1]]
 material = "stone"
 
@@ -112,5 +120,6 @@ ground_glyph = [255, 255, 255]
 seasonal = false
 grass = 0
 tree_density = 0.0
+spacing = 1.0
 species = []
 material = "stone"
