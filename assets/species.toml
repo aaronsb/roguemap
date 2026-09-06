@@ -5,7 +5,9 @@ category = "tree"
 form = "broadleaf"
 size_class = "mixed"
 size = [10.0, 10.0, 18.0]
-shape = "ellipsoid"
+shape = "lsystem"
+style = "decurrent"
+trunk_radius = 0.5
 canopy = [[72, 142, 60], [40, 110, 50], [180, 100, 40], [105, 82, 64]]
 canopy_glyph = [[130, 200, 100], [80, 160, 80], [230, 150, 60], [140, 118, 96]]
 tags = ["flammable", "wooden"]
@@ -17,7 +19,9 @@ category = "tree"
 form = "broadleaf"
 size_class = "small"
 size = [6.0, 6.0, 15.0]
-shape = "ellipsoid"
+shape = "lsystem"
+style = "columnar"
+trunk_radius = 0.18
 canopy = [[120, 190, 90], [90, 160, 70], [220, 180, 60], [150, 140, 130]]
 canopy_glyph = [[180, 230, 140], [150, 210, 120], [250, 220, 110], [210, 205, 200]]
 tags = ["flammable", "wooden"]
@@ -29,7 +33,9 @@ category = "tree"
 form = "pine"
 size_class = "mixed"
 size = [6.0, 6.0, 20.0]
-shape = "cone"
+shape = "lsystem"
+style = "excurrent"
+trunk_radius = 0.26
 canopy = [30, 92, 50]
 canopy_glyph = [70, 140, 80]
 tags = ["flammable", "wooden"]
@@ -41,7 +47,9 @@ category = "tree"
 form = "pine"
 size_class = "large"
 size = [7.0, 7.0, 25.0]
-shape = "cone"
+shape = "lsystem"
+style = "excurrent"
+trunk_radius = 0.3
 canopy = [22, 72, 46]
 canopy_glyph = [56, 118, 74]
 tags = ["flammable", "wooden"]
@@ -53,7 +61,9 @@ category = "shrub"
 form = "scrub"
 size_class = "small"
 size = [3.0, 3.0, 2.5]
-shape = "dome"
+shape = "lsystem"
+style = "shrub"
+trunk_radius = 0.07
 canopy = [70, 110, 70]
 canopy_glyph = [120, 160, 110]
 tags = ["flammable", "wooden"]
@@ -65,7 +75,9 @@ category = "shrub"
 form = "scrub"
 size_class = "small"
 size = [1.5, 1.5, 1.0]
-shape = "dome"
+shape = "lsystem"
+style = "shrub"
+trunk_radius = 0.04
 canopy = [130, 140, 110]
 canopy_glyph = [180, 190, 150]
 tags = ["flammable", "wooden"]
@@ -89,7 +101,9 @@ category = "tree"
 form = "broadleaf"
 size_class = "large"
 size = [16.0, 16.0, 30.0]
-shape = "ellipsoid"
+shape = "lsystem"
+style = "umbrella"
+trunk_radius = 0.95
 canopy = [30, 100, 45]
 canopy_glyph = [70, 150, 80]
 tags = ["flammable", "wooden"]
@@ -101,15 +115,18 @@ category = "tree"
 form = "broadleaf"
 size_class = "mixed"
 size = [12.0, 12.0, 10.0]
-shape = "ellipsoid"
+shape = "lsystem"
+style = "decurrent"
+trunk_radius = 0.35
 canopy = [[110, 140, 60], [100, 130, 55], [130, 120, 50], [120, 110, 60]]
 canopy_glyph = [[170, 200, 100], [160, 190, 90], [190, 170, 80], [170, 160, 100]]
 tags = ["flammable", "wooden"]
 
 
-# Grown from a growth habit in tree_styles.toml rather than a canopy volume
-# (docs/lsystem.md). No biome lists them yet; they are authored and looked
-# at with `roguemap --snap-tree NAME OUT.cells`.
+# Every row above names a growth habit too; these are the rows that exist
+# only to say what a habit can do, and no biome plants them. They are
+# authored and looked at with `roguemap --snap-tree NAME OUT.cells`
+# (docs/lsystem.md).
 
 [[species]]
 name = "gnarled oak"
@@ -175,23 +192,3 @@ prune_height = 0.15
 leaf_radius = 0.32
 leaf_density = 0.8
 
-[[species]]
-name = "spruce (lsystem)"
-description = "A boreal spruce grown as a grammar: one straight leader, whorls of near-horizontal branches thinning toward the top, and the lowest tiers self-pruned away."
-category = "tree"
-form = "pine"
-size_class = "large"
-size = [7.0, 7.0, 25.0]
-shape = "lsystem"
-style = "excurrent"
-trunk_radius = 0.30
-canopy = [26, 78, 48]
-canopy_glyph = [62, 126, 78]
-sheds = false
-dead_chance = 0.03
-tags = ["flammable", "wooden", "evergreen"]
-
-[species.lsystem]
-prune_height = 0.2
-depth = 9
-leaf_radius = 0.5

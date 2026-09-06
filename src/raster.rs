@@ -37,6 +37,9 @@ pub(crate) struct Lod {
     profiles: bool,
     /// Trees as volumes; below this they are one-glyph billboards.
     pub(crate) volumes: bool,
+    /// An L-system species draws from its grown model; below this it draws
+    /// its habit's stand-in shape (docs/structures.md).
+    pub(crate) model: bool,
     /// Window and door bands, roof glyphs and normal shading.
     bands: bool,
     /// Supersample the seams of crowns too; below this only the set's
@@ -51,7 +54,7 @@ pub(crate) struct Lod {
 /// 3 near, 6 close.
 pub(crate) fn lod_of(rows_per_metre: f32) -> Lod {
     let rpm = rows_per_metre;
-    Lod { profiles: rpm >= 1.5, volumes: rpm >= 1.5, bands: rpm >= 3.0, canopy_aa: rpm >= 6.0, close: rpm >= 6.0, bisections: if rpm >= 6.0 { 5 } else { 4 } }
+    Lod { profiles: rpm >= 1.5, volumes: rpm >= 1.5, model: rpm >= 3.0, bands: rpm >= 3.0, canopy_aa: rpm >= 6.0, close: rpm >= 6.0, bisections: if rpm >= 6.0 { 5 } else { 4 } }
 }
 
 fn lod(cam: &Camera) -> Lod {
@@ -201,6 +204,17 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
     (' ', base)
 }
 
+/// Where in a tile's volume list the last segment of a ray started
+/// reading. A ray walks down, so the list can only be entered later and
+/// later while it stays over one tile: remembering the place turns a binary
+/// search per sample into a step or two.
+#[derive(Clone, Copy)]
+struct Scan {
+    mx: i32,
+    my: i32,
+    at: usize,
+}
+
 /// The best geometry crossing found along one segment of a ray.
 struct Candidate {
     z: f32,
@@ -245,7 +259,7 @@ impl Renderer {
     /// registered on the sample's tile and the columns of the tiles the
     /// segment can cross, keeping the highest crossing.
     #[allow(clippy::too_many_arguments)]
-    fn geometry(&self, sc: &Scene, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32, cur: (i32, i32, &Geo), prev: Option<(i32, i32, &Geo)>, lod: Lod) -> Option<Candidate> {
+    fn geometry(&self, sc: &Scene, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32, cur: (i32, i32, &Geo), prev: Option<(i32, i32, &Geo)>, lod: Lod, scan: &mut Scan) -> Option<Candidate> {
         let grid = self.grid();
         let mut best: Option<Candidate> = None;
         let mut consider = |c: Candidate| {
@@ -255,14 +269,45 @@ impl Renderer {
         };
         let (mx, my, geo) = cur;
         if lod.volumes && geo.vol.1 > 0 && lo <= geo.top {
-            for (vi, v) in grid.volumes_at(geo) {
-                if v.top() < lo {
+            // The segment's ground path is a short stroke; anything whose
+            // own ground circle misses it cannot be met. Testing that from
+            // the tile's index alone keeps a stand of grown trees out of
+            // the cache: only the few volumes that survive are read.
+            let floor = lo - grid.slack();
+            let (mid, half) = ((p0.0 + d.0 * (lo + hi) * 0.5, p0.1 + d.1 * (lo + hi) * 0.5), 0.5 * (d.0.abs() + d.1.abs()) * (hi - lo));
+            let list = grid.buckets(geo);
+            let cut = hi + geo.vspan + grid.slack();
+            let mut from = if scan.mx == mx && scan.my == my { scan.at } else { list.partition_point(|b| b.top > cut) };
+            while from < list.len() && list[from].top > cut {
+                from += 1;
+            }
+            *scan = Scan { mx, my, at: from };
+            for b in &list[from..] {
+                if b.top < floor {
                     break; // the rest are lower still
                 }
-                if let Some(h) = v.hit(p0, d, lo, hi, lod.close) {
-                    let kind = if h.part == Part::Canopy { HitKind::Canopy } else { HitKind::Trunk };
-                    consider(Candidate { z: h.z, kind, normal: h.normal, which: vi, mx: v.mx, my: v.my });
+                if b.h0 > hi {
+                    continue; // it stands entirely above the segment
                 }
+                let (dx, dy) = (mid.0 - b.cx, mid.1 - b.cy);
+                let reach = b.r + half;
+                if dx * dx + dy * dy > reach * reach {
+                    continue;
+                }
+                let (vi, v) = (b.v, grid.volume(b.v));
+                let Some(h) = v.hit(p0, d, lo, hi, lod.close) else { continue };
+                // A crown is not solid: a sample inside one meets foliage
+                // with the species' leaf density as its probability and
+                // otherwise passes through, so a thin crown shows flecks of
+                // what stands behind it (docs/structures.md).
+                if h.part == Part::Canopy && !v.dead {
+                    let density = sc.assets.species[v.species as usize % sc.assets.species.len()].leaf_density;
+                    if !crate::volume::foliage_at(p0.0 + d.0 * h.z, p0.1 + d.1 * h.z, h.z, density) {
+                        continue;
+                    }
+                }
+                let kind = if h.part == Part::Canopy { HitKind::Canopy } else { HitKind::Trunk };
+                consider(Candidate { z: h.z, kind, normal: h.normal, which: vi, mx: v.mx, my: v.my });
             }
         }
         let mut column = |tx: i32, ty: i32, g: &Geo| {
@@ -336,6 +381,7 @@ impl Renderer {
         let mut i = (top * steps as f32).ceil() as i32;
         let mut z_prev = i as f32 / steps as f32;
         let mut prev: Option<(i32, i32, &Geo)> = None;
+        let mut scan = Scan { mx: i32::MIN, my: i32::MIN, at: 0 };
         while i >= bottom {
             let zf = i as f32 / steps as f32;
             i -= 1;
@@ -361,7 +407,7 @@ impl Renderer {
                 continue;
             };
             if zf <= geo.top || prev.is_some_and(|(px, py, pg)| (px, py) != (mx, my) && zf <= pg.top) {
-                if let Some(cand) = self.geometry(sc, p0, d, zf, z_prev, (mx, my, geo), prev, lod) {
+                if let Some(cand) = self.geometry(sc, p0, d, zf, z_prev, (mx, my, geo), prev, lod, &mut scan) {
                     return self.geometry_hit(sc, p0, d, cand);
                 }
             }
@@ -479,7 +525,7 @@ impl Renderer {
         let Some(g) = grid.geo(hit.mx, hit.my) else { return 0.0 };
         let mut n = 0.0;
         for (vi, v) in grid.volumes_at(g) {
-            if vi == hit.which || v.top() < hit.h - 0.5 {
+            if vi == hit.which || v.top() < hit.h - 0.5 || !matches!(v.shape, crate::volume::Shape::Cone | crate::volume::Shape::Ellipsoid | crate::volume::Shape::Dome) {
                 continue;
             }
             let (dx, dy) = (hit.x - v.cx, hit.y - v.cy);
@@ -536,12 +582,26 @@ impl Renderer {
                 // A snag has no foliage: grey-brown wood where the crown was.
                 let base = if v.dead { pal.trunk.lerp(Rgb(146, 138, 124), 0.45) } else { self.canopy_tint(live, v) };
                 // The crown's own relief: the sun side lightens toward the
-                // tip, and where crowns meet the surface takes less light.
-                let up = ((hit.h - v.h0) / v.height.max(1e-3)).clamp(0.0, 1.0);
-                let crowded = self.crowns_over(hit);
+                // tip, and the deeper into a crown a point is the less light
+                // reaches it. For a stand-in that depth is how many other
+                // crowns stand over the point; a grown tree's own clusters
+                // shade each other, so it takes the depth below its crown's
+                // top instead.
+                let up = ((hit.h - v.crown.0) / v.crown.1.max(1e-3)).clamp(0.0, 1.0);
+                let crowded = if v.shape == crate::volume::Shape::Cluster { 1.0 - up } else { self.crowns_over(hit) };
                 base.scale((1.0 + 0.45 * hit.sun * daylight) * (0.9 + 0.22 * up) * (1.0 - 0.13 * crowded))
             }
-            HitKind::Trunk => pal.trunk,
+            HitKind::Trunk => {
+                let v = &self.grid().volumes[hit.which as usize];
+                let bark = if v.dead { pal.trunk.lerp(Rgb(150, 146, 138), 0.55).scale(0.85) } else { pal.trunk };
+                // A branch at an angle is round in the light; a stand-in's
+                // trunk is a column and keeps its flat colour.
+                if v.shape == crate::volume::Shape::Branch {
+                    bark.scale(1.0 + 0.3 * hit.sun * daylight)
+                } else {
+                    bark
+                }
+            }
         }
     }
 
@@ -595,8 +655,9 @@ impl Renderer {
     fn antialias_edges(&mut self, sc: &Scene, hits: &[Option<Hit>]) {
         let (fx, fy) = sc.cam.forward();
         let (w, h) = (self.w, self.h);
-        let canopy_aa = lod(sc.cam).canopy_aa;
-        let is_crown = |id: u64| matches!((id >> 5) & 7, k if k == HitKind::Canopy as u64 || k == HitKind::Trunk as u64);
+        let lod = lod(sc.cam);
+        let (canopy_aa, grown) = (lod.canopy_aa, lod.model);
+        let is_crown = |id: u64| HitKind::from_id(id).is_some_and(HitKind::is_tree);
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) as usize;
@@ -619,7 +680,14 @@ impl Renderer {
                     if let Some(hh) = hits[n] {
                         start = start.max(hh.h);
                     }
-                    if self.ids[n] != id && color_dist(self.g[n].albedo, here) >= 24 && (canopy_aa || !is_crown(self.ids[n])) {
+                    // Two crowns meeting is not a boundary worth six rays
+                    // once trees are grown geometry: the branches and leaf
+                    // clusters already cut the outline at cell resolution,
+                    // and in a stand that seam is most of the screen. What
+                    // is still worth it is the stand's edge against the sky,
+                    // the ground or a wall.
+                    let seam = is_crown(id) && is_crown(self.ids[n]);
+                    if self.ids[n] != id && color_dist(self.g[n].albedo, here) >= 24 && (canopy_aa || !is_crown(self.ids[n])) && !(grown && seam) {
                         edge = true;
                     }
                 }
@@ -824,7 +892,7 @@ mod tests {
     fn prepared(sc: &Scene, w: i32, h: i32) -> Renderer {
         let mut r = Renderer::new(w, h);
         let (x0, y0, x1, y1) = r.visible_bounds(sc.cam, 40.0);
-        r.heights = Some(HeightGrid::build(sc, x0, y0, x1, y1, w, h));
+        r.heights = Some(HeightGrid::build(sc, x0, y0, x1, y1, w, h, &mut crate::grid::ModelCache::new()));
         r
     }
 
@@ -1035,15 +1103,16 @@ mod tests {
             assert!(wall.face != FACE_TOP && wall.h > 5.5 && wall.h < 5.5 + 2.0 * lh, "zoom {zoom}: wall at {}", wall.h);
             // The tree: a crown over the trunk, met on the flank facing the
             // camera half way up (a slanting ray only grazes a cone's apex),
-            // and plain ground beside it.
-            let v = r.grid().volumes.iter().find(|v| (v.mx, v.my) == (2, 6)).expect("the pine has a volume");
+            // and plain ground beside it. From the near zooms up the pine is
+            // grown from its habit, so the flank is whichever of foliage and
+            // wood the ray meets first, not always foliage.
+            let v = *r.grid().tree_crowns().find(|v| (v.mx, v.my) == (2, 6)).expect("the pine has a crown");
             let (fx, fy) = cam.forward();
             let half = v.h0 + 0.5 * v.height;
             let (px, py) = cam.project(v.cx + 0.5 * v.radius * fx, v.cy + 0.5 * v.radius * fy, half);
             let crown = r.ray(&sc, px, py).unwrap_or_else(|| panic!("zoom {zoom}: no hit on the crown's flank"));
-            assert_eq!(crown.kind, HitKind::Canopy, "zoom {zoom}: {:?}", crown.kind);
-            assert!((crown.h - half).abs() < 0.5, "zoom {zoom}: the flank is met half way up ({} vs {})", crown.h, half);
-            assert!(crown.sun > 0.0, "zoom {zoom}: the flank toward the sun and camera is lit");
+            assert!(crown.kind.is_tree(), "zoom {zoom}: {:?}", crown.kind);
+            assert!((crown.h - half).abs() < 1.5, "zoom {zoom}: the flank is met half way up ({} vs {})", crown.h, half);
             let (px, py) = cam.project(v.cx + 4.0, v.cy - 1.0, 5.5);
             let ground = r.ray(&sc, px, py).unwrap();
             assert_eq!(ground.kind, HitKind::Terrain, "zoom {zoom}: four tiles from the trunk is ground");
@@ -1057,5 +1126,109 @@ mod tests {
         assert!(r.grid().volumes.is_empty());
         let (px, py) = cam.project(5.5, 5.5, 5.5 + 2.0 * lh);
         assert_eq!(r.ray(&sc, px, py).map(|h| h.kind), Some(HitKind::Roof), "the column still stands at the overview");
+    }
+
+    /// One flat map carrying a single tree of `name` on a tile of `temp`
+    /// degrees, for the tests below.
+    fn one_tree(assets: &std::rc::Rc<crate::assets::Assets>, name: &str, temp: i8) -> Map {
+        let sp = assets.species.iter().position(|s| s.name == name).unwrap_or_else(|| panic!("a {name} in the set"));
+        Map::synthetic(16, 16, assets.clone(), 0, move |x, y| {
+            let mut t = Tile::flat(5);
+            t.temp = temp;
+            // A seed of zero rolls a standing snag, which has no foliage
+            // whatever the season; this one is alive.
+            t.seed = 7;
+            if (x, y) == (8, 8) {
+                t.tree = Some(Flora { species: sp as u8, variant: 2 });
+            }
+            t
+        })
+    }
+
+    /// The grid over a tree at a zoom, with the season the world is in.
+    fn tree_grid(map: &Map, ts: &Tileset, season: f32, zoom: usize) -> (Renderer, (i32, i32, i32, i32)) {
+        let mut world = World::new(1);
+        world.season = season;
+        let (w, h) = (120, 40);
+        let mut cam = Camera::new();
+        cam.set_zoom(zoom, w, h);
+        cam.look_at(8, 8, map, w, h);
+        let sc = Scene::new(map, ts, &world, &cam, 0.0);
+        let r = prepared(&sc, w, h);
+        let b = r.grid().bounds();
+        (r, b)
+    }
+
+    #[test]
+    fn a_grown_species_buckets_its_branches_and_leaf_clusters_into_the_grid() {
+        use crate::volume::Shape;
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let map = one_tree(&assets, "oak", 12);
+        // At the mid zoom the oak is one stand-in volume, the shape its
+        // habit reads as from far away.
+        let (r, _) = tree_grid(&map, ts, 1.0, 1);
+        assert_eq!(r.grid().volumes.len(), 1);
+        assert_eq!(r.grid().volumes[0].shape, Shape::Ellipsoid);
+        // At the near zoom it is its model: branches and leaf clusters, one
+        // stand-in kept for the shadow mask, and every primitive bucketed
+        // into the tiles its footprint covers.
+        let (r, (x0, y0, x1, y1)) = tree_grid(&map, ts, 1.0, 2);
+        let grid = r.grid();
+        let kinds = |k: Shape| grid.volumes.iter().filter(|v| v.shape == k).count();
+        assert_eq!(grid.crowns.len(), 1, "one tree, one crown for the shadow mask");
+        assert_eq!(grid.volumes[grid.crowns[0] as usize].shape, Shape::Ellipsoid);
+        assert!(kinds(Shape::Branch) > 3, "the model's branches: {}", kinds(Shape::Branch));
+        assert!(kinds(Shape::Cluster) > 10, "the model's leaf clusters: {}", kinds(Shape::Cluster));
+        assert_eq!(kinds(Shape::Branch) + kinds(Shape::Cluster) + 1, grid.volumes.len());
+        // Every bucket entry describes the volume it points at, and the
+        // trunk's own tile carries both wood and foliage.
+        let mut on_trunk = (0, 0);
+        let mut entries = 0;
+        for my in y0..=y1 {
+            for mx in x0..=x1 {
+                let Some(g) = grid.geo(mx, my) else { continue };
+                for b in grid.buckets(g) {
+                    let v = grid.volume(b.v);
+                    assert_eq!((b.top, b.h0), (v.top(), v.h0));
+                    entries += 1;
+                    if (mx, my) == (8, 8) {
+                        match v.shape {
+                            Shape::Branch => on_trunk.0 += 1,
+                            Shape::Cluster => on_trunk.1 += 1,
+                            other => panic!("{other:?} bucketed with a grown tree"),
+                        }
+                    }
+                }
+            }
+        }
+        assert!(entries > grid.volumes.len(), "a primitive covers at least its own tile");
+        assert!(on_trunk.0 > 0 && on_trunk.1 > 0, "the trunk's tile carries wood and foliage: {on_trunk:?}");
+        // A tile well clear of the crown carries nothing.
+        let far = grid.geo(8 - 8, 8).expect("a tile eight over");
+        assert_eq!(far.vol.1, 0);
+    }
+
+    #[test]
+    fn a_bare_tree_leaves_only_branches_on_the_walk() {
+        use crate::volume::Shape;
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        // A cold winter: an oak sheds, so its foliage is nothing.
+        let map = one_tree(&assets, "oak", 0);
+        let oak = assets.species.iter().find(|s| s.name == "oak").unwrap();
+        assert!(oak.sheds);
+        assert_eq!(oak.foliage(0.0, 3.0), 0.0, "an oak in a cold winter is bare");
+        let (r, _) = tree_grid(&map, ts, 3.0, 2);
+        let grid = r.grid();
+        assert!(grid.volumes.iter().filter(|v| v.shape == Shape::Branch).count() > 10, "a bare tree keeps every twig");
+        assert_eq!(grid.volumes.iter().filter(|v| v.shape == Shape::Cluster).count(), 0, "no foliage in winter");
+        // In summer the same tree is in leaf, and an evergreen beside it
+        // keeps its foliage whatever the season.
+        let (r, _) = tree_grid(&map, ts, 1.0, 2);
+        assert!(r.grid().volumes.iter().any(|v| v.shape == Shape::Cluster));
+        let spruce = one_tree(&assets, "spruce", 0);
+        let (r, _) = tree_grid(&spruce, ts, 3.0, 2);
+        assert!(r.grid().volumes.iter().any(|v| v.shape == Shape::Cluster), "an evergreen keeps its crown in winter");
     }
 }

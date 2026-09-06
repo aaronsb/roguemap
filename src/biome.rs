@@ -88,6 +88,14 @@ pub struct Species {
     /// The grammar of a `shape = "lsystem"` species, checked at load
     /// (docs/lsystem.md).
     pub lsystem: Option<Grammar>,
+    /// The canopy volume an L-system species reads as at the far zooms: its
+    /// style's `stand_in` (docs/structures.md, "Volumes are stand-ins").
+    pub stand_in: Option<Shape>,
+    /// How solid the crown is, 0..1: the chance a ray sample inside it meets
+    /// foliage rather than passing through (docs/structures.md, "Porous
+    /// canopies"). The grammar's `leaf_density` when there is one, else the
+    /// form's.
+    pub leaf_density: f32,
     /// Whether it drops leaves in autumn.
     pub sheds: bool,
     /// Chance in 0..1 that an instance stands dead.
@@ -243,7 +251,12 @@ impl Species {
     /// The canopy shape and its dimensions at size scale one: from `size`
     /// by shape unless the row says otherwise.
     pub fn volume(&self) -> (Shape, Dims) {
-        let shape = self.shape.unwrap_or_else(|| Shape::for_form(self.form));
+        let mut shape = self.shape.unwrap_or_else(|| Shape::for_form(self.form));
+        if shape == Shape::Lsystem {
+            // A grown species has no volume of its own: from far away it
+            // reads as its habit's stand-in.
+            shape = self.stand_in.unwrap_or(Shape::Ellipsoid);
+        }
         // A species grown from an L-system prunes its stand-in to the same
         // height its branches start at.
         let prune = self.lsystem.as_ref().map(|g| g.prune_height).filter(|p| *p > 0.0);

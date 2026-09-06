@@ -29,6 +29,7 @@ Rendered by `make screenshots` with the canonical snapshot pipeline.
 | ![night](docs/screenshots/night.png) Night, campfire and lit windows | ![winter](docs/screenshots/winter.png) Winter after two days of storm |
 | ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom | ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses |
 | ![worldmap](docs/screenshots/worldmap.png) World map, large extent | ![ascii](docs/screenshots/ascii.png) The ASCII glyph set |
+| ![lsystem-stand-near](docs/screenshots/lsystem-stand-near.png) A boreal stand at 1:2, every spruce grown from its habit | ![lsystem-stand-close](docs/screenshots/lsystem-stand-close.png) The same stand at 1:1: trunks, whorls and porous crowns |
 
 ## Run
 

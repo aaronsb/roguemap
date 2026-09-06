@@ -200,6 +200,31 @@ pub enum Volume {
     Ellipsoid { centre: [f32; 3], radii: [f32; 3] },
 }
 
+/// Where one grown model stands in the world, for `TreeModel::place`. The
+/// model itself is one instance of a species at its declared size; this is
+/// everything the frame adds: the tile it grows on, its own scale, the
+/// ground under it and the gust leaning it over.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    pub species: u8,
+    pub mx: i32,
+    pub my: i32,
+    /// Foot of the trunk in tiles, and the ground height there in metres.
+    pub cx: f32,
+    pub cy: f32,
+    pub ground: f32,
+    /// Scale on the model's spread and on its height; a stand has old and
+    /// young trees of one species.
+    pub spread: f32,
+    pub height: f32,
+    /// Base and height of the crown in metres, from the species' stand-in,
+    /// so a primitive shades by where it sits in the tree.
+    pub crown: (f32, f32),
+    /// Ground shift in tiles per metre of height, from the wind.
+    pub shear: (f32, f32),
+    pub instance: crate::volume::Instance,
+}
+
 impl TreeModel {
     /// Recompute `bounds` from the geometry, branch radii included.
     pub fn rebound(&mut self) {
@@ -305,33 +330,119 @@ impl TreeModel {
         out
     }
 
-    /// The leaf clusters as the walk's own placed volumes
-    /// (`crate::volume::Volume`), for a tree standing at tile `(mx, my)`
-    /// with its trunk at `(cx, cy)` tiles on ground height `ground` metres.
+    /// The model as the ray walk wants it at a zoom: leaf clusters closer
+    /// together than `cell` metres merged into one, and branches thinner
+    /// than `min_radius` dropped.
     ///
-    /// Only the clusters convert: `volume::Shape` has no primitive for a
-    /// branch at an arbitrary angle, so the branches stay in this module's
-    /// own `Volume::Cylinder` until the walk grows one.
-    pub fn canopies(&self, species: u8, mx: i32, my: i32, cx: f32, cy: f32, ground: f32) -> Vec<crate::volume::Volume> {
-        self.leaves
-            .iter()
-            .map(|l| crate::volume::Volume {
-                shape: crate::volume::Shape::Ellipsoid,
-                cx: cx + l.centre[0] / crate::map::TILE_METRES,
-                cy: cy + l.centre[1] / crate::map::TILE_METRES,
-                ground,
-                h0: ground + l.centre[2] - l.radius[2],
-                height: 2.0 * l.radius[2],
-                radius: 0.5 * (l.radius[0] + l.radius[1]) / crate::map::TILE_METRES,
-                trunk_radius: 0.0,
-                shear: (0.0, 0.0),
-                species,
-                instance: crate::volume::instance(0),
-                dead: self.state == State::Dead,
-                mx,
-                my,
-            })
-            .collect()
+    /// A tree is a few hundred primitives and a stand is a few hundred
+    /// trees, so what the walk tests has to be the tree at the size it is
+    /// drawn, not the tree the grammar grew. Two clusters a third of a cell
+    /// apart are one blob on the screen whatever the walk does with them,
+    /// and a twig thinner than half a cell is under the foliage that grew
+    /// on it. The silhouette is unchanged; the count is not.
+    pub fn simplify(&self, cell: f32, min_radius: f32) -> TreeModel {
+        let mut out = TreeModel { segments: Vec::new(), leaves: Vec::new(), bounds: Bounds::default(), state: self.state };
+        // A twig is only hidden while there are leaves on it: a bare oak in
+        // winter and a dead one at any season are their twigs, so nothing
+        // is dropped from a model with no foliage.
+        let min_radius = if self.leaves.is_empty() { 0.0 } else { min_radius };
+        out.segments.extend(self.segments.iter().filter(|s| s.radius >= min_radius).copied());
+        // The thickest branch is the bole; a tree that thinned away to
+        // nothing would lose its trunk, so keep it whatever the zoom.
+        if out.segments.is_empty() {
+            if let Some(s) = self.segments.iter().max_by(|a, b| a.radius.total_cmp(&b.radius)) {
+                out.segments.push(*s);
+            }
+        }
+        if cell <= 0.0 {
+            out.leaves.extend_from_slice(&self.leaves);
+            out.rebound();
+            return out;
+        }
+        // One pass down a lattice of `cell` metres: the first cluster in a
+        // cell keeps the cell, and later ones grow it to hold them.
+        let inv = 1.0 / cell;
+        let mut cells: BTreeMap<(i32, i32, i32), usize> = BTreeMap::new();
+        for l in &self.leaves {
+            let key = (
+                (l.centre[0] * inv).floor() as i32,
+                (l.centre[1] * inv).floor() as i32,
+                (l.centre[2] * inv).floor() as i32,
+            );
+            match cells.get(&key) {
+                Some(&at) => {
+                    let m: &mut Leaf = &mut out.leaves[at];
+                    for i in 0..3 {
+                        let (lo, hi) = ((m.centre[i] - m.radius[i]).min(l.centre[i] - l.radius[i]), (m.centre[i] + m.radius[i]).max(l.centre[i] + l.radius[i]));
+                        m.centre[i] = 0.5 * (lo + hi);
+                        m.radius[i] = 0.5 * (hi - lo);
+                    }
+                }
+                None => {
+                    cells.insert(key, out.leaves.len());
+                    out.leaves.push(*l);
+                }
+            }
+        }
+        out.rebound();
+        out
+    }
+
+    /// Append this model, placed in the world, to the walk's own volume list
+    /// (`crate::volume::Volume`): one `Branch` capsule per segment and one
+    /// `Cluster` ellipsoid per leaf cluster, in the tile and metre
+    /// coordinates the frame grid buckets. This is the whole adapter between
+    /// a grown tree and the ray walk of ADR-002.
+    pub fn place(&self, at: &Placement, out: &mut Vec<crate::volume::Volume>) {
+        let t = crate::map::TILE_METRES;
+        let (sx, sz) = (at.spread / t, at.height);
+        // The gust leans the whole tree along the wind by height, as it
+        // shears a stand-in crown; baking it into the endpoints keeps every
+        // primitive's own test linear.
+        let lean = |z: f32| (at.shear.0 * (z - at.ground), at.shear.1 * (z - at.ground));
+        let put = |p: [f32; 3]| {
+            let z = at.ground + p[2] * sz;
+            let (lx, ly) = lean(z);
+            (at.cx + p[0] * sx + lx, at.cy + p[1] * sx + ly, z)
+        };
+        let blank = crate::volume::Volume {
+            shape: crate::volume::Shape::Branch,
+            cx: 0.0,
+            cy: 0.0,
+            ground: at.ground,
+            h0: 0.0,
+            height: 0.0,
+            radius: 0.0,
+            trunk_radius: 0.0,
+            run: (0.0, 0.0),
+            crown: at.crown,
+            shear: (0.0, 0.0),
+            species: at.species,
+            instance: at.instance,
+            dead: self.state == State::Dead,
+            mx: at.mx,
+            my: at.my,
+        };
+        out.reserve(self.segments.len() + self.leaves.len());
+        for s in &self.segments {
+            // The lower end first, so `top` is the upper one and the walk
+            // can drop a primitive by its top alone.
+            let (a, b) = if s.a[2] <= s.b[2] { (put(s.a), put(s.b)) } else { (put(s.b), put(s.a)) };
+            out.push(crate::volume::Volume { cx: a.0, cy: a.1, h0: a.2, height: b.2 - a.2, run: (b.0 - a.0, b.1 - a.1), radius: s.radius * sx, ..blank });
+        }
+        for l in &self.leaves {
+            let c = put(l.centre);
+            let rz = l.radius[2] * sz;
+            out.push(crate::volume::Volume {
+                shape: crate::volume::Shape::Cluster,
+                cx: c.0,
+                cy: c.1,
+                h0: c.2 - rz,
+                height: 2.0 * rz,
+                radius: 0.5 * (l.radius[0] + l.radius[1]) * sx,
+                ..blank
+            });
+        }
     }
 
     /// The bark colour a renderer should use: the live colour, or a greyed
@@ -1005,12 +1116,30 @@ mod tests {
         assert!(matches!(v[v.len() - 1], Volume::Ellipsoid { .. }));
         let Volume::Cylinder { a, b, radius } = v[0] else { panic!("the first volume is a branch") };
         assert_eq!(Segment { a, b, radius }, m.segments[0]);
-        // The clusters also convert to the walk's own placed volumes.
-        let placed = m.canopies(3, 10, -4, 10.5, -3.5, 12.0);
-        assert_eq!(placed.len(), m.leaves.len());
-        assert_eq!(placed[0].shape, crate::volume::Shape::Ellipsoid);
-        assert_eq!((placed[0].mx, placed[0].my, placed[0].species), (10, -4, 3));
-        assert!((placed[0].top() - (12.0 + m.leaves[0].centre[2] + m.leaves[0].radius[2])).abs() < 1e-3);
+        // And every one of them places into the walk's own volume list.
+        let at = Placement {
+            species: 3,
+            mx: 10,
+            my: -4,
+            cx: 10.5,
+            cy: -3.5,
+            ground: 12.0,
+            spread: 1.0,
+            height: 1.0,
+            crown: (16.0, 9.0),
+            shear: (0.0, 0.0),
+            instance: crate::volume::instance(0),
+        };
+        let mut placed = Vec::new();
+        m.place(&at, &mut placed);
+        assert_eq!(placed.len(), m.segments.len() + m.leaves.len());
+        assert!(placed[..m.segments.len()].iter().all(|v| v.shape == crate::volume::Shape::Branch));
+        let leaf = placed[m.segments.len()];
+        assert_eq!((leaf.shape, leaf.mx, leaf.my, leaf.species), (crate::volume::Shape::Cluster, 10, -4, 3));
+        assert!((leaf.top() - (12.0 + m.leaves[0].centre[2] + m.leaves[0].radius[2])).abs() < 1e-3);
+        // A branch runs from its lower end to its upper one whichever way
+        // the turtle drew it.
+        assert!(placed[..m.segments.len()].iter().all(|v| v.height >= 0.0));
     }
 
     #[test]

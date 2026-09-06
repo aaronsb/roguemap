@@ -16,27 +16,32 @@ axiom = "(F)*2A"
 [style.params]
 branch_angle = 20.0
 forks = 5
-taper = 0.93
-droop = 0.12
-leaf_density = 1.0
+taper = 0.94
+droop = 0.14
+leaf_density = 0.85
 asymmetry = 0.08
-jitter = 0.09
+jitter = 0.1
 prune_height = 0.18
-depth = 8
+depth = 10
 length = 1.0
-leaf_radius = 0.45
+leaf_radius = 0.85
 
+# Two whorls per rewriting, so a mature spruce carries a tier about every
+# metre and a half of its height rather than one every two or three. The
+# `!` between them shortens everything above, which is what narrows the
+# tiers into a spire, and a whorl branch ends on a roll of the dice, so
+# no two tiers have the same outline.
 [style.rules]
 A = [
-  ['F([(&)*pitchB](/)*spread)*forks!FLA', 5],
-  ['F([(&)*pitchB](/)*spread)*3!FLA', 3],
-  ['F!FLA', 1],
+  ['F([(&)*pitchB](/)*spread)*forks!F([(&)*pitchB](/)*spread)*forks!FLA', 6],
+  ['F([(&)*pitchB](/)*spread)*forks!F([(&)*pitchB](/)*spread)*3!FLA', 3],
+  ['F!F([(&)*pitchB](/)*spread)*forks!FLA', 2],
 ]
 B = [
-  ['FL[(+)*1(^)*1FL][(-)*1(^)*1FL]FLB', 5],
-  ['FL[(+)*1(^)*1FL]FLB', 4],
-  ['FL[(-)*1(^)*1FL]FLB', 3],
-  ['F!FL', 1],
+  ['F[(+)*1(^)*1F]FLB', 4],
+  ['F[(-)*1(^)*1F]FLB', 3],
+  ['FLB', 2],
+  ['FL', 7],
 ]
 
 [style.dead_rules]
@@ -57,7 +62,7 @@ branch_angle = 30.0
 forks = 2
 taper = 0.8
 droop = 0.04
-leaf_density = 1.0
+leaf_density = 0.7
 asymmetry = 0.1
 jitter = 0.09
 prune_height = 0.2
@@ -91,7 +96,7 @@ branch_angle = 25.0
 forks = 2
 taper = 0.9
 droop = 0.1
-leaf_density = 1.0
+leaf_density = 0.7
 asymmetry = 0.1
 jitter = 0.09
 prune_height = 0.22
@@ -126,7 +131,7 @@ branch_angle = 22.0
 forks = 4
 taper = 0.85
 droop = 0.42
-leaf_density = 1.0
+leaf_density = 0.7
 asymmetry = 0.1
 jitter = 0.1
 prune_height = 0.3
@@ -160,7 +165,7 @@ branch_angle = 26.0
 forks = 5
 taper = 0.85
 droop = 0.0
-leaf_density = 1.0
+leaf_density = 0.7
 asymmetry = 0.1
 jitter = 0.09
 prune_height = 0.55
@@ -191,7 +196,7 @@ branch_angle = 20.0
 forks = 4
 taper = 0.88
 droop = -0.14
-leaf_density = 1.0
+leaf_density = 0.7
 asymmetry = 0.1
 jitter = 0.09
 prune_height = 0.05
@@ -222,7 +227,7 @@ branch_angle = 18.0
 forks = 7
 taper = 0.97
 droop = 0.34
-leaf_density = 1.0
+leaf_density = 0.85
 asymmetry = 0.08
 jitter = 0.12
 prune_height = 0.7
@@ -253,7 +258,7 @@ branch_angle = 25.0
 forks = 5
 taper = 0.82
 droop = 0.06
-leaf_density = 1.0
+leaf_density = 0.8
 asymmetry = 0.1
 jitter = 0.12
 prune_height = 0.0

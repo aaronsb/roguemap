@@ -3,11 +3,16 @@
 //! the tree volumes whose footprint touches it. `Map::get` runs only while
 //! the grid is built, so the walk itself never touches the chunk map.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use crate::biome::Species;
 use crate::blocks::{self, door_face, label_runs, merges, ridge_along_x, Column, Ground, Profile, Runs, Stack, NO_FACE};
+use crate::lsystem::{Growth, Placement, State, TreeModel};
 use crate::map::{Tile, MAX_Z, SEA, TILE_METRES};
 use crate::noise::{hash01, ifloor};
 use crate::render::Scene;
-use crate::volume::{instance, size_scale, stands_dead, variant_scale, Volume};
+use crate::volume::{instance, size_scale, stands_dead, variant_scale, Shape, Volume};
 
 /// Highest anything can reach above the ground, in metres: the tallest tree
 /// or roof over the highest terrain.
@@ -18,11 +23,109 @@ pub(crate) const CROWN_CAP: f32 = 40.0;
 /// Tiles per block of the coarse ceiling grid.
 const BLOCK: i32 = 8;
 /// Ground margin around a volume's footprint so a segment between two
-/// walk samples cannot cross it unregistered.
+/// walk samples cannot cross it unregistered: the walk reads the volumes
+/// of the lower sample's tile and tests them over the whole segment, so a
+/// volume has to be registered a little beyond the ground it covers. The
+/// step is shorter at the near zooms, where a tree is its own primitives
+/// and the margin would otherwise be most of what a leaf cluster costs.
 const VOLUME_MARGIN: f32 = 0.4;
+const PRIMITIVE_MARGIN: f32 = 0.2;
 /// Cells beyond the screen a tree may stand and still matter, through its
 /// crown leaning in or its shadow falling across the edge.
 const MARGIN: f32 = 64.0;
+/// Buckets the volumes are counting-sorted into by their tops, so every
+/// tile's list comes out tallest first without an n log n sort of the
+/// hundred thousand primitives a stand of grown trees can carry.
+const TOP_BUCKETS: usize = 2048;
+/// Steps the foliage of a tree is quantised to for the model cache: a
+/// grown model is one of nine states between bare and full, so a season
+/// creeping forward does not rebuild every tree every frame.
+const FOLIAGE_STEPS: f32 = 8.0;
+/// Frames a grown model stays cached after the last frame that wanted it.
+const MODEL_TTL: u32 = 4;
+/// Models the cache holds before the oldest are dropped.
+const MODEL_CAP: usize = 3000;
+
+/// Which tree a cached model is: everything `TreeModel::build` reads, and
+/// the zoom it was simplified for.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct ModelKey {
+    species: u8,
+    seed: u32,
+    /// Foliage in `0..=FOLIAGE_STEPS`.
+    foliage: u8,
+    dead: bool,
+    detail: u8,
+}
+
+/// How fine the walk needs a grown tree at a zoom: leaf clusters closer
+/// than `cell` metres are one blob on the screen and branches thinner than
+/// `min_radius` are hidden under their own foliage, so the model the walk
+/// tests is simplified to that (`TreeModel::simplify`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Detail {
+    pub level: u8,
+    pub cell: f32,
+    pub min_radius: f32,
+}
+
+impl Detail {
+    /// The detail a camera asks for: a lattice four rows of height across
+    /// and a twig about a column thick.
+    fn of(cam: &crate::camera::Camera) -> Detail {
+        let (rows, cols) = (cam.rows_per_metre(), cam.columns_per_metre());
+        Detail { level: (rows >= 6.0) as u8, cell: 4.0 / rows.max(0.1), min_radius: 1.1 / cols.max(0.1) }
+    }
+}
+
+/// Grown L-system trees kept between frames (docs/lsystem.md). Growing one
+/// is a string rewriting and a turtle walk; a stand of them every frame
+/// would cost more than drawing them, so a model is built once per tree and
+/// reused while the tree stays in view.
+#[derive(Default)]
+pub struct ModelCache {
+    models: HashMap<ModelKey, (Rc<TreeModel>, u32)>,
+    frame: u32,
+}
+
+impl ModelCache {
+    pub fn new() -> ModelCache {
+        ModelCache::default()
+    }
+
+    /// Start a frame: nothing is evicted until it ends.
+    fn begin(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    /// The model of one instance, grown if this frame is the first to want
+    /// it. `foliage` is already quantised to `FOLIAGE_STEPS`.
+    fn model(&mut self, index: u8, sp: &Species, seed: u32, foliage: u8, dead: bool, detail: Detail) -> Option<Rc<TreeModel>> {
+        let key = ModelKey { species: index, seed, foliage, dead, detail: detail.level };
+        let frame = self.frame;
+        if let Some(entry) = self.models.get_mut(&key) {
+            entry.1 = frame;
+            return Some(entry.0.clone());
+        }
+        let state = if dead { State::Dead } else { State::Alive };
+        let growth = Growth { foliage: foliage as f32 / FOLIAGE_STEPS, state };
+        let model = Rc::new(sp.tree_model(seed as u64, growth)?.simplify(detail.cell, detail.min_radius));
+        self.models.insert(key, (model.clone(), frame));
+        Some(model)
+    }
+
+    /// Drop what this frame did not want, once it has gone out of view.
+    fn sweep(&mut self) {
+        let (frame, ttl) = (self.frame, MODEL_TTL);
+        self.models.retain(|_, (_, used)| frame.wrapping_sub(*used) <= ttl);
+        if self.models.len() > MODEL_CAP {
+            let mut ages: Vec<u32> = self.models.values().map(|(_, u)| frame.wrapping_sub(*u)).collect();
+            ages.sort_unstable();
+            let cut = ages[MODEL_CAP];
+            self.models.retain(|_, (_, used)| frame.wrapping_sub(*used) < cut);
+        }
+    }
+}
 
 /// What stands on a tile, resolved for the walk.
 #[derive(Clone, Copy, Debug)]
@@ -44,7 +147,27 @@ pub(crate) struct Geo {
     /// Upper bound of the terrain surface in the 3x3 around the tile.
     pub hmax: f32,
     /// Range into the volume index.
-    pub vol: (u32, u16),
+    pub vol: (u32, u32),
+    /// Tallest volume on the tile measured base to top: how far back from
+    /// the height a segment reaches the index must be read, since the
+    /// entries are ordered by their tops.
+    pub vspan: f32,
+}
+
+/// One entry of a tile's volume list. The heights sit beside the index so
+/// the walk can drop everything outside its segment without touching the
+/// volume itself: a stand of grown trees puts a couple of hundred branches
+/// and leaf clusters on a tile, and reading each of them to find the dozen
+/// in range is what a forest cannot afford.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Bucket {
+    pub top: f32,
+    pub h0: f32,
+    /// Ground circle of the volume, from `Volume::reach`.
+    pub cx: f32,
+    pub cy: f32,
+    pub r: f32,
+    pub v: u32,
 }
 
 /// Smooth heights, tiles and geometry of the tiles in view.
@@ -56,8 +179,17 @@ pub(crate) struct HeightGrid {
     data: Vec<f32>,
     tiles: Vec<Option<Tile>>,
     geo: Vec<Geo>,
+    /// Every volume the frame carries: one stand-in per tree, or, where a
+    /// grown species draws from its model, that model's branches and leaf
+    /// clusters and the stand-in the shadow mask still sweeps.
     pub(crate) volumes: Vec<Volume>,
-    vol_index: Vec<u32>,
+    /// One index into `volumes` per tree, at its stand-in: what casts a
+    /// shadow and what a crown counts as standing over it.
+    pub(crate) crowns: Vec<u32>,
+    vol_index: Vec<Bucket>,
+    /// How far out of order the counting sort by tops can leave the index,
+    /// in metres: the walk widens its search by this and loses nothing.
+    slack: f32,
     /// Coarse maxima of `top` per `BLOCK` x `BLOCK` tiles.
     blocks: Vec<f32>,
     bw: i32,
@@ -65,17 +197,54 @@ pub(crate) struct HeightGrid {
     pub(crate) max_top: f32,
 }
 
+/// The volumes' indices, tallest first, by counting sort on their tops:
+/// linear in the number of volumes, where sorting each tile's list is not.
+/// The buckets are about a finger's width of height apart over whatever
+/// range the frame spans, which is finer than the walk's own step, so the
+/// order is exact wherever it matters.
+fn top_order(volumes: &[Volume]) -> (Vec<u32>, f32) {
+    let mut order = vec![0u32; volumes.len()];
+    if volumes.is_empty() {
+        return (order, 0.0);
+    }
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    for v in volumes {
+        lo = lo.min(v.top());
+        hi = hi.max(v.top());
+    }
+    let span = (hi - lo).max(1e-3);
+    let k = TOP_BUCKETS as f32 / span;
+    let bucket = |v: &Volume| (TOP_BUCKETS - 1).saturating_sub((((v.top() - lo) * k) as usize).min(TOP_BUCKETS - 1));
+    let mut counts = vec![0u32; TOP_BUCKETS + 1];
+    for v in volumes {
+        counts[bucket(v)] += 1;
+    }
+    let mut start = 0u32;
+    for c in counts.iter_mut() {
+        let n = *c;
+        *c = start;
+        start += n;
+    }
+    for (i, v) in volumes.iter().enumerate() {
+        let b = bucket(v);
+        order[counts[b] as usize] = i as u32;
+        counts[b] += 1;
+    }
+    (order, span / TOP_BUCKETS as f32)
+}
+
 impl HeightGrid {
     /// Build the grid over the tile range for the frame, for a screen of
     /// `sw` x `sh` cells: trees far off that screen are not made into
     /// volumes.
-    pub(crate) fn build(sc: &Scene, x0: i32, y0: i32, x1: i32, y1: i32, sw: i32, sh: i32) -> HeightGrid {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build(sc: &Scene, x0: i32, y0: i32, x1: i32, y1: i32, sw: i32, sh: i32, cache: &mut ModelCache) -> HeightGrid {
         let (map, assets, world, cam) = (sc.map, sc.assets, sc.world, sc.cam);
         let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
         let n = (w * h) as usize;
         let tiles = map.tiles_in(x0, y0, x1, y1);
         let data: Vec<f32> = tiles.iter().map(|t| t.map(|t| t.hf).unwrap_or(0.0)).collect();
-        let empty = Geo { stack: None, runs: Runs::SINGLE, open: 0, door: NO_FACE, base: 0.0, flat: false, zs: 0.0, top: 0.0, hmax: 0.0, vol: (0, 0) };
+        let empty = Geo { stack: None, runs: Runs::SINGLE, open: 0, door: NO_FACE, base: 0.0, flat: false, zs: 0.0, top: 0.0, hmax: 0.0, vol: (0, 0), vspan: 0.0 };
         let mut geo = vec![empty; n];
         let at = |x: i32, y: i32| ((y - y0) * w + (x - x0)) as usize;
 
@@ -156,10 +325,24 @@ impl HeightGrid {
         }
 
         // Tree volumes, registered on every tile their footprint touches.
+        // A grown species at the near zooms registers its model's branches
+        // and leaf clusters instead of its stand-in, which is kept for the
+        // shadow mask alone (docs/structures.md, "Volumes are stand-ins").
         let mut volumes: Vec<Volume> = Vec::new();
+        let mut crowns: Vec<u32> = Vec::new();
         let mut counts = vec![0u32; n];
+        // The per-tile ceiling and volume span are gathered in arrays of
+        // their own rather than in `geo`, so registering a hundred thousand
+        // primitives touches four bytes a tile and not a whole row of it.
+        let mut tops: Vec<f32> = geo.iter().map(|g| g.top).collect();
+        let mut vspans = vec![0.0f32; n];
+        /// A volume the walk never meets: only the shadow mask sweeps it.
+        const UNREGISTERED: (i32, i32, i32, i32) = (0, 0, -1, -1);
         let mut spans: Vec<(i32, i32, i32, i32)> = Vec::new();
-        if crate::raster::lod_of(cam.rows_per_metre()).volumes {
+        let lod = crate::raster::lod_of(cam.rows_per_metre());
+        let detail = Detail::of(cam);
+        cache.begin();
+        if lod.volumes {
             let octaves = crate::raster::detail_octaves(cam);
             for y in y0..=y1 {
                 for x in x0..=x1 {
@@ -195,7 +378,8 @@ impl HeightGrid {
                     } else {
                         (0.0, 0.0)
                     };
-                    let v = Volume {
+                    let dead = stands_dead(t.seed, sp.dead_chance);
+                    let stand_in = Volume {
                         shape,
                         cx,
                         cy,
@@ -204,54 +388,97 @@ impl HeightGrid {
                         height: dims.height * s,
                         radius: dims.radius * sr / TILE_METRES,
                         trunk_radius: dims.trunk_radius * s / TILE_METRES,
+                        run: (0.0, 0.0),
+                        crown: (ground + dims.trunk * s, dims.height * s),
                         shear,
                         species: flora.species,
                         instance: inst,
-                        dead: stands_dead(t.seed, sp.dead_chance),
+                        dead,
                         mx: x,
                         my: y,
                     };
-                    let (fx0, fy0, fx1, fy1) = v.footprint();
-                    let span = (
-                        ((fx0 - VOLUME_MARGIN).floor() as i32).max(x0),
-                        ((fy0 - VOLUME_MARGIN).floor() as i32).max(y0),
-                        ((fx1 + VOLUME_MARGIN).floor() as i32).min(x1),
-                        ((fy1 + VOLUME_MARGIN).floor() as i32).min(y1),
-                    );
-                    for ty in span.1..=span.3 {
-                        for tx in span.0..=span.2 {
-                            let j = at(tx, ty);
-                            counts[j] += 1;
-                            geo[j].top = geo[j].top.max(v.top());
+                    // The model, if this species grows one and the zoom is
+                    // near enough to read it.
+                    let model = if lod.model && sp.lsystem.is_some() {
+                        let foliage = if dead { 0.0 } else { sp.foliage(t.temp as f32, world.season) };
+                        let steps = (foliage.clamp(0.0, 1.0) * FOLIAGE_STEPS).round() as u8;
+                        cache.model(flora.species, sp, t.seed, steps, dead, detail)
+                    } else {
+                        None
+                    };
+                    crowns.push(volumes.len() as u32);
+                    let total = (dims.trunk + dims.height) * s;
+                    match model {
+                        Some(m) => {
+                            volumes.push(stand_in);
+                            spans.push(UNREGISTERED);
+                            let at_ = Placement {
+                                species: flora.species,
+                                mx: x,
+                                my: y,
+                                cx,
+                                cy,
+                                ground,
+                                spread: sr,
+                                height: s,
+                                crown: (stand_in.h0, stand_in.height),
+                                // The stand-in shears over its crown; a
+                                // grown tree leans over its whole height.
+                                shear: (shear.0 / total.max(1e-3), shear.1 / total.max(1e-3)),
+                                instance: inst,
+                            };
+                            m.place(&at_, &mut volumes);
                         }
+                        None => volumes.push(stand_in),
                     }
-                    volumes.push(v);
-                    spans.push(span);
+                    for v in &volumes[spans.len()..] {
+                        let (fx0, fy0, fx1, fy1) = v.footprint();
+                        let m = if matches!(v.shape, Shape::Branch | Shape::Cluster) { PRIMITIVE_MARGIN } else { VOLUME_MARGIN };
+                        let span = (((fx0 - m).floor() as i32).max(x0), ((fy0 - m).floor() as i32).max(y0), ((fx1 + m).floor() as i32).min(x1), ((fy1 + m).floor() as i32).min(y1));
+                        let (vtop, vspan) = (v.top(), v.top() - v.h0);
+                        for ty in span.1..=span.3 {
+                            let row = (ty - y0) * w - x0;
+                            for tx in span.0..=span.2 {
+                                let j = (row + tx) as usize;
+                                counts[j] += 1;
+                                tops[j] = tops[j].max(vtop);
+                                vspans[j] = vspans[j].max(vspan);
+                            }
+                        }
+                        spans.push(span);
+                    }
                 }
             }
         }
-        let mut vol_index = vec![0u32; counts.iter().sum::<u32>() as usize];
+        cache.sweep();
+        let mut vol_index = vec![Bucket { top: 0.0, h0: 0.0, cx: 0.0, cy: 0.0, r: 0.0, v: 0 }; counts.iter().sum::<u32>() as usize];
         let mut start = 0u32;
-        for (g, c) in geo.iter_mut().zip(counts.iter()) {
-            g.vol = (start, *c as u16);
-            start += c;
+        let mut starts = vec![0u32; n];
+        for (i, g) in geo.iter_mut().enumerate() {
+            g.vol = (start, counts[i]);
+            g.top = tops[i];
+            g.vspan = vspans[i];
+            starts[i] = start;
+            start += counts[i];
         }
-        let mut fill = vec![0u32; n];
-        for (vi, span) in spans.iter().enumerate() {
+        // Tallest first, so a walk can stop testing once the rest are below
+        // its segment. A stand of grown trees is a hundred thousand
+        // primitives, too many to sort per tile, so the volumes are
+        // counting-sorted by their tops once and the tile lists are filled
+        // in that order.
+        let (order, slack) = top_order(&volumes);
+        for vi in order {
+            let span = spans[vi as usize];
+            let v = &volumes[vi as usize];
+            let (rx, ry, rr) = v.reach();
+            let entry = Bucket { top: v.top(), h0: v.h0, cx: rx, cy: ry, r: rr, v: vi };
             for ty in span.1..=span.3 {
+                let row = (ty - y0) * w - x0;
                 for tx in span.0..=span.2 {
-                    let j = at(tx, ty);
-                    vol_index[(geo[j].vol.0 + fill[j]) as usize] = vi as u32;
-                    fill[j] += 1;
+                    let j = (row + tx) as usize;
+                    vol_index[starts[j] as usize] = entry;
+                    starts[j] += 1;
                 }
-            }
-        }
-        // Tallest first, so a walk can stop testing once the rest are
-        // below its segment.
-        for g in &geo {
-            let (s, l) = (g.vol.0 as usize, g.vol.1 as usize);
-            if l > 1 {
-                vol_index[s..s + l].sort_unstable_by(|a, b| volumes[*b as usize].top().partial_cmp(&volumes[*a as usize].top()).unwrap_or(std::cmp::Ordering::Equal));
             }
         }
 
@@ -267,7 +494,7 @@ impl HeightGrid {
                 max_top = max_top.max(t);
             }
         }
-        HeightGrid { x0, y0, w, h, data, tiles, geo, volumes, vol_index, blocks, bw, max_top }
+        HeightGrid { x0, y0, w, h, data, tiles, geo, volumes, crowns, vol_index, slack, blocks, bw, max_top }
     }
 
     #[inline]
@@ -313,10 +540,35 @@ impl HeightGrid {
         Some(&self.geo[i])
     }
 
-    /// The volumes registered on a tile, tallest first, with their indices.
+    /// A tile's whole volume list, ordered by top.
+    #[inline]
+    pub(crate) fn buckets(&self, g: &Geo) -> &[Bucket] {
+        &self.vol_index[g.vol.0 as usize..(g.vol.0 + g.vol.1) as usize]
+    }
+
+    /// How far below a segment's foot the index must still be read, since
+    /// the counting sort leaves it that far out of order.
+    #[inline]
+    pub(crate) fn slack(&self) -> f32 {
+        self.slack
+    }
+
+    /// One volume by its index.
+    #[inline]
+    pub(crate) fn volume(&self, i: u32) -> &Volume {
+        &self.volumes[i as usize]
+    }
+
+    /// Every volume registered on a tile, tallest first.
     #[inline]
     pub(crate) fn volumes_at(&self, g: &Geo) -> impl Iterator<Item = (u32, &Volume)> {
-        self.vol_index[g.vol.0 as usize..(g.vol.0 + g.vol.1 as u32) as usize].iter().map(move |&i| (i, &self.volumes[i as usize]))
+        self.vol_index[g.vol.0 as usize..(g.vol.0 + g.vol.1) as usize].iter().map(move |b| (b.v, &self.volumes[b.v as usize]))
+    }
+
+    /// The stand-in of every tree in the frame: one volume per tree,
+    /// whether or not the walk draws that tree from a grown model.
+    pub(crate) fn tree_crowns(&self) -> impl Iterator<Item = &Volume> {
+        self.crowns.iter().map(move |&i| &self.volumes[i as usize])
     }
 
     /// The column of a tile with a stack of one level or more.

@@ -12,12 +12,14 @@ parameters, and a species picks one and overrides what it wants
 different. A species that no habit describes may still write its own
 axiom and rules.
 
-Nothing in the renderer reads any of this yet. The canopy volumes of
-ADR-002 (cone, ellipsoid, dome) remain what the ray walk tests, and stay
-the right thing at far zooms, where a tree is a few cells; each style
-names the volume it reads as through `stand_in`. The L-system gives the
-true silhouette at near zooms once `TreeModel::volumes` is wired into the
-walk. Until then the way to look at a tree is a preview:
+Every species in the set names a habit, so every tree in the world is
+grown from one; only the saguaro, which is a column and not a tree, keeps
+a canopy volume of its own. The ray walk tests a tree's branches and leaf
+clusters from three rows per metre up (the near and close zooms) and the
+canopy volume of ADR-002 below that, where a tree is a few cells and the
+volume is the right thing; each style names the volume it reads as
+through `stand_in` (docs/structures.md, "Volumes are stand-ins"). The way
+to look at one tree on its own is a preview:
 
 ```
 make build
@@ -63,7 +65,7 @@ species in `[species.lsystem]`.
 | `forks` | 1.. | Branches in a whorl, or ways the trunk forks. |
 | `taper` | 0.1..1 | Factor a segment's length and radius take on entering a branch (`[`) and on every `!`. |
 | `droop` | -1..1 | Extra bend per segment drawn inside a branch, as a fraction of `branch_angle`: positive hangs the branch, negative lifts it. |
-| `leaf_density` | 0..1 | Chance an `L` becomes a cluster; thinning opens a crown without touching the branches. |
+| `leaf_density` | 0..1 | Chance an `L` becomes a cluster; thinning opens a crown without touching the branches. It is also how solid the crown is on the ray walk: the chance a sample inside one meets foliage rather than passing through (docs/structures.md, "Porous canopies"). The evergreen habits carry 0.85 and the broadleaf ones 0.7. |
 | `asymmetry` | 0..1 | How one-sided the instance is: a seeded direction the trunk leans in, with limbs on that side longer and the far side shorter. A parkland tree keeps it low, a gnarled or wind-shaped one high. |
 | `jitter` | 0..1 | Small seeded noise on every branch's angle and length and every cluster's position. A healthy tree is symmetric but never exactly, so a live tree always carries some; the default is 0.08. |
 | `prune_height` | 0..1 | Fraction of the tree's height with no live branches, because a tree self-prunes as it grows. |
@@ -212,12 +214,25 @@ measured from the foot, not across the whole model, because a weeping
 species hangs below it; those whips are under the ground and the ground
 hides them.
 
-`TreeModel::volumes` is the adapter to the ray walk of ADR-002: one
-`Volume::Cylinder` per branch, one `Volume::Ellipsoid` per cluster.
-`volume::Shape` has no primitive for a branch at an arbitrary angle yet,
-so the walk needs a cylinder test before it can consume the branches;
-the clusters already convert to its own placed volumes through
-`TreeModel::canopies`.
+`TreeModel::volumes` is the model as the two primitives the ray walk of
+ADR-002 knows: one `Volume::Cylinder` per branch, one `Volume::Ellipsoid`
+per cluster. `TreeModel::place` is the adapter that puts them in the
+world: given a `Placement` — the tile, the foot of the trunk, the ground
+height, the instance's own scale and the gust leaning it — it appends one
+`volume::Shape::Branch` capsule per segment and one
+`volume::Shape::Cluster` ellipsoid per cluster to the frame grid's volume
+list, in the tiles and metres the walk buckets. A branch is round in
+metres and at any angle; the walk solves it as a quadratic in the ray's
+height like every other shape.
+
+`TreeModel::simplify(cell, min_radius)` is the level of detail the walk
+asks for: leaf clusters within a lattice of `cell` metres merge into one
+ellipsoid holding them, and branches thinner than `min_radius` are
+dropped, since the foliage that grew on them covers them. A model with no
+foliage — bare, or dead — keeps every twig, because the twigs are all
+there is of it. The renderer keeps the simplified models in a cache keyed
+by species, seed, foliage and state, so a tree in view is grown once and
+not once a frame.
 
 ## The preview
 

@@ -120,8 +120,10 @@ alternating rows.
 
 A species names a canopy shape and a size (`species.toml`): `size = [w,
 d, h]` is a mature tree's spread and height in metres, and `shape` is
-cone (conifers), ellipsoid (broadleaf), dome (scrub) or cactus (a column
-with two arms at the closest zoom), the form's shape by default. The
+cone (conifers), ellipsoid (broadleaf), dome (scrub), cactus (a column
+with two arms at the closest zoom) or lsystem (grown from a growth habit,
+docs/lsystem.md, and reading as the habit's `stand_in` volume from far
+away), the form's shape by default. The
 crown radius is half the spread; the shape says how much of the height is
 trunk (a quarter for a cone, four tenths for an ellipsoid, none for a
 dome or cactus); a row may give `radius`, `height`, `trunk` and
@@ -177,7 +179,8 @@ along the sun ray from the surface point, so a sunlit wall or the near
 side of a crown stays lit while the away side is dark from its normal.
 
 The light pass multiplies direct sun by one minus the mask value at the
-surface point, sampled bilinearly and tightened at the middle of the
+surface point, which is the coverage blended and tightened times the
+occluder's opacity, sampled bilinearly and tightened at the middle of the
 blend, and leaves ambient light alone, so shadowed ground stays readable.
 At night there is no sun and the mask is skipped. Terrain and stacks cast
 at every zoom; canopies from zoom 2, where trees are volumes. Props do not
@@ -191,13 +194,21 @@ Detail keys off the zoom's rows per metre (ADR-004), not its footprint:
 |---|---|---|---|---|
 | far 2x1 (1:8) | 0.75 | column to the eaves, flat, material colours, no glyph bands | one-glyph billboard | terrain, stacks |
 | mid 4x1 (1:4) | 1.5 | profiles on, no window or door glyphs, 4 bisections | volumes with normal shading, trunks, outline glyphs, 30% fill; crown seams not supersampled | + canopies |
-| near 8x2 (1:2) | 3 | windows, doors, roof glyphs | | |
-| close 16x4 (1:1) | 6 | 5 bisections, door two cells wide | cactus arms, 45% fill, crown seams supersampled | |
+| near 8x2 (1:2) | 3 | windows, doors, roof glyphs | grown from the habit: branches and leaf clusters | |
+| close 16x4 (1:1) | 6 | 5 bisections, door two cells wide | cactus arms, 45% fill, a finer model; crown seams supersampled against sky and ground, not against each other | |
 
 Nothing is placed per detail; the block kind, the species and the
 adjacency rules produce all of it. Measured at 168x71 in the snapshot
-timing (`frames=20`, seed 7, the filled world at the origin), every zoom
-draws in 11 to 14 ms.
+timing (`frames=20`, seed 7, a boreal stand at `cx=500 cy=-300`, which is
+the densest forest in the world, and with the inset view of ADR-004 open),
+a frame takes 15.5 ms at 1:8, 15.3 at 1:4, 17.7 at 1:2 and 18.9 at 1:1;
+over the filled world at the origin, 12.5, 14.6, 15.4 and 17.9. Against
+the same measurement before the trees were grown, the boreal stand is
+1.1 ms dearer at 1:8 and 1.8 at 1:4 — both of those are the inset, which
+draws 1:1 — 2.1 dearer at 1:2, and 1.1 cheaper at 1:1, where what the
+crown seams no longer cost in supersampling more than pays for the
+geometry. The first frame after a camera move is dearer than the rest,
+because the trees that came into view are grown on it.
 
 ## Order of work
 
@@ -208,7 +219,10 @@ draws in 11 to 14 ms.
    cast shadows.
 3. Done: the scale pass (ADR-004): heights are metres and project through
    the zoom's rows per metre.
-4. Next: the settlement system paints towns and roads; the editor paints
+4. Done: L-system species on the walk (docs/lsystem.md): every species
+   names a growth habit, the near zooms test its grown branches and leaf
+   clusters, and crowns are porous.
+5. Next: the settlement system paints towns and roads; the editor paints
    by hand through `Map::set_stack`; bridges (`deck`) and props casting
    short shadows at the closest zooms.
 
@@ -220,15 +234,39 @@ evergreen up close is not a smooth cone: it is one straight trunk with
 whorls of near-horizontal branches at intervals, each whorl shorter than
 the one below, foliage in tiers with gaps between them, the lowest whorls
 dead or shed, and a ragged outline. That silhouette comes from the
-L-system species (docs/lsystem.md), whose branch and leaf volumes replace
-the stand-in shape at the near zooms once the adapter lands.
+L-system species (docs/lsystem.md).
+
+Every species names a growth habit, so every tree in the world is grown
+from a grammar; the saguaro, which is a column and not a tree, keeps its
+own shape. From the near zooms up (three rows per metre and closer) the
+walk tests the tree's model: a `Branch` capsule per segment, round in
+metres and at any angle, and a `Cluster` ellipsoid per leaf clump. Below
+that a tree is the one volume its habit names through `stand_in`, sized
+from the species' `size` exactly as before, so the far zooms are
+unchanged. The stand-in is built either way: it is what the shadow mask
+sweeps, since a hundred thousand discs would cost more than the frame.
+
+What the walk tests is the model at the size it is drawn, not the model
+the grammar grew (`TreeModel::simplify`): leaf clusters within a lattice
+five rows of height across are merged into one, and branches thinner than
+four fifths of a column are dropped, because the foliage that grew on them
+covers them. A tree with no foliage — bare in winter, or a snag — keeps
+every twig, since the twigs are all there is of it. A grown model is
+cached per species, seed, foliage and state in the renderer
+(`grid::ModelCache`), so a tree in view is grown once and not once a
+frame.
 
 ## Porous canopies
 
 A crown is not solid. A ray sample inside a canopy hits foliage with the
 species' leaf density as its probability, seeded by position so the holes
 stay put from frame to frame, and otherwise passes through and keeps
-walking. Through a sparse crown you see flecks of what is behind: a
-character, a wall, the sky. L-system leaf clusters give the same result
-from their real gaps. The shadow mask uses the leaf density as the crown's
-opacity, so a thin tree throws a light shadow.
+walking; a segment with no crossing whose top lies inside the crown counts
+as a sample too, so a ray that entered through a hole goes on meeting
+foliage as it descends. Through a sparse crown you see flecks of what is
+behind: a character, a wall, the sky. L-system leaf clusters give the same
+result from their real gaps. The leaf density is the habit's
+`leaf_density`, 0.85 for the evergreen habits and 0.7 for the broadleaf
+ones, and for a species with no habit it is the form's. The shadow mask
+uses the leaf density as the crown's opacity, so a thin tree throws a
+light shadow.

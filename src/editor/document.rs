@@ -610,7 +610,7 @@ mod tests {
         let d = doc();
         assert_eq!(d.table_count(), TABLE_KINDS.len());
         let species = d.table_of(TableKind::Species);
-        assert_eq!(d.row_count(species), 13);
+        assert_eq!(d.row_count(species), 12);
         assert_eq!(d.row_name(species, 0), "oak");
         assert_eq!(d.get(species, 0, "form").unwrap().as_str(), Some("broadleaf"));
         let tilesets = d.table_of(TableKind::Tilesets);
@@ -663,12 +663,12 @@ mod tests {
         let n = d.add_row(species, 0).unwrap();
         assert_eq!(n, 1);
         assert_eq!(d.row_name(species, 1), "oak-copy");
-        assert_eq!(d.row_count(species), 14);
+        assert_eq!(d.row_count(species), 13);
         let refs = d.references(TableKind::Species, "oak");
         assert!(refs.contains(&"biomes.rainforest".to_string()), "{refs:?}");
         assert!(d.delete_row(species, 0).unwrap_err().contains("referenced"));
         d.delete_row(species, 1).unwrap();
-        assert_eq!(d.row_count(species), 13);
+        assert_eq!(d.row_count(species), 12);
         let seasons = d.table_of(TableKind::Seasons);
         assert!(d.add_row(seasons, 0).is_err());
         assert!(d.delete_row(seasons, 0).is_err());

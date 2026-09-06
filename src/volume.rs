@@ -2,12 +2,22 @@
 //! shape and a trunk, and the ray walk tests the volumes whose footprint
 //! covers its ground point. Every shape is a quadratic in `z` along the
 //! ray's ground path, so the crossing is a closed-form root.
+//!
+//! A tree is one volume or a set of them. The single canopy shape is the
+//! stand-in of docs/structures.md, what a tree reads as from far away; at
+//! the near zooms an L-system species is instead a set of `Branch` capsules
+//! and `Cluster` ellipsoids placed from its `lsystem::TreeModel`
+//! (docs/lsystem.md). Both go through the same per-tile buckets and the
+//! same segment test, so the walk does not know which it is looking at.
 
 use serde::{Deserialize, Serialize};
 
 use crate::biome::{Form, SizeClass};
+use crate::map::TILE_METRES;
 
-/// Canopy shape of a species.
+/// Canopy shape of a species, and the primitives an L-system tree is made
+/// of. The first four are the stand-in volumes a species declares; the last
+/// two are only ever produced by placing a grown model.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Shape {
@@ -20,11 +30,15 @@ pub enum Shape {
     /// A column, with two arms at the closest zoom.
     Cactus,
     /// Branches and leaf clusters grown from an L-system grammar
-    /// (docs/lsystem.md). The walk has no primitive for a branch at an
-    /// arbitrary angle yet, so a placed L-system tree is tested as the
-    /// ellipsoid envelope of its crown; its own geometry comes from
-    /// `lsystem::TreeModel::volumes`.
+    /// (docs/lsystem.md). A species declares this shape; what the walk
+    /// tests is either the style's `stand_in` volume at the far zooms or
+    /// the `Branch` and `Cluster` primitives of its model at the near ones.
     Lsystem,
+    /// One branch of a grown model: a capsule from `(cx, cy, h0)` to
+    /// `(cx + run, h0 + height)`, round in metres.
+    Branch,
+    /// One leaf cluster of a grown model: an ellipsoid of foliage.
+    Cluster,
 }
 
 impl Shape {
@@ -36,6 +50,13 @@ impl Shape {
             Form::Scrub => Shape::Dome,
             Form::Cactus => Shape::Cactus,
         }
+    }
+
+    /// Whether a hit on this shape is foliage rather than wood: what takes
+    /// the canopy colour, the leaf density's porosity and the crown's
+    /// shading.
+    pub fn is_foliage(self) -> bool {
+        !matches!(self, Shape::Branch)
     }
 }
 
@@ -57,7 +78,7 @@ pub struct Dims {
 pub fn prune_height(shape: Shape) -> f32 {
     match shape {
         Shape::Cone => 0.2,
-        Shape::Ellipsoid | Shape::Lsystem => 0.35,
+        Shape::Ellipsoid | Shape::Lsystem | Shape::Branch | Shape::Cluster => 0.35,
         Shape::Dome | Shape::Cactus => 0.0,
     }
 }
@@ -115,28 +136,62 @@ pub struct Instance {
     pub hue: f32,
 }
 
+/// Samples of the porosity field per metre. A crown is not solid
+/// (docs/structures.md): a sample inside one hits foliage with the species'
+/// leaf density as its probability, and the roll is a hash of the sample's
+/// place in the world, so the holes stay put from frame to frame however
+/// the camera moves.
+const POROSITY_PER_METRE: f32 = 3.0;
+
+/// Whether a sample at a ground point in tiles and a height in metres meets
+/// foliage in a crown of this leaf density.
+#[inline]
+pub fn foliage_at(x: f32, y: f32, z: f32, density: f32) -> bool {
+    if density >= 1.0 {
+        return true;
+    }
+    if density <= 0.0 {
+        return false;
+    }
+    let q = POROSITY_PER_METRE;
+    let (gx, gy, gz) = (crate::noise::ifloor(x * TILE_METRES * q), crate::noise::ifloor(y * TILE_METRES * q), crate::noise::ifloor(z * q));
+    let h = crate::noise::hash(gx as i64, gy as i64, 0x1eaf_0000 ^ (gz as i64 as u64));
+    let roll = ((h >> 40) as f32) / ((1u64 << 24) as f32);
+    roll < density
+}
+
 /// Whether an instance of a species stands dead, from its tile's seed.
 pub fn stands_dead(seed: u32, dead_chance: f32) -> bool {
     ((seed.wrapping_mul(0x165667B1) >> 11) % 1024) as f32 / 1024.0 < dead_chance
 }
 
-/// One tree standing in the world for this frame.
+/// One volume standing in the world for this frame: a whole tree as its
+/// stand-in shape, or one primitive of a grown L-system tree.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Volume {
     pub shape: Shape,
-    /// Ground point of the trunk in tiles, jittered within the tile.
+    /// Ground point of the trunk in tiles, jittered within the tile; for a
+    /// branch, the ground point of its lower end.
     pub cx: f32,
     pub cy: f32,
     /// Ground height under the trunk.
     pub ground: f32,
-    /// Base and height of the canopy in height units (metres).
+    /// Base and height of the canopy in height units (metres). For a branch,
+    /// the lower end's height and the rise to the upper end.
     pub h0: f32,
     pub height: f32,
     /// Radii in tiles.
     pub radius: f32,
     pub trunk_radius: f32,
+    /// Ground run of a branch from `(cx, cy)` to its upper end, in tiles;
+    /// zero for every other shape.
+    pub run: (f32, f32),
+    /// Base and height of the whole tree's crown in metres, so a primitive
+    /// shades by where it sits in the crown rather than by its own extent.
+    pub crown: (f32, f32),
     /// Ground shift of the canopy per unit of `(z - h0) / height`, from
-    /// the wind.
+    /// the wind. A placed primitive carries the shear in its endpoints
+    /// instead, so this is zero for one.
     pub shear: (f32, f32),
     /// Index into the species table.
     pub species: u8,
@@ -166,27 +221,7 @@ pub struct VolumeHit {
 
 /// Largest root of `a z^2 + b z + c = 0` within `[lo, hi]`, if any.
 fn largest_root(a: f32, b: f32, c: f32, lo: f32, hi: f32) -> Option<f32> {
-    if a.abs() < 1e-9 {
-        if b.abs() < 1e-9 {
-            return None;
-        }
-        let z = -c / b;
-        return (z >= lo && z <= hi).then_some(z);
-    }
-    let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
-        return None;
-    }
-    let s = disc.sqrt();
-    let (r1, r2) = ((-b - s) / (2.0 * a), (-b + s) / (2.0 * a));
-    let (small, big) = if r1 < r2 { (r1, r2) } else { (r2, r1) };
-    if big >= lo && big <= hi {
-        Some(big)
-    } else if small >= lo && small <= hi {
-        Some(small)
-    } else {
-        None
-    }
+    roots(a, b, c, lo, hi).next()
 }
 
 impl Volume {
@@ -195,8 +230,27 @@ impl Volume {
         self.h0 + self.height
     }
 
+    /// The smallest ground circle holding the volume: its centre in tiles
+    /// and its radius. The walk rejects on this before it reads the volume
+    /// at all.
+    pub fn reach(&self) -> (f32, f32, f32) {
+        match self.shape {
+            Shape::Branch => {
+                let half = (0.5 * self.run.0, 0.5 * self.run.1);
+                (self.cx + half.0, self.cy + half.1, (half.0 * half.0 + half.1 * half.1).sqrt() + self.radius)
+            }
+            Shape::Cactus => (self.cx, self.cy, self.radius * 2.8 + self.shear.0.abs().max(self.shear.1.abs())),
+            _ => (self.cx, self.cy, self.radius + self.shear.0.abs().max(self.shear.1.abs())),
+        }
+    }
+
     /// Ground box the volume can cover, with the wind shear and any arms.
     pub fn footprint(&self) -> (f32, f32, f32, f32) {
+        if self.shape == Shape::Branch {
+            let (ex, ey) = (self.cx + self.run.0, self.cy + self.run.1);
+            let r = self.radius;
+            return (self.cx.min(ex) - r, self.cy.min(ey) - r, self.cx.max(ex) + r, self.cy.max(ey) + r);
+        }
         let arms = if self.shape == Shape::Cactus { 2.8 } else { 1.0 };
         let r = self.radius * arms + self.shear.0.abs().max(self.shear.1.abs());
         (self.cx - r, self.cy - r, self.cx + r, self.cy + r)
@@ -210,6 +264,9 @@ impl Volume {
         // crown, or its ground path stays clear of the widest part.
         if hi < self.ground || lo > self.h0 + self.height {
             return None;
+        }
+        if self.shape == Shape::Branch {
+            return self.branch_hit(p0, d, lo, hi);
         }
         let widest = if arms && self.shape == Shape::Cactus { self.radius * 2.8 } else { self.radius };
         let reach = widest + self.shear.0.abs().max(self.shear.1.abs()) + 0.5 * (d.0.abs() + d.1.abs()) * (hi - lo);
@@ -237,23 +294,33 @@ impl Volume {
             let b = (d.0 - sx, d.1 - sy);
             let (aa, ab, bb) = (a.0 * a.0 + a.1 * a.1, a.0 * b.0 + a.1 * b.1, b.0 * b.0 + b.1 * b.1);
             let r2 = self.radius * self.radius;
+            // A ray that entered a crown through one of its holes is inside
+            // it, and every sample it takes on the way down is another
+            // chance to meet foliage (docs/structures.md, "Porous
+            // canopies"). So a segment with no crossing whose top lies
+            // inside the shape counts as a hit at that top.
+            let crossing = |qa: f32, qb: f32, qc: f32| -> Option<f32> {
+                largest_root(qa, qb, qc, clo, chi).or_else(|| (qa * chi * chi + qb * chi + qc < 0.0).then_some(chi))
+            };
             match self.shape {
-                Shape::Ellipsoid | Shape::Lsystem => {
+                // A branch was answered above; the rest are quadrics.
+                Shape::Branch => {}
+                Shape::Ellipsoid | Shape::Lsystem | Shape::Cluster => {
                     let zc = h0 + 0.5 * hh;
                     let v2 = 0.25 * hh * hh;
-                    let z = largest_root(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * zc / v2, aa / r2 + zc * zc / v2 - 1.0, clo, chi);
+                    let z = crossing(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * zc / v2, aa / r2 + zc * zc / v2 - 1.0);
                     consider(z.map(|z| VolumeHit { z, part: Part::Canopy, normal: (q(a, b, z).0 / r2, q(a, b, z).1 / r2, (z - zc) / v2) }));
                 }
                 Shape::Dome => {
                     let v2 = hh * hh;
-                    let z = largest_root(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * h0 / v2, aa / r2 + h0 * h0 / v2 - 1.0, clo, chi);
+                    let z = crossing(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * h0 / v2, aa / r2 + h0 * h0 / v2 - 1.0);
                     consider(z.map(|z| VolumeHit { z, part: Part::Canopy, normal: (q(a, b, z).0 / r2, q(a, b, z).1 / r2, (z - h0) / v2) }));
                 }
                 Shape::Cone => {
                     // |q| = R (1 - (z - h0) / H) = c0 + c1 z.
                     let c1 = -self.radius / hh;
                     let c0 = self.radius - c1 * h0;
-                    let z = largest_root(bb - c1 * c1, 2.0 * (ab - c0 * c1), aa - c0 * c0, clo, chi);
+                    let z = crossing(bb - c1 * c1, 2.0 * (ab - c0 * c1), aa - c0 * c0);
                     consider(z.map(|z| {
                         let qq = q(a, b, z);
                         let len = (qq.0 * qq.0 + qq.1 * qq.1).sqrt().max(1e-4);
@@ -292,6 +359,69 @@ impl Volume {
         }
         best
     }
+}
+
+impl Volume {
+    /// A branch: the ray against a cylinder at an arbitrary angle, tested in
+    /// metres because a branch is round in the world and a tile is two
+    /// metres across. The ends are flat and pushed out by the radius rather
+    /// than capped with spheres, which is a capsule to within a twig's
+    /// thickness and two quadratics cheaper.
+    fn branch_hit(&self, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32) -> Option<VolumeHit> {
+        let t = TILE_METRES;
+        let r = self.radius * t;
+        // Axis from the lower end, and the ray as a point plus a direction
+        // per metre of height.
+        let u = [self.run.0 * t, self.run.1 * t, self.height];
+        let v = [d.0 * t, d.1 * t, 1.0];
+        let w = [(p0.0 - self.cx) * t, (p0.1 - self.cy) * t, -self.h0];
+        let uu = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
+        if uu < 1e-8 {
+            return None;
+        }
+        let dot = |a: &[f32; 3], b: &[f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let (vu, wu) = (dot(&v, &u), dot(&w, &u));
+        let (vv, wv, ww) = (dot(&v, &v), dot(&w, &v), dot(&w, &w));
+        // Squared distance from the axis line, as a quadratic in z.
+        let iu = 1.0 / uu;
+        let qa = vv - vu * vu * iu;
+        let qb = 2.0 * (wv - wu * vu * iu);
+        let qc = ww - wu * wu * iu - r * r;
+        // The ends run out by the radius so a chain of branches has no gaps.
+        let ext = r * iu.sqrt();
+        let (t0, t1) = (-ext, 1.0 + ext);
+        let along = |z: f32| (wu + vu * z) * iu;
+        let mut best: Option<f32> = None;
+        for z in roots(qa, qb, qc, lo, hi) {
+            let s = along(z);
+            if s >= t0 && s <= t1 && best.is_none_or(|b| z > b) {
+                best = Some(z);
+            }
+        }
+        let z = best?;
+        let s = along(z).clamp(0.0, 1.0);
+        let n = [w[0] + v[0] * z - u[0] * s, w[1] + v[1] * z - u[1] * s, w[2] + v[2] * z - u[2] * s];
+        Some(VolumeHit { z, part: Part::Trunk, normal: (n[0], n[1], n[2]) })
+    }
+}
+
+/// Both roots of `a z^2 + b z + c = 0` that lie in `[lo, hi]`, largest
+/// first; empty when there are none.
+fn roots(a: f32, b: f32, c: f32, lo: f32, hi: f32) -> impl Iterator<Item = f32> {
+    let mut pair = [f32::NAN; 2];
+    if a.abs() < 1e-9 {
+        if b.abs() >= 1e-9 {
+            pair[0] = -c / b;
+        }
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc >= 0.0 {
+            let s = disc.sqrt();
+            let (r1, r2) = ((-b - s) / (2.0 * a), (-b + s) / (2.0 * a));
+            pair = if r1 > r2 { [r1, r2] } else { [r2, r1] };
+        }
+    }
+    pair.into_iter().filter(move |z| z.is_finite() && *z >= lo && *z <= hi)
 }
 
 /// Ground offset from the axis at height `z` along the offset path.
@@ -352,7 +482,24 @@ mod tests {
     use super::*;
 
     fn oak() -> Volume {
-        Volume { shape: Shape::Ellipsoid, cx: 0.0, cy: 0.0, ground: 0.0, h0: 1.0, height: 2.0, radius: 0.6, trunk_radius: 0.1, shear: (0.0, 0.0), species: 0, instance: instance(0), dead: false, mx: 0, my: 0 }
+        Volume {
+            shape: Shape::Ellipsoid,
+            cx: 0.0,
+            cy: 0.0,
+            ground: 0.0,
+            h0: 1.0,
+            height: 2.0,
+            radius: 0.6,
+            trunk_radius: 0.1,
+            run: (0.0, 0.0),
+            crown: (1.0, 2.0),
+            shear: (0.0, 0.0),
+            species: 0,
+            instance: instance(0),
+            dead: false,
+            mx: 0,
+            my: 0,
+        }
     }
 
     #[test]
@@ -412,6 +559,60 @@ mod tests {
         assert!(cactus.hit((0.3, 0.0), down, 0.0, 10.0, false).is_none(), "no arms at a distance without arms");
         let arm = cactus.hit((-0.44, 0.0), down, 0.0, 10.0, true).expect("the left arm");
         assert!(arm.z > 1.0 && arm.z < 3.0, "{}", arm.z);
+    }
+
+    #[test]
+    fn a_branch_is_a_capsule_the_ray_meets_at_any_angle() {
+        // A limb a metre up, running two metres along +x and rising one,
+        // eight centimetres thick. Tiles are two metres, so a metre of run
+        // is half a tile.
+        let limb = Volume { shape: Shape::Branch, cx: 0.0, cy: 0.0, h0: 1.0, height: 1.0, run: (1.0, 0.0), radius: 0.08 / TILE_METRES, trunk_radius: 0.0, ..oak() };
+        let down = (0.0, 0.0);
+        // Straight down through the middle of the axis: met just above it.
+        let mid = limb.hit((0.5, 0.0), down, 0.0, 10.0, false).expect("the middle of the limb");
+        assert_eq!(mid.part, Part::Trunk, "a branch is wood");
+        assert!((mid.z - 1.5 - 0.08).abs() < 0.03, "the top of the capsule at its middle: {}", mid.z);
+        assert!(mid.normal.2 > 0.0, "{:?}", mid.normal);
+        // Beside it there is nothing, and the normal leans out where the
+        // ray grazes the side.
+        assert!(limb.hit((0.5, 0.2), down, 0.0, 10.0, false).is_none(), "a fifth of a tile aside is air");
+        let side = limb.hit((0.5, 0.03), down, 0.0, 10.0, false).expect("a graze");
+        assert!(side.z < mid.z && side.normal.1 > 0.0, "{side:?}");
+        // Past either end it is over: the capsule does not run on.
+        assert!(limb.hit((1.2, 0.0), down, 0.0, 10.0, false).is_none(), "beyond the far end");
+        assert!(limb.hit((-0.2, 0.0), down, 0.0, 10.0, false).is_none(), "before the near end");
+        // And the footprint is the run plus the radius, so the grid buckets
+        // it along its whole length.
+        let (fx0, _, fx1, _) = limb.footprint();
+        assert!(fx0 < 0.0 && fx1 > 1.0, "{fx0} {fx1}");
+        let (rx, _, rr) = limb.reach();
+        assert!((rx - 0.5).abs() < 1e-6 && rr > 0.5, "the ground circle holds the whole limb: {rx} {rr}");
+    }
+
+    #[test]
+    fn a_crown_is_porous_in_proportion_to_its_leaf_density() {
+        // Over many places in a crown, the share of samples that meet
+        // foliage is the species' leaf density.
+        for density in [0.35f32, 0.7, 0.85] {
+            let mut hits = 0;
+            let n = 4000;
+            for i in 0..n {
+                let (x, y, z) = (i as f32 * 0.037, i as f32 * 0.0131, 4.0 + i as f32 * 0.0093);
+                hits += foliage_at(x, y, z, density) as u32;
+            }
+            let share = hits as f32 / n as f32;
+            assert!((share - density).abs() < 0.03, "density {density} gave {share}");
+        }
+        // The roll is a hash of where the sample is, so a hole stays put
+        // however often the frame is drawn, and moving on a metre changes it.
+        let at = |x: f32, z: f32| foliage_at(x, 3.25, z, 0.5);
+        assert_eq!(at(1.5, 6.0), at(1.5, 6.0));
+        assert_eq!(at(1.5, 6.0), foliage_at(1.5 + 0.01, 3.25, 6.0, 0.5), "a centimetre is the same fleck");
+        let neighbours: Vec<bool> = (0..12).map(|k| at(1.5 + k as f32 * 0.4, 6.0)).collect();
+        assert!(neighbours.iter().any(|h| *h) && neighbours.iter().any(|h| !*h), "the field is not constant");
+        // Full density is solid and none is air, without hashing at all.
+        assert!(foliage_at(0.3, 9.1, 2.0, 1.0));
+        assert!(!foliage_at(0.3, 9.1, 2.0, 0.0));
     }
 
     #[test]

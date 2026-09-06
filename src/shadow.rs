@@ -24,6 +24,11 @@ pub(crate) struct ShadowMask {
     w: i32,
     h: i32,
     top: Vec<f32>,
+    /// How much of the sun the occluder over each sample stops, 0..1: a
+    /// crown stops its species' leaf density, so a thin tree throws a light
+    /// shadow (docs/structures.md, "Porous canopies"). Terrain and walls
+    /// stop all of it.
+    opacity: Vec<f32>,
     /// Unit ground direction shadows fall along.
     pub(crate) u: (f32, f32),
     /// Tiles of shadow per metre of occluder height.
@@ -44,7 +49,7 @@ impl ShadowMask {
         let (x0, y0, x1, y1) = grid.bounds();
         let (w, h) = (((x1 - x0 + 1) as f32 * RES) as i32, ((y1 - y0 + 1) as f32 * RES) as i32);
         let u = world.shadow_dir();
-        let mut mask = ShadowMask { x0, y0, w, h, top: vec![CLEAR; (w * h) as usize], u, k };
+        let mut mask = ShadowMask { x0, y0, w, h, top: vec![CLEAR; (w * h) as usize], opacity: vec![0.0; (w * h) as usize], u, k };
         let volumes = crate::raster::lod_of(sc.cam.rows_per_metre()).volumes;
         for (mx, my, _, g) in grid.cells() {
             let (cx, cy) = (mx as f32 + 0.5, my as f32 + 0.5);
@@ -53,7 +58,7 @@ impl ShadowMask {
             let here = grid.sample(cx, cy).max(SEA as f32);
             let ahead = grid.sample(cx + u.0, cy + u.1).max(SEA as f32);
             if (here - ahead) * k > 2.0 {
-                mask.stamp((cx, cy), 0.6, 0.0, (k * (here - ahead) + 1.5).min(MAX_SWEEP), here, None);
+                mask.stamp((cx, cy), 0.6, 0.0, (k * (here - ahead) + 1.5).min(MAX_SWEEP), here, 1.0, None);
             }
             if let Some(st) = g.stack {
                 if st.levels > 0 {
@@ -61,15 +66,20 @@ impl ShadowMask {
                     let profile = Profile { roof: b.roof, pitch: b.pitch, max_rise: b.max_rise };
                     let top = g.zs + 0.5 * profile.peak(g.runs);
                     let len = (k * (top - g.base) + 1.5).min(MAX_SWEEP);
-                    mask.stamp((cx, cy), 0.72, 0.0, len, top, Some((mx as f32, my as f32, 1.0, 1.0)));
+                    mask.stamp((cx, cy), 0.72, 0.0, len, top, 1.0, Some((mx as f32, my as f32, 1.0, 1.0)));
                 }
             }
         }
         if volumes {
-            for v in &grid.volumes {
+            // One sweep per tree, from its stand-in crown: the branches and
+            // clusters of a grown tree are the same crown seen closer, and
+            // a hundred thousand discs would cost more than the frame.
+            for v in grid.tree_crowns() {
                 let len = (k * (v.top() - v.ground) + 1.5).min(MAX_SWEEP);
                 let r = v.radius;
-                mask.stamp((v.cx, v.cy), r, k * (v.h0 - v.ground), len, v.top(), Some((v.cx - r, v.cy - r, 2.0 * r, 2.0 * r)));
+                let sp = &sc.assets.species[v.species as usize % sc.assets.species.len()];
+                let opacity = if v.dead { 0.45 } else { sp.leaf_density };
+                mask.stamp((v.cx, v.cy), r, k * (v.h0 - v.ground), len, v.top(), opacity, Some((v.cx - r, v.cy - r, 2.0 * r, 2.0 * r)));
             }
         }
         Some(mask)
@@ -79,7 +89,8 @@ impl ShadowMask {
     /// `t0` to `t1` tiles, recording the height of the ray from `top` that
     /// enters the disc's column. Samples inside `exclude` (x, y, w, h), the
     /// occluder's own footprint, are left alone so it does not shade itself.
-    fn stamp(&mut self, c: (f32, f32), r: f32, t0: f32, t1: f32, top: f32, exclude: Option<(f32, f32, f32, f32)>) {
+    #[allow(clippy::too_many_arguments)]
+    fn stamp(&mut self, c: (f32, f32), r: f32, t0: f32, t1: f32, top: f32, opacity: f32, exclude: Option<(f32, f32, f32, f32)>) {
         let (ux, uy) = self.u;
         let (px, py) = (-uy, ux);
         // Bounding box of the swept disc.
@@ -115,10 +126,12 @@ impl ShadowMask {
                 // point after it leaves the occluder's column.
                 let entry = (t - (r2 - lat * lat).max(0.0).sqrt()).max(0.0);
                 let ray = top - entry / self.k;
-                let slot = &mut self.top[(j * self.w + i) as usize];
-                if ray > *slot {
-                    *slot = ray;
-                }
+                let at = (j * self.w + i) as usize;
+                // The highest ray decides how far up the shadow reaches;
+                // the densest occluder over the point decides how dark it
+                // is, so two thin crowns shade more than one.
+                self.top[at] = self.top[at].max(ray);
+                self.opacity[at] = self.opacity[at].max(opacity);
             }
         }
     }
@@ -131,19 +144,20 @@ impl ShadowMask {
         let (ix, iy) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - ix, fy - iy);
         let (ix, iy) = (ix as i32, iy as i32);
-        let at = |x: i32, y: i32| -> f32 {
+        // Coverage and opacity are blended apart: how much of the sample is
+        // in shadow at all, and how much sun the thing casting it stops.
+        let cell = |x: i32, y: i32| -> (f32, f32) {
             let (x, y) = (x.clamp(0, self.w - 1), y.clamp(0, self.h - 1));
-            if wz < self.top[(y * self.w + x) as usize] - 0.02 {
-                1.0
-            } else {
-                0.0
-            }
+            let i = (y * self.w + x) as usize;
+            ((wz < self.top[i] - 0.02) as u8 as f32, self.opacity[i])
         };
-        let a = at(ix, iy) + (at(ix + 1, iy) - at(ix, iy)) * tx;
-        let b = at(ix, iy + 1) + (at(ix + 1, iy + 1) - at(ix, iy + 1)) * tx;
+        let lerp = |a: (f32, f32), b: (f32, f32), t: f32| (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+        let a = lerp(cell(ix, iy), cell(ix + 1, iy), tx);
+        let b = lerp(cell(ix, iy + 1), cell(ix + 1, iy + 1), tx);
+        let (cover, opacity) = lerp(a, b, ty);
         // Soft, but not a tile-wide ramp: the edge is tightened to the
         // middle of the blend.
-        crate::noise::smoothstep(0.2, 0.8, a + (b - a) * ty)
+        crate::noise::smoothstep(0.2, 0.8, cover) * opacity
     }
 
     /// Shadow at a surface point, looked up a little way along the sun ray
@@ -187,7 +201,7 @@ mod tests {
         let r = Renderer::new(w, h);
         let sc = Scene::new(&map, ts, &world, &cam, 0.0);
         let (x0, y0, x1, y1) = r.visible_bounds(&cam, 40.0);
-        let grid = HeightGrid::build(&sc, x0, y0, x1, y1, w, h);
+        let grid = HeightGrid::build(&sc, x0, y0, x1, y1, w, h, &mut crate::grid::ModelCache::new());
         let mask = ShadowMask::build(&sc, &grid).expect("the sun is up");
         let k = world.shadow_per_metre();
         assert!((k - 0.5).abs() < 0.02, "at 15:00 a metre of height throws half a tile: {k}");

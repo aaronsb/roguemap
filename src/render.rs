@@ -14,7 +14,7 @@
 use crate::assets::Assets;
 use crate::camera::Camera;
 use crate::canvas::{Canvas, Rgb};
-use crate::grid::HeightGrid;
+use crate::grid::{HeightGrid, ModelCache};
 use crate::map::{Map, Tile};
 use crate::noise::hash;
 use crate::palette::Palette;
@@ -84,8 +84,33 @@ pub(crate) enum HitKind {
     Terrain = 0,
     Wall = 1,
     Roof = 2,
+    /// A stand-in crown, or a leaf cluster of a grown tree: foliage.
     Canopy = 3,
+    /// A stand-in's trunk, or a branch of a grown tree: wood.
     Trunk = 4,
+}
+
+impl HitKind {
+    /// Whether a hit is part of a tree, so its cell is a crown seam rather
+    /// than a surface boundary.
+    pub(crate) fn is_tree(self) -> bool {
+        matches!(self, HitKind::Canopy | HitKind::Trunk)
+    }
+
+    /// The kind a cell identity carries in bits 5 to 7; `None` for a cell
+    /// whose ray met nothing.
+    pub(crate) fn from_id(id: u64) -> Option<HitKind> {
+        if id == 0 {
+            return None;
+        }
+        Some(match (id >> 5) & 7 {
+            1 => HitKind::Wall,
+            2 => HitKind::Roof,
+            3 => HitKind::Canopy,
+            4 => HitKind::Trunk,
+            _ => HitKind::Terrain,
+        })
+    }
 }
 
 /// What a screen cell's ray met on its way down.
@@ -125,12 +150,15 @@ pub struct Renderer {
     pub(crate) shadow: Option<ShadowMask>,
     /// Lights discovered while drawing this frame, such as lit windows.
     pub(crate) frame_lights: Vec<Light>,
+    /// Grown L-system trees kept between frames (docs/lsystem.md), so a
+    /// tree that stays in view is grown once and not once a frame.
+    pub(crate) models: ModelCache,
 }
 
 impl Renderer {
     pub fn new(w: i32, h: i32) -> Renderer {
         let sky = GCell { albedo: Rgb(0, 0, 0), ch: ' ', glyph: Rgb(0, 0, 0), wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth: SKY_DEPTH };
-        Renderer { w, h, g: vec![sky; (w * h) as usize], ids: vec![0; (w * h) as usize], heights: None, shadow: None, frame_lights: Vec::new() }
+        Renderer { w, h, g: vec![sky; (w * h) as usize], ids: vec![0; (w * h) as usize], heights: None, shadow: None, frame_lights: Vec::new(), models: ModelCache::new() }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -156,7 +184,7 @@ impl Renderer {
         self.frame_lights.clear();
         self.sky_pass(sc);
         let (x0, y0, x1, y1) = self.visible_bounds(sc.cam, self.view_ceiling(sc));
-        let grid = HeightGrid::build(sc, x0, y0, x1, y1, self.w, self.h);
+        let grid = HeightGrid::build(sc, x0, y0, x1, y1, self.w, self.h, &mut self.models);
         self.shadow = ShadowMask::build(sc, &grid);
         self.heights = Some(grid);
         self.stack_lights(sc);

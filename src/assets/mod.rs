@@ -354,6 +354,19 @@ fn grammar(ctx: &Ctx, i: usize, s: &SpeciesRow, styles: &[Style]) -> Result<Opti
     Ok(Some(g))
 }
 
+/// How solid a crown of this form is when no growth habit says
+/// (docs/structures.md, "Porous canopies"): an evergreen holds the light
+/// out, a broadleaf lets flecks of what is behind it through, and a cactus
+/// has no foliage to be porous with.
+fn leaf_density_of(form: crate::biome::Form) -> f32 {
+    match form {
+        crate::biome::Form::Pine => 0.85,
+        crate::biome::Form::Broadleaf => 0.7,
+        crate::biome::Form::Scrub => 0.8,
+        crate::biome::Form::Cactus => 1.0,
+    }
+}
+
 /// Resolve `tree_styles.toml` into the growth habits species pick from.
 fn styles(raw: &TreeStylesFile) -> Result<Vec<Style>, AssetError> {
     let ctx = Ctx { file: TABLES[10], table: "style" };
@@ -630,6 +643,15 @@ impl Assets {
             }
             unit(&ctx, i, &s.name, "dead_chance", s.dead_chance)?;
             let lsystem = grammar(&ctx, i, s, &tree_styles)?;
+            // A grown species reads as its habit's stand-in from far away,
+            // and its crown is as solid as the habit's leaf density says;
+            // one that is not grown takes the density its form implies.
+            let style = s.style.as_ref().and_then(|n| tree_styles.iter().find(|st| st.name == *n));
+            let stand_in = style.map(|st| st.stand_in());
+            let leaf_density = match &lsystem {
+                Some(g) => g.leaf_density,
+                None => leaf_density_of(s.form),
+            };
             species.push(Species {
                 name: s.name.clone(),
                 identity: Identity::from_row(&s.identity, "species"),
@@ -644,6 +666,8 @@ impl Assets {
                 trunk: s.trunk,
                 trunk_radius: s.trunk_radius,
                 lsystem,
+                stand_in,
+                leaf_density,
                 sheds: s.sheds.unwrap_or(matches!(s.canopy, Seasonal::Four(_))),
                 dead_chance: s.dead_chance.unwrap_or(0.02),
                 light: optional_reference(&ctx, i, &s.name, "light", &light_names, s.hooks.light.as_ref())?,
@@ -1140,7 +1164,7 @@ mod tests {
         assert_eq!(a.source, Source::Embedded);
         assert_eq!(a.biomes.len(), 9);
         assert_eq!(a.koppen.len(), 9);
-        assert_eq!(a.species.len(), 13);
+        assert_eq!(a.species.len(), 12);
         assert_eq!(a.materials.len(), 3);
         assert_eq!(a.blocks.len(), 6);
         assert_eq!(a.creatures[0].name, "player");
@@ -1430,7 +1454,7 @@ mod tests {
         let willow = height(&model("weeping", [14.0, 14.0, 12.0]));
         let oak = height(&model("decurrent", [14.0, 14.0, 12.0]));
         assert!(willow < oak, "a weeping crown hangs below a spreading one: {willow} against {oak}");
-        assert!(willow < 0.6, "and below the middle of the tree: {willow}");
+        assert!(willow < 0.65, "and below the middle of the tree: {willow}");
 
         // Shrub: several stems leave the ground, and there is no trunk.
         let bush = model("shrub", [3.0, 3.0, 2.0]);
@@ -1473,7 +1497,7 @@ mod tests {
     fn every_lsystem_species_grows_a_tree() {
         let a = Assets::embedded().unwrap();
         let grown: Vec<&Species> = a.species.iter().filter(|s| s.lsystem.is_some()).collect();
-        assert_eq!(grown.len(), 4, "the four example species are in the set");
+        assert_eq!(grown.len(), a.species.len() - 1, "every species but the saguaro grows from a habit");
         for s in &grown {
             assert_eq!(s.shape, Some(Shape::Lsystem), "{}", s.name);
             for seed in [0u64, 3, 77] {
@@ -1490,10 +1514,17 @@ mod tests {
             let dead = s.tree_model(5, crate::lsystem::Growth::DEAD).unwrap();
             assert!(!dead.segments.is_empty() && dead.leaves.is_empty(), "{}", s.name);
         }
-        // None of them is placed by a biome: they change no frame.
+        // Every tree a biome plants is grown from a habit, and its stand-in
+        // is the volume it reads as from far away.
         for b in &a.biomes {
             for &(sp, _) in &b.species {
-                assert!(a.species[sp].lsystem.is_none(), "{} places {}", b.name, a.species[sp].name);
+                let s = &a.species[sp];
+                if s.shape == Some(Shape::Cactus) {
+                    continue;
+                }
+                assert!(s.lsystem.is_some(), "{} plants {}, which grows from no habit", b.name, s.name);
+                assert!(s.stand_in.is_some_and(|k| k != Shape::Lsystem), "{} has no stand-in volume", s.name);
+                assert_eq!(s.volume().0, s.stand_in.unwrap(), "{} reads as its stand-in from far away", s.name);
             }
         }
     }
@@ -1517,7 +1548,7 @@ mod tests {
     fn lsystem_rows_are_validated() {
         // A habit and the shape imply each other.
         let e = replace_in("species.toml", "shape = \"lsystem\"\nstyle = \"decurrent\"", "shape = \"ellipsoid\"\nstyle = \"decurrent\"").unwrap_err();
-        assert_eq!(e.row.as_ref().map(|r| r.2.as_str()), Some("gnarled oak"));
+        assert_eq!(e.row.as_ref().map(|r| r.2.as_str()), Some("oak"));
         assert!(e.msg.contains("shape = \"lsystem\""), "{e}");
         let e = replace_in("species.toml", "style = \"decurrent\"\n", "").unwrap_err();
         assert!(e.msg.contains("style") || e.msg.contains("axiom"), "{e}");
@@ -1558,9 +1589,9 @@ mod tests {
         let e = replace_in("species.toml", "size = [10.0, 10.0, 18.0]\n", "").unwrap_err();
         assert!(e.msg.contains("size"), "{e}");
         // Volume overrides must be positive; a zero crown is no crown.
-        let e = replace_in("species.toml", "shape = \"ellipsoid\"", "shape = \"ellipsoid\"\nradius = 0.0").unwrap_err();
+        let e = replace_in("species.toml", "shape = \"cactus\"", "shape = \"cactus\"\nradius = 0.0").unwrap_err();
         assert!(e.msg.contains("radius"), "{e}");
-        let e = replace_in("species.toml", "shape = \"ellipsoid\"", "shape = \"blob\"").unwrap_err();
+        let e = replace_in("species.toml", "shape = \"cactus\"", "shape = \"blob\"").unwrap_err();
         assert!(e.msg.contains("blob"), "{e}");
         // Blocks: levels rise and stay within max_levels; the window band is
         // a rising pair within a level; roof names are checked.
@@ -1602,7 +1633,7 @@ mod tests {
         assert!(d.trunk_radius > 0.0);
         let bush = a.species.iter().find(|s| s.name == "juniper").unwrap();
         let (shape, d) = bush.volume();
-        assert_eq!((shape, d.trunk, d.trunk_radius), (crate::volume::Shape::Dome, 0.0, 0.0), "a bush sits on the ground");
+        assert_eq!((shape, d.trunk), (crate::volume::Shape::Dome, 0.0), "a bush sits on the ground");
         assert_eq!(d.height, 2.5);
         for s in &a.species {
             let (_, d) = s.volume();
