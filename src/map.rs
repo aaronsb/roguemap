@@ -806,20 +806,7 @@ impl Tile {
     /// A bare tile at height `z` for synthetic test maps: water below sea
     /// level, otherwise plain grass of the first biome, at 15 degrees.
     pub(crate) fn flat(z: i32) -> Tile {
-        Tile {
-            z,
-            terrain: if z < SEA { Terrain::Water } else { Terrain::Grass },
-            tree: None,
-            grass: 0,
-            seed: 0,
-            body_size: 0,
-            biome: 0,
-            stack: None,
-            material: 0,
-            temp: 15,
-            near_water: false,
-            hf: z as f32 + 0.5,
-        }
+        Tile { z, terrain: if z < SEA { Terrain::Water } else { Terrain::Grass }, tree: None, grass: 0, seed: 0, body_size: 0, biome: 0, stack: None, material: 0, temp: 15, near_water: false, hf: z as f32 + 0.5 }
     }
 }
 

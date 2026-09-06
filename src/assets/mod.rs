@@ -32,19 +32,7 @@ mod embedded {
 }
 
 /// The table files every asset set must have, in load order.
-pub const TABLES: [&str; 11] = [
-    "biomes.toml",
-    "species.toml",
-    "materials.toml",
-    "props.toml",
-    "blocks.toml",
-    "creatures.toml",
-    "surfaces.toml",
-    "lights.toml",
-    "settings.toml",
-    "ui.toml",
-    "tree_styles.toml",
-];
+pub const TABLES: [&str; 11] = ["biomes.toml", "species.toml", "materials.toml", "props.toml", "blocks.toml", "creatures.toml", "surfaces.toml", "lights.toml", "settings.toml", "ui.toml", "tree_styles.toml"];
 
 /// Where a set of assets came from.
 #[derive(Clone, Debug, PartialEq)]
@@ -402,10 +390,7 @@ fn styles(raw: &TreeStylesFile) -> Result<Vec<Style>, AssetError> {
         };
         // The defaults must themselves make a tree, so a species that
         // overrides nothing still loads.
-        style
-            .grammar(&Overrides::default())
-            .and_then(|g| g.validate())
-            .map_err(|e| ctx.row(i, &r.name, e))?;
+        style.grammar(&Overrides::default()).and_then(|g| g.validate()).map_err(|e| ctx.row(i, &r.name, e))?;
         out.push(style);
     }
     Ok(out)
@@ -534,9 +519,7 @@ impl Assets {
     }
 
     fn build(files: Vec<(String, String)>, source: Source) -> Result<Assets, AssetError> {
-        let text = |name: &str| -> Result<&str, AssetError> {
-            files.iter().find(|(p, _)| p == name).map(|(_, t)| t.as_str()).ok_or_else(|| AssetError::file(name, "missing"))
-        };
+        let text = |name: &str| -> Result<&str, AssetError> { files.iter().find(|(p, _)| p == name).map(|(_, t)| t.as_str()).ok_or_else(|| AssetError::file(name, "missing")) };
         let raw = Raw {
             biomes: parse(TABLES[0], text(TABLES[0])?)?,
             species: parse(TABLES[1], text(TABLES[1])?)?,
@@ -921,13 +904,7 @@ impl Assets {
             }
             unit(&ctx, i, &s.name, "texture_density", Some(s.texture_density))?;
             check_conditions(&ctx, i, &s.name, &s.conditions)?;
-            surface.push(Surface {
-                name: s.name.clone(),
-                identity: Identity::from_row(&s.identity, "surfaces"),
-                texture_density: s.texture_density,
-                relief: s.relief,
-                conditions: Conditions::from_row(&s.conditions),
-            });
+            surface.push(Surface { name: s.name.clone(), identity: Identity::from_row(&s.identity, "surfaces"), texture_density: s.texture_density, relief: s.relief, conditions: Conditions::from_row(&s.conditions) });
         }
         let d = &sf.density;
         for (f, v) in [("grass_base", d.grass_base), ("grass_per_level", d.grass_per_level), ("cattail", d.cattail)] {
@@ -965,14 +942,7 @@ impl Assets {
                     }
                 }
             }
-            settings.push(SettingItem {
-                key: s.key.clone(),
-                identity: Identity::from_row(&s.identity, "settings"),
-                label: s.label.clone(),
-                values: s.values.clone(),
-                default: s.default,
-                shortcut: s.shortcut,
-            });
+            settings.push(SettingItem { key: s.key.clone(), identity: Identity::from_row(&s.identity, "settings"), label: s.label.clone(), values: s.values.clone(), default: s.default, shortcut: s.shortcut });
         }
 
         // ui frames
@@ -1152,10 +1122,12 @@ mod tests {
     }
 
     fn replace_in(file: &str, from: &str, to: &str) -> Result<Assets, AssetError> {
-        with(|p, t| (p == file).then(|| {
-            assert!(t.contains(from), "{file} lacks {from:?}");
-            t.replacen(from, to, 1)
-        }))
+        with(|p, t| {
+            (p == file).then(|| {
+                assert!(t.contains(from), "{file} lacks {from:?}");
+                t.replacen(from, to, 1)
+            })
+        })
     }
 
     #[test]
@@ -1398,7 +1370,6 @@ mod tests {
         let e = Assets::from_strings(&files).unwrap_err();
         assert_eq!(e.to_string(), "lights.toml: missing");
     }
-
 
     /// A plain species standing in for whatever habit is being checked.
     fn styled(a: &Assets, style: &str, size: [f32; 3]) -> Species {
@@ -1664,7 +1635,7 @@ mod tests {
     }
 
     #[test]
-    fn art_tiers_are_picked_by_the_rows_a_thing_stands(){
+    fn art_tiers_are_picked_by_the_rows_a_thing_stands() {
         // The person is 2 m: 12 rows at 1:1, 6 at 1:2, 3 at 1:4 and 1.5 at
         // 1:8, so the tier nearest each is large, medium, small and tiny
         // (ADR-004).

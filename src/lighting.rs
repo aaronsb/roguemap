@@ -8,11 +8,7 @@ use crate::render::{Renderer, Scene};
 use crate::world::Light;
 
 fn mul(c: Rgb, l: [f32; 3]) -> Rgb {
-    Rgb(
-        (c.0 as f32 * l[0]).clamp(0.0, 255.0) as u8,
-        (c.1 as f32 * l[1]).clamp(0.0, 255.0) as u8,
-        (c.2 as f32 * l[2]).clamp(0.0, 255.0) as u8,
-    )
+    Rgb((c.0 as f32 * l[0]).clamp(0.0, 255.0) as u8, (c.1 as f32 * l[1]).clamp(0.0, 255.0) as u8, (c.2 as f32 * l[2]).clamp(0.0, 255.0) as u8)
 }
 
 /// Summed point light at a world position, in metres: positions are tiles

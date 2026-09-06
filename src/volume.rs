@@ -299,9 +299,7 @@ impl Volume {
             // chance to meet foliage (docs/structures.md, "Porous
             // canopies"). So a segment with no crossing whose top lies
             // inside the shape counts as a hit at that top.
-            let crossing = |qa: f32, qb: f32, qc: f32| -> Option<f32> {
-                largest_root(qa, qb, qc, clo, chi).or_else(|| (qa * chi * chi + qb * chi + qc < 0.0).then_some(chi))
-            };
+            let crossing = |qa: f32, qb: f32, qc: f32| -> Option<f32> { largest_root(qa, qb, qc, clo, chi).or_else(|| (qa * chi * chi + qb * chi + qc < 0.0).then_some(chi)) };
             match self.shape {
                 // A branch was answered above; the rest are quadrics.
                 Shape::Branch => {}

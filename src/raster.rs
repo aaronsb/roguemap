@@ -172,7 +172,13 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
             };
             if r < density {
                 let w = grass_lean(sx as f32, sy as f32, sc.t, wind_strength);
-                let lean = if w < -0.35 { 0 } else if w > 0.35 { 2 } else { 1 };
+                let lean = if w < -0.35 {
+                    0
+                } else if w > 0.35 {
+                    2
+                } else {
+                    1
+                };
                 let ch = match set {
                     Some(set) => set[lean],
                     None => ts.stubble[((hv >> 20) % 3) as usize],
@@ -188,7 +194,15 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
                 let ch = ts.cattail[((hv >> 20) % 2) as usize];
                 return (ch, Rgb(120, 140, 70).lerp(Rgb(150, 120, 60), 1.0 - vig));
             } else if r < 0.12 + 0.34 * wave {
-                let ch = ts.water[if phase > 0.6 { 0 } else if phase > 0.1 { 1 } else if phase > -0.5 { 2 } else { 3 }];
+                let ch = ts.water[if phase > 0.6 {
+                    0
+                } else if phase > 0.1 {
+                    1
+                } else if phase > -0.5 {
+                    2
+                } else {
+                    3
+                }];
                 let crest = (0.15 + 0.85 * wave) * (0.55 + 0.45 * phase.max(0.0));
                 return (ch, base.lerp(pal.water_glyph, crest));
             }
@@ -511,11 +525,7 @@ impl Renderer {
     fn canopy_tint(&self, c: Rgb, v: &crate::volume::Volume) -> Rgb {
         let i = v.instance;
         let hue = 1.0 + 0.10 * i.hue;
-        Rgb(
-            (c.0 as f32 * i.tint * hue).clamp(0.0, 255.0) as u8,
-            (c.1 as f32 * i.tint).clamp(0.0, 255.0) as u8,
-            (c.2 as f32 * i.tint / hue).clamp(0.0, 255.0) as u8,
-        )
+        Rgb((c.0 as f32 * i.tint * hue).clamp(0.0, 255.0) as u8, (c.1 as f32 * i.tint).clamp(0.0, 255.0) as u8, (c.2 as f32 * i.tint / hue).clamp(0.0, 255.0) as u8)
     }
 
     /// How many other crowns stand over a canopy point, up to three: where
@@ -1035,18 +1045,11 @@ mod tests {
                 // Down this column: the island's side is met as a cliff face
                 // above the waterline, and below it the plinth is a wall on an
                 // edge tile, until the walk runs out under the sea bed.
-                let face = (0..(plateau * rpm).ceil() as i32)
-                    .map(|i| r.ray(&sc, sx, sy - i as f32))
-                    .find(|hit| hit.is_some_and(|h| h.face != FACE_TOP))
-                    .flatten();
+                let face = (0..(plateau * rpm).ceil() as i32).map(|i| r.ray(&sc, sx, sy - i as f32)).find(|hit| hit.is_some_and(|h| h.face != FACE_TOP)).flatten();
                 let cliff = face.unwrap_or_else(|| panic!("angle {angle}: no cliff on the island's side"));
                 assert!(cliff.h > SEA as f32 && cliff.h <= plateau + 0.5, "angle {angle}: the side is a cliff (h {})", cliff.h);
                 let deep = (SEA as f32 - crate::map::FLOOR) * rpm;
-                let hit = (1..deep as i32)
-                    .map(|i| r.ray(&sc, sx, sy + i as f32))
-                    .find(|hit| hit.is_some_and(|h| h.face != FACE_TOP))
-                    .flatten()
-                    .unwrap_or_else(|| panic!("angle {angle}: no plinth below the near edge"));
+                let hit = (1..deep as i32).map(|i| r.ray(&sc, sx, sy + i as f32)).find(|hit| hit.is_some_and(|h| h.face != FACE_TOP)).flatten().unwrap_or_else(|| panic!("angle {angle}: no plinth below the near edge"));
                 assert!(hit.below >= 1 && hit.h > SEA as f32 && hit.h <= plateau + 0.5, "angle {angle}: the plinth is a wall hit (h {})", hit.h);
                 let edge = |v: f32| !(0.5..=7.5).contains(&v);
                 assert!(edge(hit.x) || edge(hit.y), "angle {angle}: on the island's edge ({:.2}, {:.2})", hit.x, hit.y);

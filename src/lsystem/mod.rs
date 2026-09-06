@@ -364,11 +364,7 @@ impl TreeModel {
         let inv = 1.0 / cell;
         let mut cells: BTreeMap<(i32, i32, i32), usize> = BTreeMap::new();
         for l in &self.leaves {
-            let key = (
-                (l.centre[0] * inv).floor() as i32,
-                (l.centre[1] * inv).floor() as i32,
-                (l.centre[2] * inv).floor() as i32,
-            );
+            let key = ((l.centre[0] * inv).floor() as i32, (l.centre[1] * inv).floor() as i32, (l.centre[2] * inv).floor() as i32);
             match cells.get(&key) {
                 Some(&at) => {
                     let m: &mut Leaf = &mut out.leaves[at];
@@ -433,15 +429,7 @@ impl TreeModel {
         for l in &self.leaves {
             let c = put(l.centre);
             let rz = l.radius[2] * sz;
-            out.push(crate::volume::Volume {
-                shape: crate::volume::Shape::Cluster,
-                cx: c.0,
-                cy: c.1,
-                h0: c.2 - rz,
-                height: 2.0 * rz,
-                radius: 0.5 * (l.radius[0] + l.radius[1]) * sx,
-                ..blank
-            });
+            out.push(crate::volume::Volume { shape: crate::volume::Shape::Cluster, cx: c.0, cy: c.1, h0: c.2 - rz, height: 2.0 * rz, radius: 0.5 * (l.radius[0] + l.radius[1]) * sx, ..blank });
         }
     }
 
@@ -655,12 +643,7 @@ impl Grammar {
         let jitter = self.jitter.clamp(0.0, 1.0);
         let phi = hash01(0, 7, seed) * std::f32::consts::TAU;
         let toward = [phi.cos(), phi.sin(), 0.0];
-        let mut t = Turtle {
-            pos: [0.0, 0.0, 0.0],
-            frame: [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]],
-            len: self.length,
-            rad: self.length * TRUNK_RATIO,
-        };
+        let mut t = Turtle { pos: [0.0, 0.0, 0.0], frame: [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]], len: self.length, rad: self.length * TRUNK_RATIO };
         if lean > 0.0 {
             // Lean the whole tree up to twelve degrees toward `phi`.
             let (s, c) = (lean * 12.0f32).to_radians().sin_cos();
@@ -858,7 +841,6 @@ impl Turtle {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,7 +887,6 @@ mod tests {
             prune_height: 0.1,
         }
     }
-
 
     /// A grammar that forks perfectly evenly, for the symmetry tests.
     fn mirrored() -> Grammar {
@@ -1117,19 +1098,7 @@ mod tests {
         let Volume::Cylinder { a, b, radius } = v[0] else { panic!("the first volume is a branch") };
         assert_eq!(Segment { a, b, radius }, m.segments[0]);
         // And every one of them places into the walk's own volume list.
-        let at = Placement {
-            species: 3,
-            mx: 10,
-            my: -4,
-            cx: 10.5,
-            cy: -3.5,
-            ground: 12.0,
-            spread: 1.0,
-            height: 1.0,
-            crown: (16.0, 9.0),
-            shear: (0.0, 0.0),
-            instance: crate::volume::instance(0),
-        };
+        let at = Placement { species: 3, mx: 10, my: -4, cx: 10.5, cy: -3.5, ground: 12.0, spread: 1.0, height: 1.0, crown: (16.0, 9.0), shear: (0.0, 0.0), instance: crate::volume::instance(0) };
         let mut placed = Vec::new();
         m.place(&at, &mut placed);
         assert_eq!(placed.len(), m.segments.len() + m.leaves.len());

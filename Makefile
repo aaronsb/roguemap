@@ -1,7 +1,7 @@
 # roguemap task runner. `make help` lists targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help build run term test test-assets test-golden lint format check clean snap tree-snap screenshots fonts golden golden-bytes golden-check golden-record assets-export edit edit-snap
+.PHONY: help build run term test test-assets test-golden lint format fmt-check check clean snap tree-snap screenshots fonts golden golden-bytes golden-check golden-record assets-export edit edit-snap
 
 BIN      := target/release/roguemap
 EDIT     := target/release/roguemap-edit

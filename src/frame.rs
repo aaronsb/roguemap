@@ -363,11 +363,7 @@ impl Layout {
         let mut kept: Vec<usize> = Vec::new();
         for &i in &by_priority {
             let r = rects[i].expect("only placed frames are ranked");
-            let hidden = kept.iter().any(|&k| {
-                items[k].spec.priority > items[i].spec.priority
-                    && matches!(items[k].spec.background, Background::Opaque)
-                    && rects[k].expect("kept frames are placed").overlaps(&r)
-            });
+            let hidden = kept.iter().any(|&k| items[k].spec.priority > items[i].spec.priority && matches!(items[k].spec.background, Background::Opaque) && rects[k].expect("kept frames are placed").overlaps(&r));
             if hidden {
                 rects[i] = None;
             } else {

@@ -1,0 +1,4 @@
+# Matches the existing style: long lines are allowed, so `cargo fmt` does
+# not reflow the whole tree.
+max_width = 220
+use_small_heuristics = "Max"

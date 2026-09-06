@@ -199,7 +199,13 @@ fn draw_rows(cv: &mut Canvas, ed: &Editor) {
             Some(ai) if ed.kind() != super::fields::TableKind::Art => format!("{mark} + {}", ed.doc.art.get(ai).map(|a| a.file.tier.name()).unwrap_or("?")),
             _ => format!("{mark}{}", ed.doc.row_name(ed.table, e.row)),
         };
-        let (tf, tb) = if selected { (bg, if ed.pane == Pane::Rows { CHROME.selected } else { dim }) } else if e.art.is_some() && ed.kind() != super::fields::TableKind::Art { (dim, bg) } else { (fg, bg) };
+        let (tf, tb) = if selected {
+            (bg, if ed.pane == Pane::Rows { CHROME.selected } else { dim })
+        } else if e.art.is_some() && ed.kind() != super::fields::TableKind::Art {
+            (dim, bg)
+        } else {
+            (fg, bg)
+        };
         cv.text(l.rows.x, l.rows.y + line as i32, &pad(&text, l.rows.w), tf, tb);
     }
 }
@@ -272,7 +278,19 @@ fn field_text(ed: &Editor, item: &super::FormItem, editing: bool, w: i32) -> Vec
             let mut out = Vec::new();
             for (i, c) in channels.iter().enumerate() {
                 let open = i % 3 == 0;
-                out.push((if open { if i == 0 { "[" } else { " [" } } else { "," }.to_string(), false));
+                out.push((
+                    if open {
+                        if i == 0 {
+                            "["
+                        } else {
+                            " ["
+                        }
+                    } else {
+                        ","
+                    }
+                    .to_string(),
+                    false,
+                ));
                 out.push((c.to_string(), i == *index));
                 if i % 3 == 2 {
                     out.push(("]".to_string(), false));
@@ -320,7 +338,15 @@ fn draw_form(cv: &mut Canvas, ed: &Editor) {
                 break;
             }
             let s = clip(&seg, left);
-            let (sf, sb) = if hi { (bg, CHROME.selected) } else if active && !editing { (fg, bg) } else if item.value.is_none() { (dim, bg) } else { (fg, bg) };
+            let (sf, sb) = if hi {
+                (bg, CHROME.selected)
+            } else if active && !editing {
+                (fg, bg)
+            } else if item.value.is_none() {
+                (dim, bg)
+            } else {
+                (fg, bg)
+            };
             cv.text(x, y, &s, sf, sb);
             let n = s.chars().count() as i32;
             x += n;
@@ -345,7 +371,13 @@ fn draw_grid(cv: &mut Canvas, ed: &Editor) {
     let y0 = l.form.y + 1;
     // Column ruler with the centre marked.
     for c in 0..w.min(l.form.w - 3) {
-        let ch = if c == art.center { '^' } else if c % 5 == 0 { '·' } else { ' ' };
+        let ch = if c == art.center {
+            '^'
+        } else if c % 5 == 0 {
+            '·'
+        } else {
+            ' '
+        };
         cv.put(x0 + c, l.form.y, ch, dim, bg);
     }
     let base_from = art.rows.len().saturating_sub(art.base_rows);
@@ -359,7 +391,13 @@ fn draw_grid(cv: &mut Canvas, ed: &Editor) {
         for (c, ch) in row.chars().enumerate().take((l.form.w - 3).max(0) as usize) {
             let here = r == g.cy && c == g.cx;
             let shown = if ch == ' ' { '·' } else { ch };
-            let (cf, cb) = if here { (bg, CHROME.selected) } else if ch == ' ' { (dim, ground) } else { (fg, ground) };
+            let (cf, cb) = if here {
+                (bg, CHROME.selected)
+            } else if ch == ' ' {
+                (dim, ground)
+            } else {
+                (fg, ground)
+            };
             cv.put(x0 + c as i32, y, shown, cf, cb);
         }
     }

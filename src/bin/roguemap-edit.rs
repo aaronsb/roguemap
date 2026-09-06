@@ -106,7 +106,9 @@ fn main() -> io::Result<()> {
         Some(_) => fail(USAGE, 2),
         None => match std::env::var_os("ROGUEMAP_ASSETS") {
             Some(dir) => edit(Path::new(&dir)),
-            None => fail("no asset directory to edit: the embedded set has nowhere to be written back to.\nRun `roguemap-edit --export DIR` to seed a directory, `roguemap-edit DIR` to edit one, or set ROGUEMAP_ASSETS.", 2),
+            None => {
+                fail("no asset directory to edit: the embedded set has nowhere to be written back to.\nRun `roguemap-edit --export DIR` to seed a directory, `roguemap-edit DIR` to edit one, or set ROGUEMAP_ASSETS.", 2)
+            }
         },
     }
 }

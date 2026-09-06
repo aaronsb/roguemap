@@ -113,12 +113,7 @@ impl WorldMap {
                     Self::sample(map, world, x, y)
                 } else {
                     let (hx, hy) = (sx / 2, sy / 2);
-                    let cs = [
-                        Self::sample(map, world, x, y),
-                        Self::sample(map, world, x + hx, y),
-                        Self::sample(map, world, x, y + hy),
-                        Self::sample(map, world, x + hx, y + hy),
-                    ];
+                    let cs = [Self::sample(map, world, x, y), Self::sample(map, world, x + hx, y), Self::sample(map, world, x, y + hy), Self::sample(map, world, x + hx, y + hy)];
                     let avg = |f: fn(&Rgb) -> u8| (cs.iter().map(|c| f(c) as u32).sum::<u32>() / 4) as u8;
                     Rgb(avg(|c| c.0), avg(|c| c.1), avg(|c| c.2))
                 };

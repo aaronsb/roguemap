@@ -54,10 +54,7 @@ impl SpriteItem {
                 Resolved {
                     sprite: ts.tree(sp.form),
                     colors: SpriteColors {
-                        top: Tint {
-                            bg: crate::biome::seasonal(&sp.canopy, world.season).lerp(pal.snow(), snow),
-                            fg: crate::biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph(), snow * 0.5),
-                        },
+                        top: Tint { bg: crate::biome::seasonal(&sp.canopy, world.season).lerp(pal.snow(), snow), fg: crate::biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph(), snow * 0.5) },
                         base: Tint { bg: pal.trunk, fg: pal.trunk_glyph },
                     },
                     depth_bias: 0.0,

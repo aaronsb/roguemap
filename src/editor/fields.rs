@@ -105,12 +105,20 @@ pub enum Kind {
     /// A sentence or two; the same editor as `Str`, shown wider.
     Text,
     Bool,
-    U8 { max: u8 },
+    U8 {
+        max: u8,
+    },
     U64,
-    F32 { min: f32, max: f32 },
+    F32 {
+        min: f32,
+        max: f32,
+    },
     Enum(&'static [&'static str]),
     /// The `name` of a row in another table, plus fixed extra choices.
-    Ref { table: TableKind, extra: &'static [&'static str] },
+    Ref {
+        table: TableKind,
+        extra: &'static [&'static str],
+    },
     Rgb,
     /// One `[r, g, b]` or four, in season order.
     Seasonal,
@@ -160,13 +168,7 @@ const ANY_F: Kind = Kind::F32 { min: f32::NEG_INFINITY, max: f32::INFINITY };
 
 const IDENTITY: [Field; 3] = [opt("description", Kind::Text), opt("category", Kind::Str), opt("aliases", Kind::StrList)];
 
-const HOOKS: [Field; 5] = [
-    opt("light", Kind::Ref { table: TableKind::Lights, extra: &[] }),
-    opt("tags", Kind::StrList),
-    opt("emits", Kind::StrList),
-    opt("affects", Kind::StrList),
-    opt("reach", NON_NEG),
-];
+const HOOKS: [Field; 5] = [opt("light", Kind::Ref { table: TableKind::Lights, extra: &[] }), opt("tags", Kind::StrList), opt("emits", Kind::StrList), opt("affects", Kind::StrList), opt("reach", NON_NEG)];
 
 const PHYSICAL: [Field; 16] = [
     opt("passable", Kind::Bool),
@@ -187,15 +189,8 @@ const PHYSICAL: [Field; 16] = [
     opt("mass", NON_NEG),
 ];
 
-const CONDITION_FIELDS: [Field; 7] = [
-    opt("wet_darkening", UNIT),
-    opt("dry_fading", UNIT),
-    opt("weathering", UNIT),
-    opt("mossing", UNIT),
-    opt("soiling", UNIT),
-    opt("condition_colors", Kind::Any),
-    opt("states", Kind::StrList),
-];
+const CONDITION_FIELDS: [Field; 7] =
+    [opt("wet_darkening", UNIT), opt("dry_fading", UNIT), opt("weathering", UNIT), opt("mossing", UNIT), opt("soiling", UNIT), opt("condition_colors", Kind::Any), opt("states", Kind::StrList)];
 
 const BIOME: [Field; 10] = [
     req("name", Kind::Str),

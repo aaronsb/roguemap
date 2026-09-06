@@ -261,15 +261,7 @@ impl Species {
         // height its branches start at.
         let prune = self.lsystem.as_ref().map(|g| g.prune_height).filter(|p| *p > 0.0);
         let d = Dims::pruned(shape, self.size, prune.unwrap_or_else(|| crate::volume::prune_height(shape)));
-        (
-            shape,
-            Dims {
-                radius: self.radius.unwrap_or(d.radius),
-                height: self.height.unwrap_or(d.height),
-                trunk: self.trunk.unwrap_or(d.trunk),
-                trunk_radius: self.trunk_radius.unwrap_or(d.trunk_radius),
-            },
-        )
+        (shape, Dims { radius: self.radius.unwrap_or(d.radius), height: self.height.unwrap_or(d.height), trunk: self.trunk.unwrap_or(d.trunk), trunk_radius: self.trunk_radius.unwrap_or(d.trunk_radius) })
     }
 
     /// How far this species stands from its own kind, in metres: its
@@ -403,9 +395,7 @@ mod tests {
         assert_eq!(classify(-10.0, 70.0), "ET");
         assert_eq!(classify(-20.0, 70.0), "EF");
         for code in KOPPEN_CODES {
-            let found = [(25.0, 80.0), (25.0, 50.0), (20.0, 10.0), (10.0, 30.0), (12.0, 50.0), (8.0, 70.0), (-2.0, 70.0), (-10.0, 70.0), (-20.0, 70.0)]
-                .iter()
-                .any(|&(t, p)| classify(t, p) == code);
+            let found = [(25.0, 80.0), (25.0, 50.0), (20.0, 10.0), (10.0, 30.0), (12.0, 50.0), (8.0, 70.0), (-2.0, 70.0), (-10.0, 70.0), (-20.0, 70.0)].iter().any(|&(t, p)| classify(t, p) == code);
             assert!(found, "{code}");
         }
     }

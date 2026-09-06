@@ -215,8 +215,7 @@ impl Renderer {
                 } else {
                     (' ', sky)
                 };
-                self.g[(y * self.w + x) as usize] =
-                    GCell { albedo: sky, ch, glyph, wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth: SKY_DEPTH };
+                self.g[(y * self.w + x) as usize] = GCell { albedo: sky, ch, glyph, wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth: SKY_DEPTH };
             }
         }
     }

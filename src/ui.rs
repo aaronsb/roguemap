@@ -164,15 +164,7 @@ pub fn settings_form(cv: &mut Canvas, rect: Rect, settings: &Settings) {
     cv.text(rect.x, rect.y, &pad("", rect.w), dim, bg);
     for (i, item) in items.iter().enumerate() {
         let selected = i == settings.cursor;
-        let body = format!(
-            "  {:<nw$}   {} {:^vw$} {}",
-            item.label,
-            if selected { '<' } else { ' ' },
-            settings.label(i),
-            if selected { '>' } else { ' ' },
-            nw = name_w,
-            vw = val_w
-        );
+        let body = format!("  {:<nw$}   {} {:^vw$} {}", item.label, if selected { '<' } else { ' ' }, settings.label(i), if selected { '>' } else { ' ' }, nw = name_w, vw = val_w);
         let (lf, lb) = if selected { (bg, CHROME.selected) } else { (fg, bg) };
         cv.text(rect.x, rect.y + 1 + i as i32, &pad(&body, rect.w), lf, lb);
     }
@@ -376,28 +368,11 @@ mod tests {
     impl Fixture {
         fn new() -> Fixture {
             let assets = test_assets();
-            Fixture {
-                map: Map::new(8, 8, 1, assets.clone()),
-                world: World::new(1),
-                cam: Camera::new(),
-                tilesets: Tileset::all(&assets),
-                settings: Settings::new(&assets),
-                wmap: WorldMap::new(),
-            }
+            Fixture { map: Map::new(8, 8, 1, assets.clone()), world: World::new(1), cam: Camera::new(), tilesets: Tileset::all(&assets), settings: Settings::new(&assets), wmap: WorldMap::new() }
         }
 
         fn ctx(&self) -> FrameCtx<'_> {
-            FrameCtx {
-                map: &self.map,
-                world: &self.world,
-                cam: &self.cam,
-                ts: &self.tilesets[0],
-                settings: &self.settings,
-                wmap: &self.wmap,
-                lights: 0,
-                t: 0.0,
-                focused: false,
-            }
+            FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts: &self.tilesets[0], settings: &self.settings, wmap: &self.wmap, lights: 0, t: 0.0, focused: false }
         }
     }
 

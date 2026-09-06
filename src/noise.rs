@@ -2,9 +2,7 @@
 
 /// 64-bit integer hash of a coordinate pair and seed.
 pub fn hash(x: i64, y: i64, seed: u64) -> u64 {
-    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-        ^ seed.wrapping_mul(0x1656_67B1_9E37_79F9);
+    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ seed.wrapping_mul(0x1656_67B1_9E37_79F9);
     h ^= h >> 30;
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h ^= h >> 27;

@@ -101,8 +101,7 @@ impl Style {
             table
                 .iter()
                 .map(|(sym, alts)| {
-                    let out: Result<Vec<Alternative>, String> =
-                        alts.iter().map(|a| Ok(Alternative { replacement: template(&a.replacement, &p)?, weight: a.weight })).collect();
+                    let out: Result<Vec<Alternative>, String> = alts.iter().map(|a| Ok(Alternative { replacement: template(&a.replacement, &p)?, weight: a.weight })).collect();
                     Ok((*sym, out?))
                 })
                 .collect()
@@ -235,19 +234,7 @@ mod tests {
     use super::*;
 
     fn params() -> Params {
-        Params {
-            branch_angle: 20.0,
-            forks: 5,
-            taper: 0.9,
-            droop: 0.0,
-            leaf_density: 1.0,
-            asymmetry: 0.1,
-            jitter: 0.08,
-            prune_height: 0.2,
-            depth: 6,
-            length: 1.0,
-            leaf_radius: 0.4,
-        }
+        Params { branch_angle: 20.0, forks: 5, taper: 0.9, droop: 0.0, leaf_density: 1.0, asymmetry: 0.1, jitter: 0.08, prune_height: 0.2, depth: 6, length: 1.0, leaf_radius: 0.4 }
     }
 
     #[test]

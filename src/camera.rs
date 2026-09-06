@@ -63,10 +63,7 @@ impl Camera {
     pub fn fitting_zoom(map: &Map, sw: i32, sh: i32) -> usize {
         let n = map.w.max(map.h) as i32;
         let relief = map.relief_ceiling() as f32;
-        ZOOMS
-            .iter()
-            .rposition(|&(hw, hh)| 2 * n * hw <= sw && 2 * n * hh + (relief * rows_per_metre_of(hw)).ceil() as i32 + 4 <= sh)
-            .unwrap_or(0)
+        ZOOMS.iter().rposition(|&(hw, hh)| 2 * n * hw <= sw && 2 * n * hh + (relief * rows_per_metre_of(hw)).ceil() as i32 + 4 <= sh).unwrap_or(0)
     }
 
     pub fn a(&self) -> f32 {
@@ -104,7 +101,11 @@ impl Camera {
     /// 1:8. The two views never share a level.
     pub fn inset_zoom(main: usize) -> usize {
         let close = ZOOMS.len() - 1;
-        if main % ZOOMS.len() == close { 0 } else { close }
+        if main % ZOOMS.len() == close {
+            0
+        } else {
+            close
+        }
     }
 
     /// The ratio the inset draws at while the main view is at `main`.

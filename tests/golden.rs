@@ -59,10 +59,7 @@ struct Shot {
 /// The `shot NAME args...` lines of `tools/golden.sh`, in order.
 fn shots() -> Vec<Shot> {
     let script = fs::read_to_string(root().join("tools/golden.sh")).expect("tools/golden.sh is readable");
-    assert!(
-        script.contains(&format!("--snap {WIDTH} {HEIGHT} ")),
-        "tools/golden.sh no longer renders {WIDTH}x{HEIGHT} frames; update WIDTH and HEIGHT in tests/golden.rs"
-    );
+    assert!(script.contains(&format!("--snap {WIDTH} {HEIGHT} ")), "tools/golden.sh no longer renders {WIDTH}x{HEIGHT} frames; update WIDTH and HEIGHT in tests/golden.rs");
     let shots: Vec<Shot> = script
         .lines()
         .filter_map(|l| l.strip_prefix("shot "))
@@ -276,12 +273,7 @@ fn golden_frames_match_their_references() {
         eprintln!("golden: recorded {} frames in {}", shots.len(), frame_dir().display());
         return;
     }
-    assert!(
-        failures.is_empty(),
-        "golden frames differ from tests/golden ({}):\n{}If the change is intended, run `make golden-record` and say which frames changed and why in the commit.",
-        tol.describe(),
-        failures
-    );
+    assert!(failures.is_empty(), "golden frames differ from tests/golden ({}):\n{}If the change is intended, run `make golden-record` and say which frames changed and why in the commit.", tol.describe(), failures);
     if all_identical {
         eprintln!("golden: all frames identical");
     } else {

@@ -57,11 +57,24 @@ impl FormItem {
 /// The live editor for one field.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldEdit {
-    Text { buf: Vec<char>, cursor: usize },
-    Choice { options: Vec<String>, index: usize },
+    Text {
+        buf: Vec<char>,
+        cursor: usize,
+    },
+    Choice {
+        options: Vec<String>,
+        index: usize,
+    },
     /// Three channels, or twelve for a seasonal colour.
-    Color { channels: Vec<u8>, index: usize },
-    Checklist { options: Vec<String>, on: Vec<bool>, index: usize },
+    Color {
+        channels: Vec<u8>,
+        index: usize,
+    },
+    Checklist {
+        options: Vec<String>,
+        on: Vec<bool>,
+        index: usize,
+    },
 }
 
 /// Cursor over an art file.

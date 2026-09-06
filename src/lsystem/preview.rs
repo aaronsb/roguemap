@@ -130,9 +130,7 @@ pub fn snap(assets: &Assets, name: &str, args: &[String]) -> Result<Canvas, Stri
         Some(f) => f,
         None => sp.foliage(PREVIEW_CLIMATE, season),
     };
-    let model = sp
-        .tree_model(seed, Growth { foliage, state })
-        .ok_or_else(|| format!("species {name:?} is not shape = \"lsystem\"; it has no grammar to grow"))?;
+    let model = sp.tree_model(seed, Growth { foliage, state }).ok_or_else(|| format!("species {name:?} is not shape = \"lsystem\"; it has no grammar to grow"))?;
 
     let pal = assets.surfaces.for_season(season);
     let bark = model.bark(pal.trunk);
@@ -314,10 +312,7 @@ fn blob(cv: &mut Canvas, view: &View, l: &super::Leaf, style: &PreviewStyle, lit
         for x in x0..=x1 {
             // Sample the four quadrant centres of the cell.
             let (fx, fy) = (x as f32, y as f32);
-            let mask = (inside(fx + 0.25, fy + 0.25) as u8)
-                | (inside(fx + 0.75, fy + 0.25) as u8) << 1
-                | (inside(fx + 0.25, fy + 0.75) as u8) << 2
-                | (inside(fx + 0.75, fy + 0.75) as u8) << 3;
+            let mask = (inside(fx + 0.25, fy + 0.25) as u8) | (inside(fx + 0.75, fy + 0.25) as u8) << 1 | (inside(fx + 0.25, fy + 0.75) as u8) << 2 | (inside(fx + 0.75, fy + 0.75) as u8) << 3;
             match mask {
                 0 => {}
                 0b1111 | 0b0111 | 0b1011 | 0b1101 | 0b1110 | 0b1001 | 0b0110 => {

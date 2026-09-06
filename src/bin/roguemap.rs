@@ -61,19 +61,7 @@ impl App {
         cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
         let inset_corner = settings.get("inset").max(1);
-        App {
-            map,
-            world,
-            cam,
-            settings,
-            inset_corner,
-            wmap: WorldMap::new(),
-            frames,
-            renderer: Renderer::new(sw, sh),
-            tilesets,
-            sw,
-            sh,
-        }
+        App { map, world, cam, settings, inset_corner, wmap: WorldMap::new(), frames, renderer: Renderer::new(sw, sh), tilesets, sw, sh }
     }
 
     fn resize(&mut self, w: i32, h: i32) {

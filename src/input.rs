@@ -59,33 +59,14 @@ pub const SCENE: &[Binding] = &[
     Binding { shift: false, keys: &[(Char('m'), Toggle("worldmap"))], label: "m", help: "world map" },
     Binding {
         shift: false,
-        keys: &[
-            (Char('w'), Walk(0, -1)),
-            (Char('k'), Walk(0, -1)),
-            (Char('s'), Walk(0, 1)),
-            (Char('j'), Walk(0, 1)),
-            (Char('a'), Walk(-1, 0)),
-            (Char('h'), Walk(-1, 0)),
-            (Char('d'), Walk(1, 0)),
-            (Char('l'), Walk(1, 0)),
-        ],
+        keys: &[(Char('w'), Walk(0, -1)), (Char('k'), Walk(0, -1)), (Char('s'), Walk(0, 1)), (Char('j'), Walk(0, 1)), (Char('a'), Walk(-1, 0)), (Char('h'), Walk(-1, 0)), (Char('d'), Walk(1, 0)), (Char('l'), Walk(1, 0))],
         label: "wasd/hjkl",
         help: "walk",
     },
     Binding { shift: false, keys: &[(Left, Pan(1, 0)), (Right, Pan(-1, 0)), (Up, Pan(0, 1)), (Down, Pan(0, -1))], label: "arrows", help: "pan" },
-    Binding {
-        shift: true,
-        keys: &[(Up, Run(0, -1)), (Down, Run(0, 1)), (Left, Run(-1, 0)), (Right, Run(1, 0))],
-        label: "shift+arrows",
-        help: "run eight",
-    },
+    Binding { shift: true, keys: &[(Up, Run(0, -1)), (Down, Run(0, 1)), (Left, Run(-1, 0)), (Right, Run(1, 0))], label: "shift+arrows", help: "run eight" },
     Binding { shift: false, keys: &[(Char('c'), Centre)], label: "c", help: "centre" },
-    Binding {
-        shift: false,
-        keys: &[(Char('r'), RotateQuarter(1)), (Char('R'), RotateQuarter(-1)), (Char('('), RotateDegrees(-5.0)), (Char(')'), RotateDegrees(5.0))],
-        label: "r/R ( )",
-        help: "rotate",
-    },
+    Binding { shift: false, keys: &[(Char('r'), RotateQuarter(1)), (Char('R'), RotateQuarter(-1)), (Char('('), RotateDegrees(-5.0)), (Char(')'), RotateDegrees(5.0))], label: "r/R ( )", help: "rotate" },
     Binding { shift: false, keys: &[(Char('z'), Zoom(1)), (Char('Z'), Zoom(-1))], label: "z/Z", help: "zoom" },
     Binding { shift: false, keys: &[(Char('v'), Cycle("view"))], label: "v", help: "fill" },
     Binding { shift: false, keys: &[(Char('g'), Cycle("glyphs"))], label: "g", help: "glyphs" },
@@ -106,12 +87,7 @@ pub const SCENE: &[Binding] = &[
 
 pub const SETTINGS: &[Binding] = &[
     Binding { shift: false, keys: &[(Up, CursorMove(-1)), (Char('k'), CursorMove(-1)), (Down, CursorMove(1)), (Char('j'), CursorMove(1))], label: "up/down", help: "select" },
-    Binding {
-        shift: false,
-        keys: &[(Left, Adjust(-1)), (Char('h'), Adjust(-1)), (Right, Adjust(1)), (Char('l'), Adjust(1)), (Enter, Adjust(1)), (Char(' '), Adjust(1))],
-        label: "left/right",
-        help: "change",
-    },
+    Binding { shift: false, keys: &[(Left, Adjust(-1)), (Char('h'), Adjust(-1)), (Right, Adjust(1)), (Char('l'), Adjust(1)), (Enter, Adjust(1)), (Char(' '), Adjust(1))], label: "left/right", help: "change" },
     Binding { shift: false, keys: &[(Esc, Close), (Tab, Close), (Char('q'), Close)], label: "esc", help: "close" },
 ];
 
@@ -152,7 +128,11 @@ pub const FRAME: &[Binding] = &[
 /// carries the modifier too.
 pub fn lookup(table: &[Binding], key: KeyCode, shift: bool) -> Option<Action> {
     let find = |want: bool| table.iter().filter(|b| b.shift == want).flat_map(|b| b.keys.iter()).find(|(k, _)| *k == key).map(|&(_, a)| a);
-    if shift { find(true).or_else(|| find(false)) } else { find(false) }
+    if shift {
+        find(true).or_else(|| find(false))
+    } else {
+        find(false)
+    }
 }
 
 /// The help line for a mode: every labelled group as "keys action", joined
@@ -199,10 +179,7 @@ mod tests {
         // entries added after it do not change the golden frames.
         let scene = help_line(SCENE, "  ");
         assert!(scene.len() > 120, "the scene help line already runs past 120 columns");
-        assert_eq!(
-            &scene[..120],
-            " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run eight  c centre  r/R ( ) rotate  z/Z zoom  v fi"
-        );
+        assert_eq!(&scene[..120], " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run eight  c centre  r/R ( ) rotate  z/Z zoom  v fi");
         for frame in ["inventory", "stats", "history", "conversation"] {
             assert!(SCENE.iter().flat_map(|b| b.keys).any(|&(_, a)| a == Toggle(frame)), "{frame} has no toggle key");
         }

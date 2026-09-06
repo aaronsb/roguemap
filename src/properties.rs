@@ -20,11 +20,7 @@ pub struct Identity {
 
 impl Identity {
     pub fn from_row(row: &IdentityRow, table: &str) -> Identity {
-        Identity {
-            description: row.description.clone(),
-            category: row.category.clone().unwrap_or_else(|| table.to_string()),
-            aliases: row.aliases.clone(),
-        }
+        Identity { description: row.description.clone(), category: row.category.clone().unwrap_or_else(|| table.to_string()), aliases: row.aliases.clone() }
     }
 }
 

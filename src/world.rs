@@ -296,11 +296,7 @@ impl World {
         let k = d.powf(0.5);
         let dim = 1.0 - 0.75 * self.weather.cover * self.weather.cover;
         let s = d * dim;
-        [
-            (warm[0] + (noon[0] - warm[0]) * k) * s,
-            (warm[1] + (noon[1] - warm[1]) * k) * s,
-            (warm[2] + (noon[2] - warm[2]) * k) * s,
-        ]
+        [(warm[0] + (noon[0] - warm[0]) * k) * s, (warm[1] + (noon[1] - warm[1]) * k) * s, (warm[2] + (noon[2] - warm[2]) * k) * s]
     }
 
     /// Sky-dome ambient light; overcast days are flatter and a touch cooler.
@@ -311,11 +307,7 @@ impl World {
         let overcast = [0.40, 0.41, 0.44];
         let c = self.weather.cover;
         let day = [clear[0] + (overcast[0] - clear[0]) * c, clear[1] + (overcast[1] - clear[1]) * c, clear[2] + (overcast[2] - clear[2]) * c];
-        [
-            night[0] + (day[0] - night[0]) * d,
-            night[1] + (day[1] - night[1]) * d,
-            night[2] + (day[2] - night[2]) * d,
-        ]
+        [night[0] + (day[0] - night[0]) * d, night[1] + (day[1] - night[1]) * d, night[2] + (day[2] - night[2]) * d]
     }
 
     /// How rough open water is, 0 glassy to 1 whitecaps.
@@ -424,9 +416,9 @@ impl World {
 mod tests {
     use super::*;
     use crate::assets::test_assets;
+    use crate::blocks::Stack;
     use crate::camera::Camera;
     use crate::canvas::Canvas;
-    use crate::blocks::Stack;
     use crate::map::Tile;
     use crate::render::{RenderOptions, Renderer, Scene};
     use crate::tileset::Tileset;

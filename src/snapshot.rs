@@ -15,9 +15,9 @@ use crate::map::{FixtureSpec, Flora, Map, Terrain};
 use crate::render::{Renderer, Scene};
 use crate::settings::Settings;
 use crate::tileset::Tileset;
+use crate::ui;
 use crate::world::{self, World};
 use crate::worldmap::WorldMap;
-use crate::ui;
 
 /// `key=value` arguments of a headless snapshot.
 pub struct SnapArgs {

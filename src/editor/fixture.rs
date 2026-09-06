@@ -77,19 +77,7 @@ pub struct PreviewSettings {
 
 impl Default for PreviewSettings {
     fn default() -> PreviewSettings {
-        PreviewSettings {
-            biome: 0,
-            season: 1.0,
-            tod: 12.0,
-            tod_auto: true,
-            glyphs: 0,
-            angle: std::f32::consts::FRAC_PI_4,
-            weather: None,
-            pattern: 0,
-            variant: 0,
-            animate: false,
-            tier: Tier::Large,
-        }
+        PreviewSettings { biome: 0, season: 1.0, tod: 12.0, tod_auto: true, glyphs: 0, angle: std::f32::consts::FRAC_PI_4, weather: None, pattern: 0, variant: 0, animate: false, tier: Tier::Large }
     }
 }
 
@@ -186,11 +174,8 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             top = assets.blocks[house as usize].level_height + assets.blocks[house as usize].max_rise;
             let trees: Vec<&str> = b.species.iter().filter_map(|(i, _)| assets.species.get(*i).map(|sp| sp.name.as_str())).collect();
             let material = assets.materials.get(b.material).map(|m| m.name.as_str()).unwrap_or("?");
-            caption = if trees.is_empty() {
-                format!("showing {} ground and a house built of {}", b.name, material)
-            } else {
-                format!("showing {} ground with {} and a house built of {}", b.name, trees.join(", "), material)
-            };
+            caption =
+                if trees.is_empty() { format!("showing {} ground and a house built of {}", b.name, material) } else { format!("showing {} ground with {} and a house built of {}", b.name, trees.join(", "), material) };
         }
         TableKind::Materials if subject.row < assets.materials.len() && !assets.blocks.is_empty() => {
             for (dx, dy) in PATTERNS[0].1 {

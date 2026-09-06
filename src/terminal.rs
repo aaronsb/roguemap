@@ -4,9 +4,7 @@ use std::io::{self, Stdout, Write};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::style::{Color, Print, SetBackgroundColor, SetForegroundColor};
-use crossterm::terminal::{
-    self, disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
+use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 
 use crate::canvas::{Canvas, Cell, Rgb};
