@@ -170,7 +170,7 @@ const IDENTITY: [Field; 3] = [opt("description", Kind::Text), opt("category", Ki
 
 const HOOKS: [Field; 5] = [opt("light", Kind::Ref { table: TableKind::Lights, extra: &[] }), opt("tags", Kind::StrList), opt("emits", Kind::StrList), opt("affects", Kind::StrList), opt("reach", NON_NEG)];
 
-const PHYSICAL: [Field; 16] = [
+const PHYSICAL: [Field; 15] = [
     opt("passable", Kind::Bool),
     opt("blocks_sight", Kind::Bool),
     opt("snow_cover", UNIT),
@@ -186,13 +186,12 @@ const PHYSICAL: [Field; 16] = [
     opt("sway", UNIT),
     opt("heat", UNIT),
     opt("fuel", NON_NEG),
-    opt("mass", NON_NEG),
 ];
 
 const CONDITION_FIELDS: [Field; 7] =
     [opt("wet_darkening", UNIT), opt("dry_fading", UNIT), opt("weathering", UNIT), opt("mossing", UNIT), opt("soiling", UNIT), opt("condition_colors", Kind::Any), opt("states", Kind::StrList)];
 
-const BIOME: [Field; 10] = [
+const BIOME: [Field; 11] = [
     req("name", Kind::Str),
     req("koppen", Kind::Str),
     req("cover", Kind::Enum(&COVERS)),
@@ -201,16 +200,20 @@ const BIOME: [Field; 10] = [
     opt("seasonal", Kind::Bool),
     opt("grass", Kind::U8 { max: 3 }),
     opt("tree_density", UNIT),
+    opt("spacing", Kind::F32 { min: 0.1, max: 8.0 }),
     opt("species", Kind::Pairs(TableKind::Species)),
     req("material", Kind::Ref { table: TableKind::Materials, extra: &[] }),
 ];
 
-const SPECIES: [Field; 12] = [
+const SPECIES: [Field; 14] = [
     req("name", Kind::Str),
     req("form", Kind::Enum(&FORMS)),
     opt("size_class", Kind::Enum(&SIZE_CLASSES)),
     req("size", Kind::Metres(3)),
     opt("shape", Kind::Enum(&SHAPES)),
+    // The habits live in `tree_styles.toml`, which the editor does not
+    // list as a table, so the name is checked by the loader, not here.
+    opt("style", Kind::Str),
     req("canopy", Kind::Seasonal),
     req("canopy_glyph", Kind::Seasonal),
     opt("radius", NON_NEG),
@@ -218,6 +221,9 @@ const SPECIES: [Field; 12] = [
     opt("trunk", NON_NEG),
     opt("trunk_radius", NON_NEG),
     opt("sheds", Kind::Bool),
+    opt("dead_chance", UNIT),
+    // `lsystem` is a grammar, not a value: it is authored in the file and
+    // shown in the preview (docs/lsystem.md), not edited in the row form.
 ];
 
 const MATERIAL: [Field; 5] = [req("name", Kind::Str), req("wall", Kind::Rgb), req("wall_glyph", Kind::Rgb), req("roof", Kind::Rgb), req("roof_glyph", Kind::Rgb)];
@@ -617,6 +623,37 @@ mod tests {
             let names: Vec<&str> = f.iter().map(|f| f.name).collect();
             for (i, n) in names.iter().enumerate() {
                 assert!(!names[..i].contains(n), "{}: {n} listed twice", kind.name());
+            }
+        }
+    }
+
+    /// A descriptor for a field the schema does not have is a field the
+    /// form accepts and the save drops, since saving renders the row
+    /// through its row struct.
+    #[test]
+    fn every_editor_field_is_a_schema_field() {
+        use crate::assets::schema::catalogue;
+        for kind in TABLE_KINDS {
+            let row_struct = match kind {
+                TableKind::Biomes => "BiomeRow",
+                TableKind::Species => "SpeciesRow",
+                TableKind::Materials => "MaterialRow",
+                TableKind::Props => "PropRow",
+                TableKind::Blocks => "BlockRow",
+                TableKind::Creatures => "CreatureRow",
+                TableKind::Seasons => "SeasonRow",
+                TableKind::Surfaces => "SurfaceRow",
+                TableKind::Density => "DensityRow",
+                TableKind::Lights => "LightRow",
+                TableKind::Settings => "SettingRow",
+                TableKind::Tilesets => "TilesetFile",
+                TableKind::Art => continue,
+            };
+            for f in fields(kind) {
+                let Some(field) = catalogue::key(row_struct, f.name) else {
+                    panic!("{}: {row_struct} has no {:?}, so the editor would drop it on save", kind.name(), f.name);
+                };
+                assert_eq!(f.required, !field.optional, "{}: the form makes {:?} {}, the schema the other way", kind.name(), f.name, if f.required { "required" } else { "optional" });
             }
         }
     }
