@@ -287,8 +287,13 @@ fn player_for(hw: i32) -> Sprite {
 #[derive(Clone)]
 pub struct Tileset {
     pub name: &'static str,
-    /// Grass tuft for wind leaning left, upright, leaning right.
-    pub grass: [char; 3],
+    /// Ground cover glyphs per cover kind, for wind leaning left, upright,
+    /// leaning right: grass, dry stubble, moss, bare.
+    pub cover: [[char; 3]; 4],
+    /// Sparse remnants shown as cover dies back toward winter.
+    pub stubble: [char; 3],
+    /// Reeds in still shallow water.
+    pub cattail: [char; 2],
     /// Water surface glyphs, cycled by wave phase.
     pub water: [char; 4],
     pub sand: [char; 2],
@@ -334,7 +339,9 @@ impl Tileset {
         let (tree_lod, house_lod, player_lod) = Self::build(&ASCII_ART);
         Tileset {
             name: "ascii",
-            grass: ['\\', '|', '/'],
+            cover: [['\\', '|', '/'], [',', '\'', ';'], ['"', '`', '"'], [' ', ' ', ' ']],
+            stubble: [';', '.', '\''],
+            cattail: [';', 'i'],
             water: ['~', '-', '=', ' '],
             sand: ['.', ':'],
             dirt: ['.', ','],
@@ -355,7 +362,9 @@ impl Tileset {
         let (tree_lod, house_lod, player_lod) = Self::build(&PETSCII_ART);
         Tileset {
             name: "petscii",
-            grass: ['╲', '│', '╱'],
+            cover: [['╲', '│', '╱'], [',', '\'', ';'], ['·', '∙', '·'], [' ', ' ', ' ']],
+            stubble: [';', '.', '`'],
+            cattail: [';', '╿'],
             water: ['🭸', '🭹', '🭺', '🭷'],
             sand: ['·', '∙'],
             dirt: ['·', '‥'],

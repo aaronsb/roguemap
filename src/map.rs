@@ -82,23 +82,28 @@ impl Map {
         Some(chunk[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize])
     }
 
-    /// Raw height at any position: rolling noise with a meandering river.
-    fn height(&self, x: i32, y: i32) -> i32 {
-        let n = fbm(x as f32 * 0.045, y as f32 * 0.045, self.seed, 4);
-        let n = ((n - 0.5) * 1.7 + 0.5).clamp(0.0, 0.999);
+    /// Raw height at any position. A slow continental field sets oceans,
+    /// plains and ranges over hundreds of tiles; local noise adds hills.
+    /// Rivers follow the mid-level contour of another slow field.
+    pub fn height(&self, x: i32, y: i32) -> i32 {
+        let (xf, yf) = (x as f32, y as f32);
+        let continental = fbm(xf * 0.0035 + 17.0, yf * 0.0035, self.seed ^ 0xC0, 3);
+        let continental = ((continental - 0.5) * 2.0 + 0.5).clamp(0.0, 1.0);
+        let local = fbm(xf * 0.045, yf * 0.045, self.seed, 4);
+        let n = continental * 0.62 + local * 0.38;
+        let n = ((n - 0.5) * 1.6 + 0.5).clamp(0.0, 0.999);
         let mut z = (n.powf(1.15) * (MAX_Z as f32 + 1.0)) as i32;
 
-        let s1 = hash01(1, 1, self.seed) * 6.28;
-        let s2 = hash01(2, 2, self.seed) * 6.28;
-        let xf = x as f32;
-        let cy = self.h as f32 * 0.5 + 7.0 * (xf * 0.11 + s1).sin() + 3.0 * (xf * 0.29 + s2).sin();
-        let d = (y as f32 - cy).abs();
-        if d < 1.3 {
-            z = SEA - 2;
-        } else if d < 2.3 {
-            z = z.min(SEA - 1);
-        } else if d < 6.0 {
-            z = z.min(SEA + (d - 2.3).floor() as i32);
+        if z > SEA && z < SNOW - 2 {
+            let r = crate::noise::value(xf * 0.012 + 5.0, yf * 0.012 + 9.0, self.seed ^ 0x51E);
+            let d = (r - 0.5).abs();
+            if d < 0.008 {
+                z = SEA - 2;
+            } else if d < 0.016 {
+                z = z.min(SEA - 1);
+            } else if d < 0.045 {
+                z = z.min(SEA + ((d - 0.016) * 90.0).floor() as i32);
+            }
         }
         z
     }

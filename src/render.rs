@@ -366,7 +366,13 @@ impl Renderer {
                 return pal.water_shallow.lerp(pal.water_deep, depth);
             }
             Terrain::Sand => pal.sand.scale(lift),
-            Terrain::Grass => biome::ground_color(b, season).scale(lift),
+            Terrain::Grass => {
+                // Seasonal biomes go dormant as vigour drops.
+                let g = biome::ground_color(b, season);
+                let dormant = Rgb(142, 126, 92);
+                let k = if b.seasonal { (1.0 - biome::vigour(tile.temp as f32, season)) * 0.85 } else { 0.0 };
+                g.lerp(dormant, k).scale(lift)
+            }
             Terrain::Dirt => pal.dirt.scale(lift),
             Terrain::Rock => pal.rock.scale(lift),
             Terrain::Snow => pal.snow,
@@ -392,8 +398,19 @@ impl Renderer {
     ) {
         let base = Self::base_color(tile, pal, world);
         let snow = world.snow_at(tile.temp as f32);
-        let ground_glyph = BIOMES[tile.biome as usize % BIOMES.len()].ground_glyph.lerp(pal.snow_glyph, snow);
+        let biome = &BIOMES[tile.biome as usize % BIOMES.len()];
+        let vig = biome::vigour(tile.temp as f32, world.season);
+        let ground_glyph = biome.ground_glyph.lerp(pal.snow_glyph, snow).lerp(base.scale(1.25), 1.0 - vig);
         let wind_strength = if cam.hw <= 2 { 0.0 } else { world.weather.wind };
+        // Cover thins as vigour drops: full glyphs, then stubble, then nothing.
+        let cover_density = (tile.grass as f32 * 0.14 + 0.04) * (1.0 - snow);
+        let (cover_set, cover_density) = if vig > 0.55 {
+            (Some(&ts.cover[biome.cover]), cover_density * (0.4 + 0.6 * vig))
+        } else if vig > 0.15 {
+            (None, cover_density * 0.5 * (vig - 0.15) / 0.4 + 0.02)
+        } else {
+            (None, 0.0)
+        };
         // Wave visibility: weather roughness scaled by body size, so ponds lie flat.
         let wave = chop * smoothstep(6.0, 160.0, tile.body as f32);
         let z = tile.draw_z() as f32;
@@ -412,16 +429,25 @@ impl Renderer {
                 let mut glyph = base;
                 match tile.terrain {
                     Terrain::Grass => {
-                        if r < tile.grass as f32 * 0.14 + 0.04 {
+                        if r < cover_density {
                             let w = wind(x as f32, y as f32, t, wind_strength);
-                            ch = ts.grass[if w < -0.35 { 0 } else if w > 0.35 { 2 } else { 1 }];
+                            let lean = if w < -0.35 { 0 } else if w > 0.35 { 2 } else { 1 };
+                            ch = match cover_set {
+                                Some(set) => set[lean],
+                                None => ts.stubble[((hv >> 20) % 3) as usize],
+                            };
                             let vary = 0.85 + ((hv >> 12) % 100) as f32 * 0.003;
                             glyph = ground_glyph.scale(vary);
                         }
                     }
                     Terrain::Water => {
                         let phase = (t * (0.6 + wave) + x as f32 * 0.13 + y as f32 * 0.37 + (hv >> 16) as f32 * 0.001).sin();
-                        if r < 0.12 + 0.34 * wave {
+                        let pond = tile.body < 60 && tile.z >= SEA - 1;
+                        if pond && vig > 0.3 && r < 0.10 + 0.06 * vig {
+                            // Cattails stand in the shallows of still water.
+                            ch = ts.cattail[((hv >> 20) % 2) as usize];
+                            glyph = Rgb(120, 140, 70).lerp(Rgb(150, 120, 60), 1.0 - vig);
+                        } else if r < 0.12 + 0.34 * wave {
                             ch = ts.water[if phase > 0.6 { 0 } else if phase > 0.1 { 1 } else if phase > -0.5 { 2 } else { 3 }];
                             let crest = (0.15 + 0.85 * wave) * (0.55 + 0.45 * phase.max(0.0));
                             glyph = base.lerp(pal.water_glyph, crest);
@@ -676,7 +702,7 @@ impl Renderer {
             world.lights.len() + self.frame_lights.len(),
             here,
         );
-        let help = " tab settings  wasd/hjkl walk  arrows pan  c centre  r/R rotate  z/Z zoom  v fill  g glyphs  [ ] season  , . time  p pause  W weather  f fire  F clear  H hud  q quit ";
+        let help = " tab settings  m world map  wasd/hjkl walk  arrows pan  c centre  r/R rotate  z/Z zoom  v fill  g glyphs  [ ] season  , . time  p pause  W weather  f fire  F clear  H hud  q quit ";
         cv.text(0, 0, &line, Rgb(220, 220, 230), Rgb(30, 32, 44));
         cv.text(0, self.h - 1, help, Rgb(160, 160, 176), Rgb(30, 32, 44));
     }

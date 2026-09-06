@@ -23,6 +23,7 @@ Anything from 80x25 upward works.
 | Key | Action |
 |---|---|
 | `Tab` or `o` | open the settings window |
+| `m` | open the world map; arrows move the cursor, `z` changes extent, `Enter` teleports |
 | `w a s d` or `h j k l` | walk the player; the camera follows |
 | `v` | toggle island / filled world view |
 | arrows | pan |
@@ -51,7 +52,9 @@ right change it, `Esc` closes. Every row also has a shortcut key.
 | Glyphs | petscii or ascii |
 | HUD | shown or hidden |
 | Clock | running or paused |
-| Weather | clear, rain, snow |
+| Weather | auto, clear, cloudy, rain, storm |
+| Wind | auto, calm, breeze, windy, gale |
+| Day length | 2 minutes, 10 minutes, 1 hour, 24 hours |
 
 The settings table in `src/settings.rs` is the single source for the window
 and for the shortcuts.
@@ -59,8 +62,30 @@ and for the shortcuts.
 ## World
 
 Terrain is a pure function of position and seed, generated on demand in
-32x32 chunks. The island view bounds it to the map size; the filled view
-lets it run in every direction.
+32x32 chunks. A slow continental field sets oceans, plains and ranges over
+hundreds of tiles; local noise adds hills; rivers follow the mid contour of
+another slow field. The island view bounds it to the map size; the filled
+view lets it run in every direction.
+
+Climate is temperature (a latitude-like field minus a lapse rate with
+height) and precipitation. A simplified Köppen scheme in `src/biome.rs` maps
+the pair to a biome, and the biome table names ground colour, tree density,
+weighted species and building material. Going uphill in one region passes
+from broadleaf forest to conifers to scrub to snow.
+
+## Weather
+
+Cloud cover, wind speed and direction, and precipitation drift along slow
+noise on the day clock, or follow the presets in settings. Wind moves the
+clouds, stirs trees through a gust field, drives the grass and raises
+whitecaps. Precipitation accumulates per temperature band as snowpack or
+wetness and melts or dries with warmth and sun.
+
+## World map
+
+`m` plots biomes top-down at three extents (1, 4 or 16 tiles per column).
+The header names the biome, temperature and height under the cursor; `Enter`
+teleports the player there.
 
 ## Level of detail
 

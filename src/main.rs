@@ -10,6 +10,7 @@ mod settings;
 mod terminal;
 mod tileset;
 mod world;
+mod worldmap;
 
 use std::time::{Duration, Instant};
 
@@ -86,25 +87,40 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
         let z = map.get(mx, my).map(|t| t.draw_z()).unwrap_or(map::SEA);
         world.add_campfire(mx, my, z);
     }
-    renderer.draw(&mut cv, &map, &ts, &world, &cam, &settings, get("t", 0.0));
+    if get("worldmap", 0.0) > 0.5 {
+        let mut wm = worldmap::WorldMap::new();
+        wm.scale = get("scale", 1.0) as usize;
+        wm.cursor = (get("cx", map.w as f32 / 2.0) as i32, get("cy", map.h as f32 / 2.0) as i32);
+        wm.draw(&mut cv, &map, &world, world.entities.first().map(|e| (e.mx, e.my)));
+    } else {
+        renderer.draw(&mut cv, &map, &ts, &world, &cam, &settings, get("t", 0.0));
+    }
     cv.dump(out)
 }
 
-/// Find a land tile near the map centre for the player to start on.
-fn spawn(map: &map::Map) -> world::Entity {
-    let (cx, cy) = (map.w as i32 / 2, map.h as i32 / 2);
-    for r in 0..map.w as i32 {
+/// Nearest land tile to a position, searching outward in rings.
+fn nearest_land(map: &map::Map, cx: i32, cy: i32) -> (i32, i32) {
+    for r in 0..64i32 {
         for dy in -r..=r {
             for dx in -r..=r {
+                if dx.abs() != r && dy.abs() != r {
+                    continue;
+                }
                 if let Some(t) = map.get(cx + dx, cy + dy) {
                     if t.terrain != map::Terrain::Water {
-                        return world::Entity { mx: cx + dx, my: cy + dy };
+                        return (cx + dx, cy + dy);
                     }
                 }
             }
         }
     }
-    world::Entity { mx: cx, my: cy }
+    (cx, cy)
+}
+
+/// Find a land tile near the map centre for the player to start on.
+fn spawn(map: &map::Map) -> world::Entity {
+    let (mx, my) = nearest_land(map, map.w as i32 / 2, map.h as i32 / 2);
+    world::Entity { mx, my }
 }
 
 /// Move the player one step, refusing water and the map edge. In screen
@@ -155,6 +171,7 @@ fn main() -> std::io::Result<()> {
     let mut map = map::Map::new(size, size, seed);
     let tilesets = [tileset::Tileset::petscii(), tileset::Tileset::ascii()];
     let mut settings = Settings::new();
+    let mut wmap = worldmap::WorldMap::new();
 
     let mut term = terminal::Terminal::new()?;
     let (sw, sh) = (term.width(), term.height());
@@ -178,11 +195,36 @@ fn main() -> std::io::Result<()> {
         let (sw, sh) = (term.width(), term.height());
         apply(&settings, &mut map, &mut world, &mut renderer);
         let ts = &tilesets[settings.get(GLYPHS)];
-        renderer.draw(term.canvas(), &map, ts, &world, &cam, &settings, t);
+        if wmap.open {
+            let player = world.entities.first().map(|e| (e.mx, e.my));
+            wmap.draw(term.canvas(), &map, &world, player);
+        } else {
+            renderer.draw(term.canvas(), &map, ts, &world, &cam, &settings, t);
+        }
         term.present()?;
 
         while event::poll(frame.saturating_sub(now.elapsed()))? {
             match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press && wmap.open => match k.code {
+                    KeyCode::Esc | KeyCode::Char('m') | KeyCode::Char('q') => wmap.open = false,
+                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => wmap.move_cursor(0, -1),
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => wmap.move_cursor(0, 1),
+                    KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('a') => wmap.move_cursor(-1, 0),
+                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('d') => wmap.move_cursor(1, 0),
+                    KeyCode::Char('z') => wmap.scale = (wmap.scale + 1) % worldmap::SCALES.len(),
+                    KeyCode::Char('Z') => wmap.scale = (wmap.scale + worldmap::SCALES.len() - 1) % worldmap::SCALES.len(),
+                    KeyCode::Enter | KeyCode::Char('t') => {
+                        let (tx, ty) = nearest_land(&map, wmap.cursor.0, wmap.cursor.1);
+                        if let Some(p) = world.entities.first_mut() {
+                            p.mx = tx;
+                            p.my = ty;
+                        }
+                        cam.look_at(tx, ty, &map, sw, sh);
+                        wmap.open = false;
+                    }
+                    _ => {}
+                },
                 Event::Key(k) if k.kind == KeyEventKind::Press && settings.open => match k.code {
                     KeyCode::Esc | KeyCode::Tab | KeyCode::Char('q') => settings.open = false,
                     KeyCode::Up | KeyCode::Char('k') => settings.cursor = (settings.cursor + settings::ITEMS.len() - 1) % settings::ITEMS.len(),
@@ -194,6 +236,10 @@ fn main() -> std::io::Result<()> {
                 },
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                     KeyCode::Tab | KeyCode::Char('o') => settings.open = true,
+                    KeyCode::Char('m') => {
+                        wmap.cursor = world.entities.first().map(|e| (e.mx, e.my)).unwrap_or((0, 0));
+                        wmap.open = true;
+                    }
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     KeyCode::Left => cam.ox += 2 * cam.hw,

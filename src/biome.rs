@@ -89,9 +89,17 @@ pub const ADOBE: usize = 0;
 pub const WOOD: usize = 1;
 pub const STONE: usize = 2;
 
+/// Ground cover kinds; the tileset carries a glyph triple for each.
+pub const COVER_GRASS: usize = 0;
+pub const COVER_DRY: usize = 1;
+pub const COVER_MOSS: usize = 2;
+pub const COVER_BARE: usize = 3;
+
 pub struct Biome {
     pub name: &'static str,
     pub koppen: &'static str,
+    /// Ground cover kind drawn over the ground colour.
+    pub cover: usize,
     /// Summer ground colour and glyph colour; seasons modulate them.
     pub ground: Rgb,
     pub ground_glyph: Rgb,
@@ -107,15 +115,15 @@ pub struct Biome {
 }
 
 pub const BIOMES: &[Biome] = &[
-    Biome { name: "rainforest", koppen: "Af", ground: Rgb(50, 122, 52), ground_glyph: Rgb(110, 190, 100), seasonal: false, grass: 3, tree_density: 0.9, species: &[(7, 6), (0, 2)], material: WOOD },
-    Biome { name: "savanna", koppen: "Aw", ground: Rgb(162, 150, 72), ground_glyph: Rgb(210, 195, 110), seasonal: false, grass: 2, tree_density: 0.15, species: &[(8, 5), (4, 1)], material: ADOBE },
-    Biome { name: "desert", koppen: "BW", ground: Rgb(206, 176, 122), ground_glyph: Rgb(170, 140, 90), seasonal: false, grass: 0, tree_density: 0.05, species: &[(6, 5), (5, 1)], material: ADOBE },
-    Biome { name: "steppe", koppen: "BS", ground: Rgb(172, 160, 92), ground_glyph: Rgb(210, 200, 130), seasonal: true, grass: 1, tree_density: 0.08, species: &[(5, 4), (4, 2)], material: ADOBE },
-    Biome { name: "mediterranean", koppen: "Cs", ground: Rgb(140, 150, 72), ground_glyph: Rgb(190, 200, 110), seasonal: true, grass: 2, tree_density: 0.35, species: &[(4, 4), (0, 2)], material: STONE },
-    Biome { name: "temperate forest", koppen: "Cf", ground: Rgb(86, 150, 60), ground_glyph: Rgb(150, 210, 100), seasonal: true, grass: 3, tree_density: 0.6, species: &[(0, 5), (1, 3), (2, 1)], material: WOOD },
-    Biome { name: "boreal forest", koppen: "Df", ground: Rgb(70, 112, 62), ground_glyph: Rgb(120, 170, 100), seasonal: true, grass: 1, tree_density: 0.7, species: &[(3, 5), (2, 3), (1, 1)], material: WOOD },
-    Biome { name: "tundra", koppen: "ET", ground: Rgb(122, 132, 102), ground_glyph: Rgb(170, 180, 140), seasonal: true, grass: 1, tree_density: 0.05, species: &[(4, 3), (5, 1)], material: STONE },
-    Biome { name: "ice cap", koppen: "EF", ground: Rgb(226, 232, 240), ground_glyph: Rgb(255, 255, 255), seasonal: false, grass: 0, tree_density: 0.0, species: &[], material: STONE },
+    Biome { name: "rainforest", cover: COVER_GRASS, koppen: "Af", ground: Rgb(50, 122, 52), ground_glyph: Rgb(110, 190, 100), seasonal: false, grass: 3, tree_density: 0.9, species: &[(7, 6), (0, 2)], material: WOOD },
+    Biome { name: "savanna", cover: COVER_DRY, koppen: "Aw", ground: Rgb(162, 150, 72), ground_glyph: Rgb(210, 195, 110), seasonal: false, grass: 2, tree_density: 0.15, species: &[(8, 5), (4, 1)], material: ADOBE },
+    Biome { name: "desert", cover: COVER_BARE, koppen: "BW", ground: Rgb(206, 176, 122), ground_glyph: Rgb(170, 140, 90), seasonal: false, grass: 0, tree_density: 0.05, species: &[(6, 5), (5, 1)], material: ADOBE },
+    Biome { name: "steppe", cover: COVER_DRY, koppen: "BS", ground: Rgb(172, 160, 92), ground_glyph: Rgb(210, 200, 130), seasonal: true, grass: 1, tree_density: 0.08, species: &[(5, 4), (4, 2)], material: ADOBE },
+    Biome { name: "mediterranean", cover: COVER_DRY, koppen: "Cs", ground: Rgb(140, 150, 72), ground_glyph: Rgb(190, 200, 110), seasonal: true, grass: 2, tree_density: 0.35, species: &[(4, 4), (0, 2)], material: STONE },
+    Biome { name: "temperate forest", cover: COVER_GRASS, koppen: "Cf", ground: Rgb(86, 150, 60), ground_glyph: Rgb(150, 210, 100), seasonal: true, grass: 3, tree_density: 0.6, species: &[(0, 5), (1, 3), (2, 1)], material: WOOD },
+    Biome { name: "boreal forest", cover: COVER_MOSS, koppen: "Df", ground: Rgb(70, 112, 62), ground_glyph: Rgb(120, 170, 100), seasonal: true, grass: 1, tree_density: 0.7, species: &[(3, 5), (2, 3), (1, 1)], material: WOOD },
+    Biome { name: "tundra", cover: COVER_MOSS, koppen: "ET", ground: Rgb(122, 132, 102), ground_glyph: Rgb(170, 180, 140), seasonal: true, grass: 1, tree_density: 0.05, species: &[(4, 3), (5, 1)], material: STONE },
+    Biome { name: "ice cap", cover: COVER_BARE, koppen: "EF", ground: Rgb(226, 232, 240), ground_glyph: Rgb(255, 255, 255), seasonal: false, grass: 0, tree_density: 0.0, species: &[], material: STONE },
 ];
 
 /// Simplified Köppen classification from annual mean temperature in degrees
@@ -161,6 +169,12 @@ pub fn ground_color(biome: &Biome, season: f32) -> Rgb {
     let g = biome.ground;
     let table = [g.lerp(Rgb(120, 190, 90), 0.25), g, g.lerp(Rgb(170, 130, 60), 0.4), g.lerp(Rgb(150, 150, 140), 0.35)];
     seasonal(&table, season)
+}
+
+/// Plant vigour in `[0, 1]` from the seasonal temperature: full growth in
+/// warmth, stubble near freezing, nothing in deep cold.
+pub fn vigour(annual: f32, season: f32) -> f32 {
+    crate::noise::smoothstep(-5.0, 7.0, seasonal_temp(annual, season))
 }
 
 /// Temperature at a moment of the year: the annual mean plus a swing that
