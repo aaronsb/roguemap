@@ -21,7 +21,10 @@ read by any system.
 | Property | Type | Default | Tables | Meaning |
 |---|---|---|---|---|
 | form | enum | required | species | Glyph pool and one-glyph sprite: pine, broadleaf, scrub, cactus, later lsystem. |
-| shape | enum | by form | species | Canopy volume for the geometry renderer (ADR-002): cone, ellipsoid, dome, cactus. |
+| shape | enum | by form | species | Canopy volume for the geometry renderer (ADR-002): cone, ellipsoid, dome, cactus, or lsystem for a tree grown from a grammar (docs/lsystem.md). |
+| style | name | none | species | Growth habit from `tree_styles.toml`, for `shape = "lsystem"`: excurrent, decurrent, columnar, weeping, umbrella, vase, palm, shrub. |
+| lsystem | table | {} | species | Parameter overrides for the habit, or a grammar written out in full: `branch_angle`, `forks`, `taper`, `droop`, `leaf_density`, `asymmetry`, `jitter`, `prune_height`, `depth`, `length`, `leaf_radius`, `axiom`, `rules`, `dead_rules` (docs/lsystem.md). |
+| dead_chance | 0..1 | 0.02 | species | Chance an instance stands dead: no leaves, grey bark, a broken crown. The roll is a hash of the tile seed, so the same tree is dead every time. |
 | roof | enum | flat | blocks | Profile above the column: none, flat, gable, hip. |
 | art | string | none | props, creatures | Name of an art file set; tiers are chosen by zoom. Absent means no picture. |
 | size | [w, d, h] metres | required | props, species, blocks (creatures with the scale pass) | Real extent: width, depth, height. A block's is one tile at one level (a house level [2, 2, 3]); a species' is a mature tree's spread and height (an oak [10, 10, 18]); a boulder [1.2, 1.0, 0.8]. The scale pass (ADR-004) will derive rows and columns at each zoom from it; today the volumes and footprints follow from it. |

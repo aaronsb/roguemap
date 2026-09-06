@@ -8,7 +8,7 @@
 
 pub mod schema;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,10 +16,12 @@ use std::path::{Path, PathBuf};
 use crate::biome::{Biome, Block, Creature, MaterialRule, Prop, Species, KOPPEN_CODES};
 use crate::biome::{Material, MaterialRule::Local};
 use crate::frame::{parse_key, FrameSpec};
+use crate::lsystem::{Alternative, Grammar, Overrides, Params, Style};
 use crate::palette::{Density, Palette, Season, Surface, SurfaceColors, Surfaces, SEASON_NAMES, SURFACE_NAMES};
 use crate::properties::{Conditions, Hooks, Identity, Physical};
 use crate::settings::{SettingItem, REQUIRED_SETTINGS};
 use crate::sprite::Sprite;
+use crate::volume::Shape;
 use crate::world::LightSpec;
 use schema::*;
 
@@ -30,8 +32,19 @@ mod embedded {
 }
 
 /// The table files every asset set must have, in load order.
-pub const TABLES: [&str; 10] =
-    ["biomes.toml", "species.toml", "materials.toml", "props.toml", "blocks.toml", "creatures.toml", "surfaces.toml", "lights.toml", "settings.toml", "ui.toml"];
+pub const TABLES: [&str; 11] = [
+    "biomes.toml",
+    "species.toml",
+    "materials.toml",
+    "props.toml",
+    "blocks.toml",
+    "creatures.toml",
+    "surfaces.toml",
+    "lights.toml",
+    "settings.toml",
+    "ui.toml",
+    "tree_styles.toml",
+];
 
 /// Where a set of assets came from.
 #[derive(Clone, Debug, PartialEq)]
@@ -155,6 +168,7 @@ pub struct Raw {
     pub lights: LightsFile,
     pub settings: SettingsFile,
     pub ui: UiFile,
+    pub tree_styles: TreeStylesFile,
     /// (relative path, file).
     pub tilesets: Vec<(String, TilesetFile)>,
 }
@@ -173,6 +187,8 @@ pub struct Assets {
     pub settings: Vec<SettingItem>,
     /// Overlay frames (ADR-005).
     pub frames: Vec<FrameSpec>,
+    /// Growth habits for L-system species (docs/lsystem.md).
+    pub styles: Vec<Style>,
     pub tilesets: Vec<TilesetSpec>,
     pub art: ArtIndex,
     /// Köppen code to biome index.
@@ -237,6 +253,138 @@ fn sized(ctx: &Ctx, i: usize, row: &str, size: [f32; 3]) -> Result<(), AssetErro
         return Err(ctx.row(i, row, format!("size {size:?} must be positive in width, depth and height (metres)")));
     }
     Ok(())
+}
+
+/// Rule keys are single symbols; turn a file's `{"A": ...}` table into the
+/// grammar's `{'A': ...}` one.
+fn keyed(ctx: &Ctx, i: usize, row: &str, what: &str, table: &BTreeMap<String, Rule>) -> Result<BTreeMap<char, Vec<Alternative>>, AssetError> {
+    let mut out = BTreeMap::new();
+    for (sym, rule) in table {
+        let mut chars = sym.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return Err(ctx.row(i, row, format!("{what} key {sym:?} must be one symbol")));
+        };
+        out.insert(c, rule.alternatives().into_iter().map(|(replacement, weight)| Alternative { replacement, weight }).collect());
+    }
+    Ok(out)
+}
+
+/// Resolve a species row's growth habit into a checked `Grammar`: the
+/// style's templates with this row's parameter overrides, or the row's own
+/// axiom and rules when it writes a grammar out itself. `shape =
+/// "lsystem"` and a habit imply each other, so a row cannot carry a grammar
+/// nothing grows or ask for one it has not written.
+fn grammar(ctx: &Ctx, i: usize, s: &SpeciesRow, styles: &[Style]) -> Result<Option<Grammar>, AssetError> {
+    let wants = s.shape == Some(Shape::Lsystem);
+    let row = s.lsystem.clone().unwrap_or_default();
+    let own = row.axiom.is_some() || !row.rules.is_empty();
+    if !wants {
+        if s.style.is_some() || own || s.lsystem.is_some() {
+            return Err(ctx.row(i, &s.name, format!("a growth habit needs shape = \"lsystem\"; this row is {}", s.shape.map_or("the form's shape".to_string(), |sh| format!("{sh:?}").to_lowercase()))));
+        }
+        return Ok(None);
+    }
+    let over = Overrides {
+        branch_angle: row.angle,
+        forks: row.forks,
+        taper: row.taper,
+        droop: row.droop,
+        leaf_density: row.leaf_density,
+        asymmetry: row.asymmetry,
+        jitter: row.jitter,
+        prune_height: row.prune_height,
+        depth: row.depth,
+        length: row.length,
+        leaf_radius: row.leaf_radius,
+    };
+    let g = match &s.style {
+        Some(name) => {
+            let style = styles.iter().find(|st| st.name == *name).ok_or_else(|| {
+                let known: Vec<&str> = styles.iter().map(|st| st.name.as_str()).collect();
+                ctx.row(i, &s.name, format!("unknown style {name:?}; tree_styles.toml has {}", known.join(", ")))
+            })?;
+            let mut g = style.grammar(&over).map_err(|e| ctx.row(i, &s.name, format!("lsystem: {e}")))?;
+            // A species may still replace the habit's rules outright.
+            if let Some(a) = &row.axiom {
+                g.axiom = a.clone();
+            }
+            if !row.rules.is_empty() {
+                g.rules = keyed(ctx, i, &s.name, "rule", &row.rules)?;
+            }
+            if !row.dead_rules.is_empty() {
+                g.dead_rules = keyed(ctx, i, &s.name, "dead_rules", &row.dead_rules)?;
+            }
+            g
+        }
+        None if own => {
+            let missing = |f: &str| ctx.row(i, &s.name, format!("a species without a style writes its own grammar and needs {f} (docs/lsystem.md)"));
+            let plain = Grammar::PLAIN;
+            Grammar {
+                axiom: row.axiom.clone().ok_or_else(|| missing("axiom"))?,
+                rules: keyed(ctx, i, &s.name, "rule", &row.rules)?,
+                dead_rules: keyed(ctx, i, &s.name, "dead_rules", &row.dead_rules)?,
+                depth: row.depth.ok_or_else(|| missing("depth"))?,
+                angle: row.angle.ok_or_else(|| missing("angle"))?,
+                length: row.length.ok_or_else(|| missing("length"))?,
+                taper: row.taper.unwrap_or(1.0),
+                leaf_radius: row.leaf_radius.ok_or_else(|| missing("leaf_radius"))?,
+                droop: row.droop.unwrap_or(plain.droop),
+                leaf_density: row.leaf_density.unwrap_or(plain.leaf_density),
+                asymmetry: row.asymmetry.unwrap_or(plain.asymmetry),
+                jitter: row.jitter.unwrap_or(plain.jitter),
+                prune_height: row.prune_height.unwrap_or(plain.prune_height),
+            }
+        }
+        None => {
+            return Err(ctx.row(i, &s.name, "shape = \"lsystem\" needs a style from tree_styles.toml, or its own axiom and rules in [species.lsystem] (docs/lsystem.md)"));
+        }
+    };
+    g.validate().map_err(|e| ctx.row(i, &s.name, format!("lsystem: {e}")))?;
+    Ok(Some(g))
+}
+
+/// Resolve `tree_styles.toml` into the growth habits species pick from.
+fn styles(raw: &TreeStylesFile) -> Result<Vec<Style>, AssetError> {
+    let ctx = Ctx { file: TABLES[10], table: "style" };
+    let names: Vec<&str> = raw.style.iter().map(|s| s.name.as_str()).collect();
+    unique(&ctx, &names)?;
+    let mut out = Vec::new();
+    for (i, r) in raw.style.iter().enumerate() {
+        described(&ctx, i, &r.name, &r.identity)?;
+        let p = &r.params;
+        if p.forks == 0 {
+            return Err(ctx.row(i, &r.name, "forks 0: a habit has at least one branch or stem"));
+        }
+        let style = Style {
+            name: r.name.clone(),
+            identity: Identity::from_row(&r.identity, "tree styles"),
+            stand_in: r.stand_in,
+            axiom: r.axiom.clone(),
+            rules: keyed(&ctx, i, &r.name, "rule", &r.rules)?,
+            dead_rules: keyed(&ctx, i, &r.name, "dead_rules", &r.dead_rules)?,
+            params: Params {
+                branch_angle: p.branch_angle,
+                forks: p.forks,
+                taper: p.taper,
+                droop: p.droop,
+                leaf_density: p.leaf_density,
+                asymmetry: p.asymmetry,
+                jitter: p.jitter,
+                prune_height: p.prune_height,
+                depth: p.depth,
+                length: p.length,
+                leaf_radius: p.leaf_radius,
+            },
+        };
+        // The defaults must themselves make a tree, so a species that
+        // overrides nothing still loads.
+        style
+            .grammar(&Overrides::default())
+            .and_then(|g| g.validate())
+            .map_err(|e| ctx.row(i, &r.name, e))?;
+        out.push(style);
+    }
+    Ok(out)
 }
 
 fn described(ctx: &Ctx, i: usize, row: &str, id: &IdentityRow) -> Result<(), AssetError> {
@@ -376,6 +524,7 @@ impl Assets {
             lights: parse(TABLES[7], text(TABLES[7])?)?,
             settings: parse(TABLES[8], text(TABLES[8])?)?,
             ui: parse(TABLES[9], text(TABLES[9])?)?,
+            tree_styles: parse(TABLES[10], text(TABLES[10])?)?,
             tilesets: {
                 let mut v = Vec::new();
                 for (p, t) in &files {
@@ -449,6 +598,9 @@ impl Assets {
             });
         }
 
+        // tree styles, before the species that name them
+        let tree_styles = styles(&raw.tree_styles)?;
+
         // species
         let ctx = Ctx { file: TABLES[1], table: "species" };
         unique(&ctx, &species_names)?;
@@ -465,6 +617,8 @@ impl Assets {
             if s.radius == Some(0.0) || s.height == Some(0.0) {
                 return Err(ctx.row(i, &s.name, "radius and height must be positive: a canopy has some size"));
             }
+            unit(&ctx, i, &s.name, "dead_chance", s.dead_chance)?;
+            let lsystem = grammar(&ctx, i, s, &tree_styles)?;
             species.push(Species {
                 name: s.name.clone(),
                 identity: Identity::from_row(&s.identity, "species"),
@@ -478,7 +632,9 @@ impl Assets {
                 height: s.height,
                 trunk: s.trunk,
                 trunk_radius: s.trunk_radius,
+                lsystem,
                 sheds: s.sheds.unwrap_or(matches!(s.canopy, Seasonal::Four(_))),
+                dead_chance: s.dead_chance.unwrap_or(0.02),
                 light: optional_reference(&ctx, i, &s.name, "light", &light_names, s.hooks.light.as_ref())?,
                 hooks: Hooks::from_row(&s.hooks),
                 physical: Physical::from_row(&s.physical, false, 1.0),
@@ -821,7 +977,7 @@ impl Assets {
         }
         let tilesets = raw.tilesets.iter().map(|(_, t)| t.clone()).collect();
 
-        Ok(Assets { biomes, species, materials, props, blocks, creatures, surfaces, lights, settings, frames, tilesets, art, koppen, source, raw, files })
+        Ok(Assets { biomes, species, materials, props, blocks, creatures, surfaces, lights, settings, frames, styles: tree_styles, tilesets, art, koppen, source, raw, files })
     }
 
     /// The files this set was loaded from, as (relative path, contents).
@@ -857,6 +1013,7 @@ impl Assets {
             (TABLES[7].to_string(), ser(&self.raw.lights)),
             (TABLES[8].to_string(), ser(&self.raw.settings)),
             (TABLES[9].to_string(), ser(&self.raw.ui)),
+            (TABLES[10].to_string(), ser(&self.raw.tree_styles)),
         ];
         for (p, t) in &self.raw.tilesets {
             out.push((p.clone(), ser(t)));
@@ -958,7 +1115,7 @@ mod tests {
         assert_eq!(a.source, Source::Embedded);
         assert_eq!(a.biomes.len(), 9);
         assert_eq!(a.koppen.len(), 9);
-        assert_eq!(a.species.len(), 9);
+        assert_eq!(a.species.len(), 13);
         assert_eq!(a.materials.len(), 3);
         assert_eq!(a.blocks.len(), 6);
         assert_eq!(a.creatures[0].name, "player");
@@ -1155,6 +1312,175 @@ mod tests {
         let files: Vec<(String, String)> = embedded::FILES.iter().filter(|(p, _)| *p != "lights.toml").map(|(p, t)| (p.to_string(), t.to_string())).collect();
         let e = Assets::from_strings(&files).unwrap_err();
         assert_eq!(e.to_string(), "lights.toml: missing");
+    }
+
+
+    /// A plain species standing in for whatever habit is being checked.
+    fn styled(a: &Assets, style: &str, size: [f32; 3]) -> Species {
+        let mut s = a.species.iter().find(|s| s.name == "gnarled oak").unwrap().clone();
+        s.size = size;
+        s.lsystem = Some(a.styles.iter().find(|st| st.name == style).unwrap().grammar(&Overrides::default()).unwrap());
+        s
+    }
+
+    #[test]
+    fn every_growth_habit_grows_a_tree() {
+        let a = Assets::embedded().unwrap();
+        assert_eq!(a.styles.len(), 8, "the eight habits are in the set");
+        for st in &a.styles {
+            assert!(!st.identity.description.trim().is_empty(), "{}", st.name);
+            let sp = styled(&a, &st.name, [8.0, 8.0, 16.0]);
+            for seed in [0u64, 4, 91] {
+                let m = sp.tree_model(seed, crate::lsystem::Growth::FULL).unwrap();
+                assert!(!m.segments.is_empty(), "{} at seed {seed} has branches", st.name);
+                assert!(!m.leaves.is_empty(), "{} at seed {seed} has leaf clusters", st.name);
+                assert!((m.bounds.max[2] - 16.0).abs() / 16.0 < 0.05, "{} stands {} m", st.name, m.bounds.max[2]);
+            }
+            // A habit that never dies is no use either.
+            let dead = sp.tree_model(4, crate::lsystem::Growth::DEAD).unwrap();
+            assert!(!dead.segments.is_empty() && dead.leaves.is_empty(), "{}", st.name);
+        }
+    }
+
+    #[test]
+    fn each_habit_has_its_own_signature() {
+        let a = Assets::embedded().unwrap();
+        let model = |style: &str, size: [f32; 3]| styled(&a, style, size).tree_model(11, crate::lsystem::Growth::FULL).unwrap();
+
+        // Excurrent: tiers of branches up the leader, shortening as they rise.
+        let spruce = model("excurrent", [7.0, 7.0, 24.0]);
+        let mut tiers: Vec<(f32, f32)> = Vec::new();
+        for s in &spruce.segments {
+            let reach = (s.b[0] * s.b[0] + s.b[1] * s.b[1]).sqrt();
+            let band = (s.b[2] / 3.0).floor();
+            match tiers.iter_mut().find(|(z, _)| *z == band) {
+                Some((_, r)) => *r = r.max(reach),
+                None => tiers.push((band, reach)),
+            }
+        }
+        tiers.sort_by(|x, y| x.0.total_cmp(&y.0));
+        assert!(tiers.len() >= 4, "the leader carries several tiers: {}", tiers.len());
+        let (low, high) = (tiers[1].1, tiers[tiers.len() - 1].1);
+        assert!(high < low * 0.75, "the tiers narrow upward: {low} at the bottom, {high} at the top");
+
+        // Weeping: the foliage hangs, so it sits lower in the tree than a
+        // spreading crown of the same box does.
+        let height = |m: &crate::lsystem::TreeModel| m.leaves.iter().map(|l| l.centre[2]).sum::<f32>() / m.leaves.len().max(1) as f32 / m.bounds.max[2];
+        let willow = height(&model("weeping", [14.0, 14.0, 12.0]));
+        let oak = height(&model("decurrent", [14.0, 14.0, 12.0]));
+        assert!(willow < oak, "a weeping crown hangs below a spreading one: {willow} against {oak}");
+        assert!(willow < 0.6, "and below the middle of the tree: {willow}");
+
+        // Shrub: several stems leave the ground, and there is no trunk.
+        let bush = model("shrub", [3.0, 3.0, 2.0]);
+        let stems = bush.segments.iter().filter(|s| s.a[2] < 0.2).count();
+        assert!(stems > 1, "a shrub has more than one stem at the ground: {stems}");
+
+        // Umbrella: nothing leafy under the pruned trunk.
+        let acacia = model("umbrella", [12.0, 12.0, 14.0]);
+        let prune = a.styles.iter().find(|s| s.name == "umbrella").unwrap().params.prune_height;
+        let lowest = acacia.leaves.iter().map(|l| l.centre[2]).fold(f32::MAX, f32::min);
+        assert!(lowest > prune * 14.0 * 0.8, "the crown sits above the bare trunk: {lowest} m of 14");
+
+        // Palm: a bare stem, and every cluster in the head.
+        let palm = model("palm", [6.0, 6.0, 12.0]);
+        let lowest = palm.leaves.iter().map(|l| l.centre[2]).fold(f32::MAX, f32::min);
+        assert!(lowest > 6.0, "a palm's fronds are all at its head: {lowest} m of 12");
+
+        // Columnar: narrower than it is tall for the same declared box.
+        let poplar = model("columnar", [10.0, 10.0, 20.0]);
+        let widest = poplar.leaves.iter().map(|l| (l.centre[0] * l.centre[0] + l.centre[1] * l.centre[1]).sqrt()).fold(0.0f32, f32::max);
+        let tallest = poplar.bounds.max[2];
+        assert!(widest * 2.0 < tallest, "a columnar crown is narrow: {widest} m across against {tallest} m tall");
+    }
+
+    #[test]
+    fn a_style_stands_in_for_a_canopy_volume() {
+        use crate::volume::Shape;
+        let a = Assets::embedded().unwrap();
+        let of = |name: &str| a.styles.iter().find(|s| s.name == name).unwrap().stand_in();
+        assert_eq!(of("excurrent"), Shape::Cone);
+        assert_eq!(of("decurrent"), Shape::Ellipsoid);
+        assert_eq!(of("weeping"), Shape::Dome);
+        assert_eq!(of("shrub"), Shape::Dome);
+        for st in &a.styles {
+            assert_ne!(st.stand_in(), Shape::Lsystem, "{} stands in as a volume, not as itself", st.name);
+        }
+    }
+
+    #[test]
+    fn every_lsystem_species_grows_a_tree() {
+        let a = Assets::embedded().unwrap();
+        let grown: Vec<&Species> = a.species.iter().filter(|s| s.lsystem.is_some()).collect();
+        assert_eq!(grown.len(), 4, "the four example species are in the set");
+        for s in &grown {
+            assert_eq!(s.shape, Some(Shape::Lsystem), "{}", s.name);
+            for seed in [0u64, 3, 77] {
+                let m = s.tree_model(seed, crate::lsystem::Growth::FULL).unwrap();
+                assert!(!m.segments.is_empty(), "{} at seed {seed} has branches", s.name);
+                assert!(!m.leaves.is_empty(), "{} at seed {seed} has leaf clusters", s.name);
+                assert!((m.bounds.max[2] - s.size[2]).abs() / s.size[2] < 0.05, "{} stands {} m against {}", s.name, m.bounds.max[2], s.size[2]);
+                assert!((m.bounds.size()[0] - s.size[0]).abs() / s.size[0] < 0.05, "{} spreads {} m against {}", s.name, m.bounds.size()[0], s.size[0]);
+                // The thickest branch is the trunk the row asks for.
+                let thickest = m.segments.iter().fold(0.0f32, |t, g| t.max(g.radius));
+                assert!((thickest - s.volume().1.trunk_radius).abs() < 1e-3, "{}", s.name);
+            }
+            // Deadwood keeps its branches and drops every leaf.
+            let dead = s.tree_model(5, crate::lsystem::Growth::DEAD).unwrap();
+            assert!(!dead.segments.is_empty() && dead.leaves.is_empty(), "{}", s.name);
+        }
+        // None of them is placed by a biome: they change no frame.
+        for b in &a.biomes {
+            for &(sp, _) in &b.species {
+                assert!(a.species[sp].lsystem.is_none(), "{} places {}", b.name, a.species[sp].name);
+            }
+        }
+    }
+
+    #[test]
+    fn a_dead_roll_is_the_same_every_time_for_a_seed() {
+        let a = Assets::embedded().unwrap();
+        let oak = a.species.iter().find(|s| s.name == "gnarled oak").unwrap();
+        assert_eq!(oak.dead_chance, 0.05);
+        let rolls: Vec<bool> = (0..400u64).map(|s| oak.dead(s)).collect();
+        for (seed, want) in rolls.iter().enumerate() {
+            assert_eq!(oak.dead(seed as u64), *want, "seed {seed}");
+        }
+        let dead = rolls.iter().filter(|d| **d).count();
+        assert!((4..=40).contains(&dead), "about a twentieth of 400 stand dead, got {dead}");
+        // A row that says nothing takes the default.
+        assert_eq!(a.species.iter().find(|s| s.name == "oak").unwrap().dead_chance, 0.02);
+    }
+
+    #[test]
+    fn lsystem_rows_are_validated() {
+        // A habit and the shape imply each other.
+        let e = replace_in("species.toml", "shape = \"lsystem\"\nstyle = \"decurrent\"", "shape = \"ellipsoid\"\nstyle = \"decurrent\"").unwrap_err();
+        assert_eq!(e.row.as_ref().map(|r| r.2.as_str()), Some("gnarled oak"));
+        assert!(e.msg.contains("shape = \"lsystem\""), "{e}");
+        let e = replace_in("species.toml", "style = \"decurrent\"\n", "").unwrap_err();
+        assert!(e.msg.contains("style") || e.msg.contains("axiom"), "{e}");
+        let e = replace_in("species.toml", "style = \"decurrent\"", "style = \"bonsai\"").unwrap_err();
+        assert!(e.msg.contains("bonsai") && e.msg.contains("decurrent"), "{e}");
+        // The parameters are checked, and the error names the row.
+        let e = replace_in("species.toml", "asymmetry = 0.3", "asymmetry = 3.0").unwrap_err();
+        assert!(e.msg.contains("asymmetry"), "{e}");
+        let e = replace_in("species.toml", "depth = 7", "depth = 40").unwrap_err();
+        assert!(e.msg.contains("depth"), "{e}");
+        let e = replace_in("species.toml", "prune_height = 0.1", "prune_height = 1.0").unwrap_err();
+        assert!(e.msg.contains("prune_height"), "{e}");
+        let e = replace_in("species.toml", "dead_chance = 0.05", "dead_chance = 5.0").unwrap_err();
+        assert!(e.msg.contains("dead_chance"), "{e}");
+        // And so are the habits themselves.
+        let e = replace_in("tree_styles.toml", "axiom = \"F!A\"", "axiom = \"F[!A\"").unwrap_err();
+        assert_eq!(e.row.as_ref().map(|r| r.2.as_str()), Some("decurrent"));
+        assert!(e.msg.contains("open"), "{e}");
+        let e = replace_in("tree_styles.toml", "stand_in = \"cone\"", "stand_in = \"pyramid\"").unwrap_err();
+        assert!(e.msg.contains("pyramid"), "{e}");
+        let e = replace_in("tree_styles.toml", "(/)*spread)*forks", "(/)*spread)*width").unwrap_err();
+        assert!(e.msg.contains("width"), "{e}");
+        let e = replace_in("tree_styles.toml", "forks = 5", "forks = 0").unwrap_err();
+        assert!(e.msg.contains("forks"), "{e}");
     }
 
     #[test]

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::blocks::{Ground, Roof};
 use crate::canvas::Rgb;
+use crate::lsystem::{Grammar, Growth, TreeModel};
 use crate::map::Terrain;
 use crate::palette::season_blend;
 use crate::properties::{Conditions, Hooks, Identity, Physical};
@@ -84,8 +85,13 @@ pub struct Species {
     pub height: Option<f32>,
     pub trunk: Option<f32>,
     pub trunk_radius: Option<f32>,
+    /// The grammar of a `shape = "lsystem"` species, checked at load
+    /// (docs/lsystem.md).
+    pub lsystem: Option<Grammar>,
     /// Whether it drops leaves in autumn.
     pub sheds: bool,
+    /// Chance in 0..1 that an instance stands dead.
+    pub dead_chance: f32,
     /// Index into the light table.
     pub light: Option<usize>,
     pub hooks: Hooks,
@@ -240,6 +246,35 @@ impl Species {
                 trunk_radius: self.trunk_radius.unwrap_or(d.trunk_radius),
             },
         )
+    }
+
+    /// How much of an instance's foliage is out, in 0..1: an evergreen keeps
+    /// all of it, a species that `sheds` follows the season's `vigour`, so a
+    /// deciduous tree goes bare across autumn and leafs out again in spring.
+    /// `annual` is the tile's mean temperature in degrees Celsius.
+    pub fn foliage(&self, annual: f32, season: f32) -> f32 {
+        if self.sheds {
+            vigour(annual, season)
+        } else {
+            1.0
+        }
+    }
+
+    /// Whether the instance grown from `seed` stands dead. The roll is a
+    /// hash, so one tile's tree is dead every time the chunk is generated.
+    pub fn dead(&self, seed: u64) -> bool {
+        self.dead_chance > 0.0 && crate::noise::hash01(seed as i64, 0x0dead, 0xdead_beef) < self.dead_chance
+    }
+
+    /// One instance as geometry: the species' grammar grown at `seed`,
+    /// scaled to its `size`, with the leaves this growth carries. None
+    /// unless the row is `shape = "lsystem"`.
+    pub fn tree_model(&self, seed: u64, growth: Growth) -> Option<TreeModel> {
+        let mut m = self.lsystem.as_ref()?.grow(seed, self.size, growth);
+        // The grammar's radii are relative; the row's trunk_radius, or the
+        // shape's default from `size`, puts them in metres.
+        m.set_trunk_radius(self.volume().1.trunk_radius);
+        Some(m)
     }
 }
 

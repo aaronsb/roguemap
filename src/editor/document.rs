@@ -33,6 +33,9 @@ pub enum FileKind {
     /// The overlay frames of ADR-005. Held so the set round-trips and
     /// validates; the editor has no pane for them yet.
     Ui,
+    /// `tree_styles.toml`; not an editable table either, but kept and
+    /// written back so a save does not lose it.
+    TreeStyles,
     Tileset,
 }
 
@@ -49,6 +52,7 @@ impl FileKind {
             p if p == TABLES[7] => FileKind::Lights,
             p if p == TABLES[8] => FileKind::Settings,
             p if p == TABLES[9] => FileKind::Ui,
+            p if p == TABLES[10] => FileKind::TreeStyles,
             p if p.starts_with("tilesets/") && p.ends_with(".toml") => FileKind::Tileset,
             _ => return None,
         })
@@ -68,6 +72,7 @@ impl FileKind {
             FileKind::Lights => render_as::<LightsFile>(root),
             FileKind::Settings => render_as::<SettingsFile>(root),
             FileKind::Ui => render_as::<UiFile>(root),
+            FileKind::TreeStyles => render_as::<TreeStylesFile>(root),
             FileKind::Tileset => render_as::<TilesetFile>(root),
         }
     }
@@ -87,6 +92,7 @@ impl FileKind {
             (FileKind::Lights, _) => check_as::<LightRow>(row),
             (FileKind::Settings, _) => check_as::<SettingRow>(row),
             (FileKind::Ui, _) => check_as::<FrameRow>(row),
+            (FileKind::TreeStyles, _) => check_as::<StyleRow>(row),
             (FileKind::Tileset, _) => check_as::<TilesetFile>(row),
         }
     }
@@ -604,7 +610,7 @@ mod tests {
         let d = doc();
         assert_eq!(d.table_count(), TABLE_KINDS.len());
         let species = d.table_of(TableKind::Species);
-        assert_eq!(d.row_count(species), 9);
+        assert_eq!(d.row_count(species), 13);
         assert_eq!(d.row_name(species, 0), "oak");
         assert_eq!(d.get(species, 0, "form").unwrap().as_str(), Some("broadleaf"));
         let tilesets = d.table_of(TableKind::Tilesets);
@@ -657,12 +663,12 @@ mod tests {
         let n = d.add_row(species, 0).unwrap();
         assert_eq!(n, 1);
         assert_eq!(d.row_name(species, 1), "oak-copy");
-        assert_eq!(d.row_count(species), 10);
+        assert_eq!(d.row_count(species), 14);
         let refs = d.references(TableKind::Species, "oak");
         assert!(refs.contains(&"biomes.rainforest".to_string()), "{refs:?}");
         assert!(d.delete_row(species, 0).unwrap_err().contains("referenced"));
         d.delete_row(species, 1).unwrap();
-        assert_eq!(d.row_count(species), 9);
+        assert_eq!(d.row_count(species), 13);
         let seasons = d.table_of(TableKind::Seasons);
         assert!(d.add_row(seasons, 0).is_err());
         assert!(d.delete_row(seasons, 0).is_err());

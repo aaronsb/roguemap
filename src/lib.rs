@@ -14,6 +14,7 @@ pub mod frame;
 pub mod grid;
 pub mod input;
 pub mod lighting;
+pub mod lsystem;
 pub mod map;
 pub mod noise;
 pub mod overlay;

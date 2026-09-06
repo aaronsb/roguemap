@@ -15,6 +15,9 @@ assets/
                     weighted species, material
   species.toml      trees: form, size class, size and canopy shape in
                     metres, seasonal canopy colours
+  tree_styles.toml  growth habits for L-system trees: eight parametric
+                    grammars with their parameter defaults and the canopy
+                    volume each stands in as at far zooms (lsystem.md)
   materials.toml    wall and roof colours by material
   props.toml        ground props: art, size, colours, placement rules
   blocks.toml       block kinds: size, levels, roof profile, material rule,
@@ -123,6 +126,12 @@ Buildings and trees have no art: they are block geometry and volumes on
 the ray walk (docs/structures.md, ADR-002), textured with the tileset's
 `[art]` vocabulary (`pine_fill`, `round_mid`, `cactus`, `trunk`,
 `roof_fill`, `door`, `window`).
+
+A species with `shape = "lsystem"` is grown from a grammar rather than a
+canopy volume: it names a growth habit from `tree_styles.toml` and
+overrides the parameters it wants different. The grammar, its symbols,
+the eight habits and how to author such a species are in
+[lsystem.md](lsystem.md).
 
 ## Schema and validation
 

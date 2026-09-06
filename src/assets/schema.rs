@@ -239,6 +239,9 @@ pub struct SpeciesRow {
     /// absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<Shape>,
+    /// Growth habit from `tree_styles.toml`, for `shape = "lsystem"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,12 +254,139 @@ pub struct SpeciesRow {
     /// species do by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheds: Option<bool>,
+    /// Chance in 0..1 that an instance stands dead; 0.02 by default. The
+    /// roll is a hash of the tile seed, so the same tree is dead every time
+    /// the chunk is generated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dead_chance: Option<f32>,
     #[serde(flatten)]
     pub hooks: HooksRow,
     #[serde(flatten)]
     pub physical: PhysicalRow,
     #[serde(flatten)]
     pub conditions: ConditionsRow,
+    /// The grammar `shape = "lsystem"` grows the tree from, as the
+    /// sub-table `[species.lsystem]`. Last in the row because TOML wants a
+    /// table after the plain values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsystem: Option<LsystemRow>,
+}
+
+/// One rule's right-hand sides: a single replacement, several with equal
+/// weight, or `[[replacement, weight], ...]` pairs (docs/lsystem.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Rule {
+    One(String),
+    Weighted(Vec<(String, u8)>),
+    Any(Vec<String>),
+}
+
+impl Rule {
+    /// The replacements with their weights, in file order.
+    pub fn alternatives(&self) -> Vec<(String, u8)> {
+        match self {
+            Rule::One(s) => vec![(s.clone(), 1)],
+            Rule::Weighted(v) => v.clone(),
+            Rule::Any(v) => v.iter().map(|s| (s.clone(), 1)).collect(),
+        }
+    }
+}
+
+/// What a species changes about the growth habit it names, or the whole
+/// grammar when it writes one out itself (docs/lsystem.md). Every field is
+/// optional: a species with `style` overrides only what it names, and one
+/// without needs at least `axiom` and `rules`. The model is scaled to the
+/// species' `size`, so a rule set fits its declared height and spread at
+/// any depth.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LsystemRow {
+    /// The string rewriting starts from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axiom: Option<String>,
+    /// How many times the rules are applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u8>,
+    /// Turn of every `+ - & ^ \ /` in degrees.
+    #[serde(default, alias = "branch_angle", skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f32>,
+    /// Length of a first-level `F` in metres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f32>,
+    /// Factor a segment's length and radius are multiplied by on entering a
+    /// branch (`[`) and on every `!`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taper: Option<f32>,
+    /// Radius of an `L` leaf cluster in metres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_radius: Option<f32>,
+    /// Branches in a whorl, or ways the trunk forks.
+    #[serde(default, alias = "whorl_or_fork_count", skip_serializing_if = "Option::is_none")]
+    pub forks: Option<u8>,
+    /// Bend per segment inside a branch as a fraction of the angle;
+    /// negative lifts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub droop: Option<f32>,
+    /// Chance an `L` becomes a cluster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_density: Option<f32>,
+    /// How one-sided the instance is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asymmetry: Option<f32>,
+    /// Small noise on every branch and cluster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jitter: Option<f32>,
+    /// Fraction of the height with no live branches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prune_height: Option<f32>,
+    /// Symbol to its replacements. A table, so it comes last.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rules: BTreeMap<String, Rule>,
+    /// Rules standing deadwood is grown with instead: fewer and shorter
+    /// branches, a broken crown. Absent means `rules` one level shallower.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dead_rules: BTreeMap<String, Rule>,
+}
+
+// tree_styles.toml
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TreeStylesFile {
+    pub style: Vec<StyleRow>,
+}
+
+/// One growth habit: a parametric grammar with its defaults and the canopy
+/// volume that stands in for it at far zooms (docs/lsystem.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StyleRow {
+    pub name: String,
+    #[serde(flatten)]
+    pub identity: IdentityRow,
+    /// Canopy volume of ADR-002 this habit reads as from far away.
+    pub stand_in: Shape,
+    /// The string rewriting starts from; a template like the rules.
+    pub axiom: String,
+    /// The habit's defaults; a species overrides what it names.
+    pub params: StyleParamsRow,
+    pub rules: BTreeMap<String, Rule>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dead_rules: BTreeMap<String, Rule>,
+}
+
+/// The parameter defaults of a habit. Every one is also a species override.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StyleParamsRow {
+    pub branch_angle: f32,
+    pub forks: u8,
+    pub taper: f32,
+    pub droop: f32,
+    pub leaf_density: f32,
+    pub asymmetry: f32,
+    pub jitter: f32,
+    pub prune_height: f32,
+    pub depth: u8,
+    pub length: f32,
+    pub leaf_radius: f32,
 }
 
 // materials.toml

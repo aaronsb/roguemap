@@ -1,0 +1,272 @@
+# Growth habits for L-system trees (docs/lsystem.md). A species names one
+# with `style = "..."` and overrides the parameters it wants different;
+# `stand_in` is the canopy volume that stands in for the habit at far zooms.
+#
+# Rule strings are templates: `(BODY)*N` repeats BODY N times, N a whole
+# number or one of the counts derived from the parameters: forks, spread
+# (rolls between the branches of a whorl), pitch (steps to swing a branch
+# near horizontal), lift (steps to angle one upward).
+
+[[style]]
+name = "excurrent"
+description = "One straight leader that keeps growing, with a whorl of near-horizontal branches at every tier and the tiers shortening upward: the habit of spruce, fir and most conifers."
+stand_in = "cone"
+axiom = "(F)*2A"
+
+[style.params]
+branch_angle = 20.0
+forks = 5
+taper = 0.93
+droop = 0.12
+leaf_density = 1.0
+asymmetry = 0.08
+jitter = 0.09
+prune_height = 0.18
+depth = 8
+length = 1.0
+leaf_radius = 0.45
+
+[style.rules]
+A = [
+  ['F([(&)*pitchB](/)*spread)*forks!FLA', 5],
+  ['F([(&)*pitchB](/)*spread)*3!FLA', 3],
+  ['F!FLA', 1],
+]
+B = [
+  ['FL[(+)*1(^)*1FL][(-)*1(^)*1FL]FLB', 5],
+  ['FL[(+)*1(^)*1FL]FLB', 4],
+  ['FL[(-)*1(^)*1FL]FLB', 3],
+  ['F!FL', 1],
+]
+
+[style.dead_rules]
+A = [
+  ['F([(&)*pitchB](/)*spread)*2!FA', 2],
+  ['F!FA', 3],
+]
+B = [['F!FB', 2], ['F', 3]]
+
+[[style]]
+name = "decurrent"
+description = "A trunk that forks low into spreading limbs, each forking again, so the crown is broad and rounded and holds its shape bare: the habit of oak, maple and most broadleaves."
+stand_in = "ellipsoid"
+axiom = "F!A"
+
+[style.params]
+branch_angle = 30.0
+forks = 2
+taper = 0.8
+droop = 0.04
+leaf_density = 1.0
+asymmetry = 0.1
+jitter = 0.09
+prune_height = 0.2
+depth = 6
+length = 1.0
+leaf_radius = 0.4
+
+[style.rules]
+A = [
+  ['F([(+)*1!AL](/)*spread)*forks', 4],
+  ['F(/)*2([(+)*1!AL](/)*spread)*forks', 3],
+  ['F([(+)*1!AL](/)*spread)*forks[(/)*1(&)*1!AL]', 2],
+  ['FF([(+)*1!AL](/)*spread)*forks', 2],
+]
+
+[style.dead_rules]
+A = [
+  ['F([(+)*1!A](/)*spread)*forks', 4],
+  ['F[(+)*1!A](/)*spread !F', 3],
+  ['F(&)*1!F', 2],
+]
+
+[[style]]
+name = "columnar"
+description = "One slender leader with short side shoots that stay close to it, giving a narrow upright crown: the habit of a young birch, a poplar or a cypress."
+stand_in = "ellipsoid"
+axiom = "(F)*2A"
+
+[style.params]
+branch_angle = 25.0
+forks = 2
+taper = 0.9
+droop = 0.1
+leaf_density = 1.0
+asymmetry = 0.1
+jitter = 0.09
+prune_height = 0.22
+depth = 8
+length = 0.9
+leaf_radius = 0.4
+
+[style.rules]
+A = [
+  ['F([(&)*1(+)*1!BL](/)*spread)*forks!FA', 3],
+  ['F[(&)*1(-)*1!BL](/)*3!FA', 3],
+  ['F(/)*2!FA', 2],
+]
+B = [
+  ['F[(^)*1(+)*1FL](&)*1FLB', 3],
+  ['F(&)*1FL[(^)*1(-)*1FL]', 3],
+  ['FL', 1],
+]
+
+[style.dead_rules]
+A = [['F[(&)*1(+)*1!B]!FA', 2], ['F!FA', 3]]
+B = [['F', 1]]
+
+[[style]]
+name = "weeping"
+description = "Limbs that arch up and out from a low crotch and then hang, so the tree reads as a curtain: the habit of a weeping willow or a weeping birch."
+stand_in = "dome"
+axiom = "(F)*5A"
+
+[style.params]
+branch_angle = 22.0
+forks = 4
+taper = 0.85
+droop = 0.42
+leaf_density = 1.0
+asymmetry = 0.1
+jitter = 0.1
+prune_height = 0.3
+depth = 6
+length = 0.8
+leaf_radius = 0.45
+
+[style.rules]
+A = [
+  ['F([(&)*pitch(!)*2(F)*2B](/)*spread)*forks!FLA', 3],
+  ['F([(&)*pitch(!)*2FB](/)*spread)*forks!FLA', 2],
+]
+B = [
+  ['FL!FLB', 6],
+  ['FL(&)*1!FLB', 4],
+  ['F(&)*1!FL', 1],
+]
+
+[style.dead_rules]
+A = [['F([(&)*pitchFB](/)*spread)*2!FA', 2], ['F!FA', 3]]
+B = [['FB', 2], ['F', 3]]
+
+[[style]]
+name = "umbrella"
+description = "A tall clean trunk that ends in one whorl of limbs branching flat and wide, so the crown is a plate held above the ground: the habit of an acacia or an old pine."
+stand_in = "ellipsoid"
+axiom = "(F)*6A"
+
+[style.params]
+branch_angle = 26.0
+forks = 5
+taper = 0.85
+droop = 0.0
+leaf_density = 1.0
+asymmetry = 0.1
+jitter = 0.09
+prune_height = 0.55
+depth = 6
+length = 1.0
+leaf_radius = 0.7
+
+[style.rules]
+A = [['([(&)*pitchC](/)*spread)*forks', 1]]
+C = [
+  ['F[(+)*1CL][(-)*1CL]', 3],
+  ['FF[(+)*1CL]', 2],
+  ['FL', 1],
+]
+
+[style.dead_rules]
+A = [['([(&)*pitchC](/)*spread)*3', 1]]
+C = [['FC', 2], ['F', 3]]
+
+[[style]]
+name = "vase"
+description = "Limbs that fan up and out from a short trunk without a leader, widening as they rise: the habit of an elm, a hazel stool or an old apple. Its far-zoom stand-in is an ellipsoid, the nearest volume to an upturned cone."
+stand_in = "ellipsoid"
+axiom = "(F)*2A"
+
+[style.params]
+branch_angle = 20.0
+forks = 4
+taper = 0.88
+droop = -0.14
+leaf_density = 1.0
+asymmetry = 0.1
+jitter = 0.09
+prune_height = 0.05
+depth = 7
+length = 0.9
+leaf_radius = 0.5
+
+[style.rules]
+A = [['([(+)*lift V](/)*spread)*forks', 1]]
+V = [
+  ['FF[(+)*1VL](^)*1VL', 3],
+  ['F[(-)*1VL](^)*1VL', 3],
+  ['FFL', 1],
+]
+
+[style.dead_rules]
+A = [['([(+)*lift V](/)*spread)*2', 1]]
+V = [['FV', 2], ['F', 3]]
+
+[[style]]
+name = "palm"
+description = "One unbranched stem carrying a crown of arching fronds at its head, with nothing below: the habit of a palm or a tree fern."
+stand_in = "ellipsoid"
+axiom = "(F)*8A"
+
+[style.params]
+branch_angle = 18.0
+forks = 7
+taper = 0.97
+droop = 0.34
+leaf_density = 1.0
+asymmetry = 0.08
+jitter = 0.12
+prune_height = 0.7
+depth = 6
+length = 1.0
+leaf_radius = 0.5
+
+[style.rules]
+A = [['([(&)*liftP](/)*spread)*forks', 1]]
+P = [
+  ['FL[(+)*1L][(-)*1L]P', 4],
+  ['FLP', 3],
+  ['FL', 1],
+]
+
+[style.dead_rules]
+A = [['([(&)*liftP](/)*spread)*3', 1]]
+P = [['FP', 1], ['F', 2]]
+
+[[style]]
+name = "shrub"
+description = "Many stems from the ground with no trunk between them, each dividing into a low rounded mass: the habit of a hazel thicket, a juniper or sagebrush."
+stand_in = "dome"
+axiom = "([(+)*1S](/)*spread)*forks"
+
+[style.params]
+branch_angle = 25.0
+forks = 5
+taper = 0.82
+droop = 0.06
+leaf_density = 1.0
+asymmetry = 0.1
+jitter = 0.12
+prune_height = 0.0
+depth = 6
+length = 0.5
+leaf_radius = 0.35
+
+[style.rules]
+S = [
+  ['F[(+)*1SL][(-)*1SL]', 3],
+  ['F(/)*2[(+)*1SL]SL', 2],
+  ['FL', 2],
+]
+
+[style.dead_rules]
+S = [['F[(+)*1S]', 2], ['F', 3]]

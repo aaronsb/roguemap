@@ -17,7 +17,7 @@ use roguemap::settings::Settings;
 use roguemap::tileset::Tileset;
 use roguemap::world::World;
 use roguemap::worldmap::WorldMap;
-use roguemap::{snapshot, terminal, ui};
+use roguemap::{lsystem, snapshot, terminal, ui};
 
 /// Whether the main loop goes on after a key.
 enum Loop {
@@ -236,6 +236,14 @@ fn snap(assets: Rc<Assets>, args: &[String]) -> std::io::Result<()> {
     snapshot::render(assets, w, h, &args[3..]).dump(out)
 }
 
+/// Headless mode: `--snap-tree NAME OUT [cols rows seed season]
+/// [foliage=F] [state=dead]` draws one L-system species side-on and writes
+/// the cell dump to OUT, for `python3 tools/cells2png.py` (docs/lsystem.md).
+fn snap_tree(assets: &Assets, args: &[String]) -> std::io::Result<()> {
+    let ([name, out], rest) = (args.get(..2).map(|a| [&a[0], &a[1]]).ok_or_else(|| std::io::Error::other("usage: roguemap --snap-tree NAME OUT.cells [cols rows seed season] [foliage=F] [state=dead]"))?, &args[2..]);
+    lsystem::snap(assets, name, rest).map_err(std::io::Error::other)?.dump(out)
+}
+
 fn main() -> std::io::Result<()> {
     let argv: Vec<String> = std::env::args().collect();
     // Load and validate the tables before touching the terminal, so a bad
@@ -249,6 +257,9 @@ fn main() -> std::io::Result<()> {
     };
     if argv.get(1).map(|s| s.as_str()) == Some("--snap") {
         return snap(assets, &argv[2..]);
+    }
+    if argv.get(1).map(|s| s.as_str()) == Some("--snap-tree") {
+        return snap_tree(&assets, &argv[2..]);
     }
     // `--export-assets DIR` writes the loaded set out for editing.
     if argv.get(1).map(|s| s.as_str()) == Some("--export-assets") {

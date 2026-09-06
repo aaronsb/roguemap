@@ -105,3 +105,93 @@ shape = "ellipsoid"
 canopy = [[110, 140, 60], [100, 130, 55], [130, 120, 50], [120, 110, 60]]
 canopy_glyph = [[170, 200, 100], [160, 190, 90], [190, 170, 80], [170, 160, 100]]
 tags = ["flammable", "wooden"]
+
+
+# Grown from a growth habit in tree_styles.toml rather than a canopy volume
+# (docs/lsystem.md). No biome lists them yet; they are authored and looked
+# at with `roguemap --snap-tree NAME OUT.cells`.
+
+[[species]]
+name = "gnarled oak"
+description = "An old lowland oak with a short thick bole and heavy limbs that fork low and wander; a wide, lumpy crown that holds its shape bare."
+category = "tree"
+form = "broadleaf"
+size_class = "large"
+size = [13.0, 12.0, 17.0]
+shape = "lsystem"
+style = "decurrent"
+trunk_radius = 0.45
+canopy = [[78, 138, 58], [44, 106, 48], [176, 104, 42], [104, 84, 66]]
+canopy_glyph = [[136, 198, 96], [86, 156, 78], [226, 152, 62], [142, 120, 98]]
+dead_chance = 0.05
+tags = ["flammable", "wooden"]
+
+# Gnarled: it leans hard one way and no two limbs match.
+[species.lsystem]
+asymmetry = 0.3
+jitter = 0.16
+leaf_radius = 0.38
+prune_height = 0.1
+depth = 7
+
+[[species]]
+name = "weeping willow"
+description = "A waterside willow whose long whips arch up from a low crotch and fall almost to the ground, so the tree reads as a green curtain."
+category = "tree"
+form = "broadleaf"
+size_class = "mixed"
+size = [15.0, 14.0, 12.0]
+shape = "lsystem"
+style = "weeping"
+trunk_radius = 0.32
+canopy = [[124, 176, 92], [96, 152, 78], [186, 186, 88], [128, 126, 104]]
+canopy_glyph = [[176, 216, 128], [150, 200, 116], [226, 220, 130], [176, 172, 152]]
+dead_chance = 0.03
+tags = ["flammable", "wooden"]
+
+# Thin the curtain so the limbs inside it read.
+[species.lsystem]
+leaf_radius = 0.42
+leaf_density = 0.9
+
+[[species]]
+name = "young birch"
+description = "A sapling birch: one slender pale stem, a few short side branches and a light open crown, the first tree back into a clearing."
+category = "tree"
+form = "broadleaf"
+size_class = "small"
+size = [4.5, 4.5, 11.0]
+shape = "lsystem"
+style = "columnar"
+trunk_radius = 0.09
+canopy = [[132, 196, 96], [100, 170, 76], [226, 190, 66], [154, 146, 134]]
+canopy_glyph = [[190, 234, 148], [158, 214, 126], [252, 226, 118], [214, 208, 202]]
+dead_chance = 0.08
+tags = ["flammable", "wooden"]
+
+# A sapling is not yet self-pruned and its crown is open.
+[species.lsystem]
+prune_height = 0.15
+leaf_radius = 0.32
+leaf_density = 0.8
+
+[[species]]
+name = "spruce (lsystem)"
+description = "A boreal spruce grown as a grammar: one straight leader, whorls of near-horizontal branches thinning toward the top, and the lowest tiers self-pruned away."
+category = "tree"
+form = "pine"
+size_class = "large"
+size = [7.0, 7.0, 25.0]
+shape = "lsystem"
+style = "excurrent"
+trunk_radius = 0.30
+canopy = [26, 78, 48]
+canopy_glyph = [62, 126, 78]
+sheds = false
+dead_chance = 0.03
+tags = ["flammable", "wooden", "evergreen"]
+
+[species.lsystem]
+prune_height = 0.2
+depth = 9
+leaf_radius = 0.5

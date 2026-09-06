@@ -150,7 +150,7 @@ pub const COVERS: [&str; 4] = ["grass", "dry", "moss", "bare"];
 pub const FORMS: [&str; 4] = ["pine", "broadleaf", "scrub", "cactus"];
 pub const SIZE_CLASSES: [&str; 3] = ["small", "mixed", "large"];
 pub const BEHAVIOURS: [&str; 6] = ["idle", "wander", "graze", "flee", "hunt", "patrol"];
-pub const SHAPES: [&str; 4] = ["cone", "ellipsoid", "dome", "cactus"];
+pub const SHAPES: [&str; 5] = ["cone", "ellipsoid", "dome", "cactus", "lsystem"];
 pub const ROOFS: [&str; 4] = ["none", "flat", "gable", "hip"];
 pub const GROUNDS: [&str; 4] = ["none", "flatten", "pave", "till"];
 

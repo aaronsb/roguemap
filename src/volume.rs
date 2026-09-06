@@ -19,6 +19,12 @@ pub enum Shape {
     Dome,
     /// A column, with two arms at the closest zoom.
     Cactus,
+    /// Branches and leaf clusters grown from an L-system grammar
+    /// (docs/lsystem.md). The walk has no primitive for a branch at an
+    /// arbitrary angle yet, so a placed L-system tree is tested as the
+    /// ellipsoid envelope of its crown; its own geometry comes from
+    /// `lsystem::TreeModel::volumes`.
+    Lsystem,
 }
 
 impl Shape {
@@ -52,7 +58,7 @@ impl Dims {
         let h = size[2];
         match shape {
             Shape::Cone => Dims { radius, height: 0.75 * h, trunk: 0.25 * h, trunk_radius: 0.02 * h },
-            Shape::Ellipsoid => Dims { radius, height: 0.6 * h, trunk: 0.4 * h, trunk_radius: 0.02 * h },
+            Shape::Ellipsoid | Shape::Lsystem => Dims { radius, height: 0.6 * h, trunk: 0.4 * h, trunk_radius: 0.02 * h },
             Shape::Dome => Dims { radius, height: h, trunk: 0.0, trunk_radius: 0.0 },
             Shape::Cactus => Dims { radius, height: h, trunk: 0.0, trunk_radius: 0.0 },
         }
@@ -186,7 +192,7 @@ impl Volume {
             let (aa, ab, bb) = (a.0 * a.0 + a.1 * a.1, a.0 * b.0 + a.1 * b.1, b.0 * b.0 + b.1 * b.1);
             let r2 = self.radius * self.radius;
             match self.shape {
-                Shape::Ellipsoid => {
+                Shape::Ellipsoid | Shape::Lsystem => {
                     let zc = h0 + 0.5 * hh;
                     let v2 = 0.25 * hh * hh;
                     let z = largest_root(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * zc / v2, aa / r2 + zc * zc / v2 - 1.0, clo, chi);

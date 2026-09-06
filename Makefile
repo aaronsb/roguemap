@@ -1,7 +1,7 @@
 # roguemap task runner. `make help` lists targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help build run term test test-assets test-golden lint format check clean snap screenshots fonts golden golden-bytes golden-check golden-record assets-export edit edit-snap
+.PHONY: help build run term test test-assets test-golden lint format check clean snap tree-snap screenshots fonts golden golden-bytes golden-check golden-record assets-export edit edit-snap
 
 BIN      := target/release/roguemap
 EDIT     := target/release/roguemap-edit
@@ -80,6 +80,10 @@ fonts: ## Report fonts covering the Symbols for Legacy Computing block
 snap: build ## Render one headless frame to OUT (ARGS="key=value ...")
 	./snap.sh $(OUT) $(ARGS)
 
+# One L-system tree side-on: make tree-snap OUT=oak.png NAME="gnarled oak" ARGS="110 55 7 1"
+tree-snap: build ## Render one L-system species to OUT (NAME=species ARGS="cols rows seed season [foliage= state=dead]")
+	./tree-snap.sh $(OUT) "$(NAME)" $(ARGS)
+
 screenshots: build ## Render the documentation screenshots into docs/screenshots
 	./snap.sh $(SHOTS)/island.png zoom=1 t=3 tod=12
 	./snap.sh $(SHOTS)/rotated.png zoom=1 t=3 tod=12 deg=25
@@ -93,3 +97,9 @@ screenshots: build ## Render the documentation screenshots into docs/screenshots
 	./snap.sh $(SHOTS)/settings.png popover=1 zoom=1
 	./snap.sh $(SHOTS)/ascii.png zoom=2 fill=1 cx=0 cy=0 t=3 tod=12 glyphs=ascii
 	./edit-snap.sh $(SHOTS)/editor.png table=species row=oak
+	./tree-snap.sh $(SHOTS)/lsystem-oak.png "gnarled oak" 110 55 7 1
+	./tree-snap.sh $(SHOTS)/lsystem-willow.png "weeping willow" 110 55 7 1
+	./tree-snap.sh $(SHOTS)/lsystem-birch.png "young birch" 70 55 7 1
+	./tree-snap.sh $(SHOTS)/lsystem-conifer.png "spruce (lsystem)" 62 60 7 1
+	./tree-snap.sh $(SHOTS)/lsystem-oak-winter.png "gnarled oak" 110 55 7 3
+	./tree-snap.sh $(SHOTS)/lsystem-oak-dead.png "gnarled oak" 110 55 7 1 state=dead
