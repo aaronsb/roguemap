@@ -155,7 +155,8 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             let mut t = centre;
             t.tree = Some(Flora { species: subject.row as u8, variant: s.variant % 4 });
             map.set_tile(cx, cy, t);
-            caption = format!("variant {}", s.variant % 4);
+            let sp = &assets.species[subject.row];
+            caption = format!("showing {} (variant {}) on {} ground", sp.name, s.variant % 4, assets.biomes[biome].name);
         }
         TableKind::Biomes => {
             let b = &assets.biomes[biome];
@@ -170,7 +171,13 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             let mut t = centre;
             t.building = Some(Structure { kind: house, variant: 1 });
             map.set_tile(cx, cy, t);
-            caption = format!("{} ({})", b.name, b.koppen);
+            let trees: Vec<&str> = b.species.iter().filter_map(|(i, _)| assets.species.get(*i).map(|sp| sp.name.as_str())).collect();
+            let material = assets.materials.get(b.material).map(|m| m.name.as_str()).unwrap_or("?");
+            caption = if trees.is_empty() {
+                format!("showing {} ground and a house built of {}", b.name, material)
+            } else {
+                format!("showing {} ground with {} and a house built of {}", b.name, trees.join(", "), material)
+            };
         }
         TableKind::Materials if subject.row < assets.materials.len() && !assets.blocks.is_empty() => {
             for (dx, dy) in PATTERNS[2].1 {
@@ -179,7 +186,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                 t.building = Some(Structure { kind: house, variant: ((dx + dy) % 2) as u8 });
                 map.set_tile(cx + dx, cy + dy, t);
             }
-            caption = "2x2 house".to_string();
+            caption = format!("showing a 2x2 house built of {}", assets.materials[subject.row].name);
         }
         TableKind::Blocks if subject.row < assets.blocks.len() => {
             let (name, offsets) = PATTERNS[s.pattern % PATTERNS.len()];
@@ -188,7 +195,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                 t.building = Some(Structure { kind: subject.row as u8, variant: ((s.variant as usize + i) % 4) as u8 });
                 map.set_tile(cx + dx, cy + dy, t);
             }
-            caption = format!("pattern {name}");
+            caption = format!("showing {} in pattern {name}", assets.blocks[subject.row].name);
         }
         TableKind::Props if subject.row < assets.props.len() => {
             for sub in [5, 6, 9, 10] {
@@ -196,14 +203,15 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                 let y = cy as f32 + (sub / 4) as f32 / 4.0 + 0.125;
                 world.placed.push(PlacedProp { x, y, prop: subject.row });
             }
-            caption = "four on the centre tile".to_string();
+            caption = format!("showing four {} on the centre tile", assets.props[subject.row].name);
         }
         TableKind::Creatures if subject.row < assets.creatures.len() => {
             world.entities.push(Entity { kind: subject.row as u8, mx: cx, my: cy });
+            caption = format!("showing {} standing on {} ground", assets.creatures[subject.row].name, assets.biomes[biome].name);
         }
         TableKind::Lights if subject.row < assets.lights.len() => {
             world.lights.push(assets.lights[subject.row].at(cx, cy, GROUND_Z, 1.0));
-            caption = format!("placed at {:02}:00", world.tod as i32);
+            caption = format!("showing {} lit at {:02}:00 on {} ground", assets.lights[subject.row].name, world.tod as i32, assets.biomes[biome].name);
         }
         TableKind::Art => {
             // Preview through whatever references the art: a prop, a
@@ -237,6 +245,14 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             }
         }
         _ => {}
+    }
+    if caption.is_empty() {
+        caption = match subject.kind {
+            TableKind::Surfaces => format!("showing {:?} ground", terrain).to_lowercase(),
+            TableKind::Seasons => format!("showing {} ground in that season", assets.biomes[biome].name),
+            TableKind::Tilesets => format!("showing {} ground drawn with these glyphs", assets.biomes[biome].name),
+            _ => format!("showing {} ground", assets.biomes[biome].name),
+        };
     }
     Fixture { map, world, cx, cy, biome: biome % assets.biomes.len().max(1), glyphs, caption }
 }

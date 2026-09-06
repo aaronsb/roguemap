@@ -1292,7 +1292,7 @@ mod tests {
         assert!(top.contains("species: oak"), "{top}");
         let cv = snapshot(a.clone(), 168, 71, &["table=props", "row=boulder", "biome=steppe", "season=3", "tod=22", "glyphs=ascii", "pane=form"]).unwrap();
         let top: String = cv.cells[..168].iter().map(|c| c.ch).collect();
-        assert!(top.contains("props: boulder  biome steppe  winter 22:00  ascii"), "{top}");
+        assert!(top.contains("props: boulder") && top.contains("showing four boulder") && top.contains("biome steppe  winter 22:00  ascii"), "{top}");
         let cv = snapshot(a.clone(), 80, 25, &["table=props", "row=boulder", "grid=1"]).unwrap();
         let rows: Vec<String> = (0..25).map(|y| cv.cells[y * 80..(y + 1) * 80].iter().map(|c| c.ch).collect()).collect();
         assert!(rows.iter().any(|r| r.contains("art: boulder")), "{rows:?}");

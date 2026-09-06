@@ -212,14 +212,14 @@ fn draw_previews(cv: &mut Canvas, ed: &Editor) {
     let season = SEASON_NAMES[season_blend(s.season).0];
     let tod = ed.fixture_tod();
     let head = format!(
-        "{}: {}  biome {biome}  {season} {:02}:{:02}  {}  {}deg  {}",
+        "{}: {}  |  {}  |  biome {biome}  {season} {:02}:{:02}  {}  {}deg",
         ed.kind().name(),
         ed.doc.row_name(ed.table, ed.row()),
+        ed.caption(),
         tod.floor() as i32,
         (tod.fract() * 60.0) as i32,
         ed.glyphs_name(),
         (s.angle.to_degrees().round() as i32).rem_euclid(360),
-        ed.caption()
     );
     title(cv, LEFT_W + 1, 0, &head, l.strip.w - 2, fg, bg);
     // Pane frames sit inside the strip; titles go on the line below the
