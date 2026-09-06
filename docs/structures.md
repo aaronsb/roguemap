@@ -189,3 +189,13 @@ the one below, foliage in tiers with gaps between them, the lowest whorls
 dead or shed, and a ragged outline. That silhouette comes from the
 L-system species (docs/lsystem.md), whose branch and leaf volumes replace
 the stand-in shape at the near zooms once the adapter lands.
+
+## Porous canopies
+
+A crown is not solid. A ray sample inside a canopy hits foliage with the
+species' leaf density as its probability, seeded by position so the holes
+stay put from frame to frame, and otherwise passes through and keeps
+walking. Through a sparse crown you see flecks of what is behind: a
+character, a wall, the sky. L-system leaf clusters give the same result
+from their real gaps. The shadow mask uses the leaf density as the crown's
+opacity, so a thin tree throws a light shadow.
