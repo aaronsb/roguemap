@@ -147,8 +147,8 @@ placing them.
 
 - Names are lower case with spaces; references are by name, never by index.
 - Colours are `[r, g, b]` integers 0..255 in tables and 0..1 floats in lights.
-- Distances are tiles; heights are height units, where one unit is one
-  terrace step and a house level is two.
+- Distances and heights are metres; anything stored discretely is
+  centimetres. A tile is 2 m, the person 2 m, a house level 3 m (ADR-004).
 - Lists of pairs keep authoring order, since hash-driven picks read them
   in order.
 - Every row has a description. The editor shows it beside the preview and
