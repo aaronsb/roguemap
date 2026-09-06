@@ -30,10 +30,10 @@ flicker_rate = 3.0
 
 [[light]]
 name = "campfire"
-description = "An open fire on the ground: a wide warm glow with a slow flicker."
+description = "An open fire on the ground: a warm glow that reaches a few paces and flickers slowly."
 color = [1.0, 0.62, 0.22]
-radius = 7.5
-intensity = 2.2
+radius = 4.0
+intensity = 1.8
 falloff = 2.0
 flicker_amount = 0.22
 flicker_rate = 1.7507043
