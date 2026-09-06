@@ -1,5 +1,6 @@
 //! roguemap: an isometric, height-mapped terrain renderer for the terminal.
 
+mod biome;
 mod canvas;
 mod map;
 mod noise;
@@ -30,8 +31,8 @@ fn apply(settings: &Settings, map: &mut map::Map, world: &mut world::World, rend
 
 /// Headless mode: `--snap W H OUT [key=value...]` renders one frame and dumps it.
 /// Keys: seed, t, tod, season, weather (clear|rain|snow), glyphs (petscii|ascii),
-/// rot, zoom, size, fill (1 for an unbounded world), popover (1), fire (1 to
-/// place a campfire at centre), player (1), hud (0|1).
+/// rot, zoom, size, fill (1 for an unbounded world), cx, cy (tile to centre
+/// on), popover (1), fire (1 to place a campfire at centre), player (1), hud (0|1).
 fn snapshot(args: &[String]) -> std::io::Result<()> {
     let w: u16 = args[0].parse().unwrap_or(200);
     let h: u16 = args[1].parse().unwrap_or(60);
@@ -58,7 +59,7 @@ fn snapshot(args: &[String]) -> std::io::Result<()> {
     cam.rot = get("rot", 0.0) as u8;
     let zoom = kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| render::Camera::fitting_zoom(&map, w as i32, h as i32));
     cam.set_zoom(zoom, &map, w as i32, h as i32);
-    cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, w as i32, h as i32);
+    cam.look_at(get("cx", map.w as f32 / 2.0) as i32, get("cy", map.h as f32 / 2.0) as i32, &map, w as i32, h as i32);
     let mut world = world::World::new();
     world.tod = get("tod", 13.0);
     world.season = get("season", 1.0);

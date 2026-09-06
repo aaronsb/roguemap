@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::biome::{self, BIOMES};
 use crate::noise::{fbm, hash, hash01};
 
 /// Tiles below this height are water; the water surface is drawn at this level.
@@ -39,6 +40,14 @@ pub struct Tile {
     pub seed: u32,
     /// For water: tiles in the connected body, capped. Small ponds stay calm.
     pub body: u16,
+    /// Index into the biome table.
+    pub biome: u8,
+    /// Species index for the tree here, if any.
+    pub species: u8,
+    /// Building sprite variant, if a building stands here.
+    pub building: Option<u8>,
+    /// Annual mean temperature, degrees Celsius.
+    pub temp: i8,
 }
 
 impl Tile {
@@ -98,34 +107,88 @@ impl Map {
         self.height(x, y) < SEA
     }
 
-    /// Classify one tile from the height field around it.
+    /// Annual mean temperature: a slow latitude-like field, minus a lapse
+    /// rate with height, so the same region cools going uphill.
+    pub fn temperature(&self, x: i32, y: i32, z: i32) -> f32 {
+        let lat = fbm(x as f32 * 0.0022, y as f32 * 0.0022, self.seed ^ 0x7E, 2) * 2.0 - 1.0;
+        let local = fbm(x as f32 * 0.02, y as f32 * 0.02, self.seed ^ 0x7F, 2) * 2.0 - 1.0;
+        26.0 - 36.0 * (lat + 1.0) * 0.5 + local * 3.0 - (z.max(SEA) - SEA) as f32 * 2.2
+    }
+
+    /// Precipitation on a 0..100 scale from a slow moisture field.
+    pub fn precipitation(&self, x: i32, y: i32) -> f32 {
+        let big = fbm(x as f32 * 0.003 + 31.0, y as f32 * 0.003, self.seed ^ 0x9A, 3);
+        let local = fbm(x as f32 * 0.03, y as f32 * 0.03, self.seed ^ 0x9B, 2);
+        ((big * 0.8 + local * 0.2 - 0.5) * 1.6 + 0.5).clamp(0.0, 1.0) * 100.0
+    }
+
+    /// Classify one tile from the height field and climate around it.
     fn tile(&self, x: i32, y: i32) -> Tile {
         let z = self.height(x, y);
+        let temp = self.temperature(x, y, z);
+        let precip = self.precipitation(x, y);
+        let biome_ix = biome::classify(temp, precip);
+        let biome = &BIOMES[biome_ix];
         let near_water = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.is_water(x + dx, y + dy));
         let patch = fbm(x as f32 * 0.13, y as f32 * 0.13, self.seed ^ 0x51, 3);
         let terrain = if z < SEA {
             Terrain::Water
         } else if z == SEA || (z == SEA + 1 && near_water) {
             Terrain::Sand
-        } else if z >= SNOW {
+        } else if temp <= -16.0 {
             Terrain::Snow
         } else if z >= SNOW - 2 {
             Terrain::Rock
-        } else if patch > 0.70 {
+        } else if patch > 0.72 {
             Terrain::Dirt
         } else {
             Terrain::Grass
         };
 
-        let forest = fbm(x as f32 * 0.08, y as f32 * 0.08, self.seed ^ 0xF0, 3);
         let hv = hash(x as i64, y as i64, self.seed);
-        let tree = if terrain == Terrain::Grass && z >= SEA + 2 && forest > 0.47 && (hv % 100) < 62 {
+        let forest = fbm(x as f32 * 0.08, y as f32 * 0.08, self.seed ^ 0xF0, 3);
+        let density = biome.tree_density * crate::noise::smoothstep(0.3, 0.7, forest);
+        let mut species = 0u8;
+        let tree = if terrain == Terrain::Grass && z >= SEA + 1 && !biome.species.is_empty() && (hv % 1000) as f32 / 1000.0 < density {
+            let total: u32 = biome.species.iter().map(|&(_, w)| w as u32).sum();
+            let mut pick = ((hv >> 16) % total.max(1) as u64) as u32;
+            for &(sp, w) in biome.species {
+                if pick < w as u32 {
+                    species = sp as u8;
+                    break;
+                }
+                pick -= w as u32;
+            }
             Some(((hv >> 8) % 4) as u8)
         } else {
             None
         };
-        let grass = (fbm(x as f32 * 0.15, y as f32 * 0.15, self.seed ^ 0xA7, 2) * 4.0) as u8;
-        Tile { z, terrain, tree, grass: grass.min(3), seed: (hv >> 32) as u32, body: 0 }
+
+        let settle = fbm(x as f32 * 0.05 + 7.0, y as f32 * 0.05, self.seed ^ 0xB1, 2);
+        let building = if tree.is_none()
+            && matches!(terrain, Terrain::Grass | Terrain::Dirt | Terrain::Sand)
+            && z >= SEA + 1
+            && settle > 0.64
+            && (hv >> 40) % 100 < 14
+        {
+            Some(((hv >> 48) % 4) as u8)
+        } else {
+            None
+        };
+
+        let grass = ((fbm(x as f32 * 0.15, y as f32 * 0.15, self.seed ^ 0xA7, 2) * 4.0) as u8).min(biome.grass);
+        Tile {
+            z,
+            terrain,
+            tree,
+            grass,
+            seed: (hv >> 32) as u32,
+            body: 0,
+            biome: biome_ix as u8,
+            species,
+            building,
+            temp: temp.round().clamp(-60.0, 60.0) as i8,
+        }
     }
 
     fn generate_chunk(&self, cx: i32, cy: i32) -> Vec<Tile> {

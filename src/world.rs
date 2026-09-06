@@ -27,6 +27,7 @@ pub struct Light {
     pub z: i32,
     pub color: [f32; 3],
     pub radius: f32,
+    pub intensity: f32,
     pub flicker: bool,
 }
 
@@ -134,6 +135,6 @@ impl World {
     }
 
     pub fn add_campfire(&mut self, mx: i32, my: i32, z: i32) {
-        self.lights.push(Light { mx, my, z, color: [1.0, 0.62, 0.22], radius: 7.5, flicker: true });
+        self.lights.push(Light { mx, my, z, color: [1.0, 0.62, 0.22], radius: 7.5, intensity: 2.2, flicker: true });
     }
 }
