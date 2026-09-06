@@ -147,6 +147,17 @@ impl ArtIndex {
         below.or(slots.first()).map(|&i| &self.entries[i].sprite)
     }
 
+    /// The sprite for a thing that stands `rows` rows tall at this zoom:
+    /// the tier whose own row count is nearest, so a 2 m person picks the
+    /// nine-row figure at 1:1 and the one-glyph one at 1:8 (ADR-004). The
+    /// sprite is drawn at the tier's size with its feet on the ground.
+    pub fn for_rows(&self, name: &str, rows: f32) -> Option<&Sprite> {
+        let slots = self.by_name.get(name)?;
+        let distance = |i: usize| (self.entries[i].sprite.rows.len() as f32 - rows).abs();
+        let best = slots.iter().copied().reduce(|a, b| if distance(b) < distance(a) { b } else { a })?;
+        Some(&self.entries[best].sprite)
+    }
+
     /// Every art name, sorted.
     pub fn names(&self) -> Vec<&str> {
         let mut v: Vec<&str> = self.by_name.keys().map(|s| s.as_str()).collect();
@@ -808,6 +819,7 @@ impl Assets {
             if can_enter.is_empty() {
                 return Err(ctx.row(i, &c.name, "can_enter list is empty"));
             }
+            sized(&ctx, i, &c.name, c.size)?;
             check_hooks(&ctx, i, &c.name, &c.hooks)?;
             check_conditions(&ctx, i, &c.name, &c.conditions)?;
             non_negative(&ctx, i, &c.name, "speed", c.speed)?;
@@ -817,13 +829,14 @@ impl Assets {
                 name: c.name.clone(),
                 identity: Identity::from_row(&c.identity, "creatures"),
                 art: c.art.clone(),
+                size: c.size,
                 color: c.color,
                 glyph: c.glyph,
                 can_enter,
-                speed: c.speed.unwrap_or(1.0),
+                speed: c.speed.unwrap_or(2.0),
                 diet: c.diet.clone(),
                 behaviour: c.behaviour.clone().unwrap_or_else(|| "idle".to_string()),
-                sight: c.sight.unwrap_or(8.0),
+                sight: c.sight.unwrap_or(16.0),
                 home: optional_reference(&ctx, i, &c.name, "block", &block_names, c.home.as_ref())?,
                 spacing: c.spacing.unwrap_or(0.0),
                 light: optional_reference(&ctx, i, &c.name, "light", &light_names, c.hooks.light.as_ref())?,
@@ -1240,6 +1253,42 @@ mod tests {
     }
 
     #[test]
+    fn every_distance_in_the_tables_is_metres() {
+        // The yardsticks of ADR-004: a tile is 2 m, the person 2 m, a house
+        // level 3 m, an oak 18 m, and light radii are metres too (a
+        // campfire reaches four tiles).
+        let a = Assets::embedded().unwrap();
+        assert_eq!(crate::map::TILE_METRES, 2.0);
+        assert_eq!(a.creatures[0].name, "player");
+        assert_eq!(a.creatures[0].size, [0.6, 0.4, 2.0], "the person is two metres tall");
+        assert_eq!(a.block("house").unwrap().level_height, 3.0, "a house level is three metres");
+        assert_eq!(a.species.iter().find(|s| s.name == "oak").unwrap().size[2], 18.0);
+        assert_eq!(a.light("campfire").unwrap().radius, 8.0, "four tiles of throw, in metres");
+        // Plausible metre ranges, so a row in tiles or rows stands out.
+        for c in &a.creatures {
+            assert!((0.1..=6.0).contains(&c.size[2]), "{}: {} m tall", c.name, c.size[2]);
+            assert!(c.size[0] > 0.0 && c.size[1] > 0.0, "{}", c.name);
+            assert!(c.sight <= 200.0 && c.speed <= 30.0, "{}: sight and speed are metres", c.name);
+        }
+        for sp in &a.species {
+            assert!((0.5..=40.0).contains(&sp.size[2]), "{}: {} m tall", sp.name, sp.size[2]);
+            let (_, d) = sp.volume();
+            assert!(d.radius <= 20.0 && d.height <= 40.0, "{}: crown in metres", sp.name);
+        }
+        for b in &a.blocks {
+            assert!((0.05..=10.0).contains(&b.level_height), "{}: {} m a level", b.name, b.level_height);
+            assert!(b.max_rise <= 10.0 && b.window_pitch <= 10.0, "{}: roof and windows in metres", b.name);
+        }
+        for p in &a.props {
+            assert!((0.01..=5.0).contains(&p.size[2]), "{}: {} m tall", p.name, p.size[2]);
+            assert!(p.hooks.reach <= 20.0, "{}: reach in metres", p.name);
+        }
+        for l in &a.lights {
+            assert!((0.5..=100.0).contains(&l.radius), "{}: {} m of throw", l.name, l.radius);
+        }
+    }
+
+    #[test]
     fn weighted_species_lists_back_every_wooded_biome() {
         let a = Assets::embedded().unwrap();
         for b in &a.biomes {
@@ -1555,15 +1604,28 @@ mod tests {
     fn tier_fallback_per_zoom() {
         let a = Assets::embedded().unwrap();
         let rows = |zoom| a.art.for_zoom("player", zoom).unwrap().rows.len();
-        assert_eq!([rows(0), rows(1), rows(2), rows(3), rows(4), rows(5), rows(6)], [1, 1, 3, 3, 5, 5, 9]);
-        // Props have a small tier and a large one from zoom 5: zoom 4 stays
-        // small, zoom 6 uses large.
+        assert_eq!([rows(0), rows(1), rows(2), rows(3)], [1, 3, 6, 12], "one tier per zoom, far to close");
+        // The boulder has a small tier and a large one: the zooms between
+        // fall back to the small.
         let boulder = |zoom| a.art.for_zoom("boulder", zoom).unwrap().rows.len();
-        assert_eq!([boulder(2), boulder(3), boulder(4), boulder(5), boulder(6)], [1, 1, 1, 2, 2]);
+        assert_eq!([boulder(0), boulder(1), boulder(2), boulder(3)], [1, 1, 1, 2]);
         assert!(a.art.get("boulder", Tier::Medium).is_none());
         // Tiny tiers only: every zoom gets the tiny sprite.
-        assert!(a.art.for_zoom("petscii/pine", 6).is_some());
+        assert!(a.art.for_zoom("petscii/pine", 3).is_some());
         assert!(a.art.for_zoom("nothing", 0).is_none());
+    }
+
+    #[test]
+    fn art_tiers_are_picked_by_the_rows_a_thing_stands(){
+        // The person is 2 m: 12 rows at 1:1, 6 at 1:2, 3 at 1:4 and 1.5 at
+        // 1:8, so the tier nearest each is large, medium, small and tiny
+        // (ADR-004).
+        let a = Assets::embedded().unwrap();
+        let rows = |r: f32| a.art.for_rows("player", r).unwrap().rows.len();
+        assert_eq!([rows(12.0), rows(6.0), rows(3.0), rows(1.5)], [12, 6, 3, 1], "the person's own rows at every zoom");
+        assert_eq!(rows(0.2), 1, "smaller than any tier is the smallest");
+        assert_eq!(rows(40.0), 12, "taller than any tier is the largest");
+        assert!(a.art.for_rows("nothing", 3.0).is_none());
     }
 
     #[test]

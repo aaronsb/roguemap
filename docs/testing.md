@@ -28,6 +28,21 @@ is one command.
 - **Camera.** Project then unproject returns the input at every zoom and
   several angles; `screen_dir_to_map` gives the eight compass steps;
   `tile_depth` orders a nearer tile above a farther one at every angle.
+- **Scale** (ADR-004). Each zoom's rows and columns per metre are an exact
+  halving of the next (0.75, 1.5, 3, 6 rows and 1.41, 2.83, 5.66, 11.31
+  columns), so a 2 m person is 1.5, 3, 6 and 12 rows; heights project
+  through rows per metre and unproject back, and no height moves a point
+  sideways; one keypress is one tile at every zoom and that tile is one
+  footprint on screen. The art tiers a sprite picks are the ones nearest
+  those rows. `relief` turns the generator's field into metres: zero at
+  the shoreline, the sea bed at `FLOOR`, a valley floor a metre or two
+  over the water and a range at `RELIEF`, rising all the way and inverted
+  by `relief_fraction`; generated heights stay inside that band and a
+  tile's height is the field floored to whole metres.
+- **Asset units.** Every distance in the tables is metres: the person is
+  2 m, a house level 3 m, an oak 18 m, the campfire's light reaches 8 m,
+  and every size, crown, roof rise, reach, sight and light radius sits in
+  a plausible metre range.
 - **Ray walk.** The walk marches the continuous height field. On a flat
   field it hits the top at the field height for every cell, exactly at the
   overview zooms and within the sub-tile relief up close; a single raised

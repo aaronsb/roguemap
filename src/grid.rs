@@ -9,14 +9,20 @@ use crate::noise::{hash01, ifloor};
 use crate::render::Scene;
 use crate::volume::{size_scale, variant_scale, Volume};
 
-/// Highest anything can reach above the ground: the tallest tree over the
-/// highest terrain.
+/// Highest anything can reach above the ground, in metres: the tallest tree
+/// or roof over the highest terrain.
 pub(crate) const TOP_CAP: f32 = MAX_Z as f32 + 40.0;
+/// Metres a tree or a roof can add over the terrain under it; the view is
+/// sized from the terrain's own ceiling plus this.
+pub(crate) const CROWN_CAP: f32 = 40.0;
 /// Tiles per block of the coarse ceiling grid.
-const BLOCK: i32 = 16;
+const BLOCK: i32 = 8;
 /// Ground margin around a volume's footprint so a segment between two
 /// walk samples cannot cross it unregistered.
 const VOLUME_MARGIN: f32 = 0.4;
+/// Cells beyond the screen a tree may stand and still matter, through its
+/// crown leaning in or its shadow falling across the edge.
+const MARGIN: f32 = 64.0;
 
 /// What stands on a tile, resolved for the walk.
 #[derive(Clone, Copy, Debug)]
@@ -60,20 +66,15 @@ pub(crate) struct HeightGrid {
 }
 
 impl HeightGrid {
-    /// Build the grid over the tile range for the frame.
-    pub(crate) fn build(sc: &Scene, x0: i32, y0: i32, x1: i32, y1: i32) -> HeightGrid {
+    /// Build the grid over the tile range for the frame, for a screen of
+    /// `sw` x `sh` cells: trees far off that screen are not made into
+    /// volumes.
+    pub(crate) fn build(sc: &Scene, x0: i32, y0: i32, x1: i32, y1: i32, sw: i32, sh: i32) -> HeightGrid {
         let (map, assets, world, cam) = (sc.map, sc.assets, sc.world, sc.cam);
         let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
         let n = (w * h) as usize;
-        let mut data = Vec::with_capacity(n);
-        let mut tiles = Vec::with_capacity(n);
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                let t = map.get(x, y);
-                data.push(t.map(|t| t.hf).unwrap_or(0.0));
-                tiles.push(t);
-            }
-        }
+        let tiles = map.tiles_in(x0, y0, x1, y1);
+        let data: Vec<f32> = tiles.iter().map(|t| t.map(|t| t.hf).unwrap_or(0.0)).collect();
         let empty = Geo { stack: None, runs: Runs::SINGLE, open: 0, door: NO_FACE, base: 0.0, flat: false, zs: 0.0, top: 0.0, hmax: 0.0, vol: (0, 0) };
         let mut geo = vec![empty; n];
         let at = |x: i32, y: i32| ((y - y0) * w + (x - x0)) as usize;
@@ -158,7 +159,7 @@ impl HeightGrid {
         let mut volumes: Vec<Volume> = Vec::new();
         let mut counts = vec![0u32; n];
         let mut spans: Vec<(i32, i32, i32, i32)> = Vec::new();
-        if cam.hw > 3 {
+        if crate::raster::lod_of(cam.rows_per_metre()).volumes {
             let octaves = crate::raster::detail_octaves(cam);
             for y in y0..=y1 {
                 for x in x0..=x1 {
@@ -173,6 +174,14 @@ impl HeightGrid {
                     let jy = (hash01(x as i64, y as i64, seed ^ 0x22) - 0.5) * 0.3;
                     let (cx, cy) = (x as f32 + 0.5 + jx, y as f32 + 0.5 + jy);
                     let ground = (t.hf + map.detail(cx, cy, octaves)).max(SEA as f32);
+                    // A tree whose crown cannot reach the screen, and whose
+                    // shadow cannot either, is not worth a volume.
+                    let (sx, sy) = cam.project(cx, cy, ground);
+                    let crown = (dims.trunk + dims.height) * s * cam.rows_per_metre();
+                    let wide = dims.radius * s / TILE_METRES * cam.a() + MARGIN;
+                    if sx + wide < -MARGIN || sx - wide > sw as f32 + MARGIN || sy + MARGIN < 0.0 || sy - crown - MARGIN > sh as f32 {
+                        continue;
+                    }
                     let gust = world.gust(x as f32, y as f32, sc.t);
                     let shear = if gust > 0.0 {
                         let phase = (t.seed % 628) as f32 * 0.01;
@@ -235,7 +244,7 @@ impl HeightGrid {
         for g in &geo {
             let (s, l) = (g.vol.0 as usize, g.vol.1 as usize);
             if l > 1 {
-                vol_index[s..s + l].sort_by(|a, b| volumes[*b as usize].top().partial_cmp(&volumes[*a as usize].top()).unwrap_or(std::cmp::Ordering::Equal));
+                vol_index[s..s + l].sort_unstable_by(|a, b| volumes[*b as usize].top().partial_cmp(&volumes[*a as usize].top()).unwrap_or(std::cmp::Ordering::Equal));
             }
         }
 
@@ -308,23 +317,54 @@ impl HeightGrid {
         Column { mx, my, zs: g.zs, profile, runs: g.runs }
     }
 
-    /// Where a ray may start: the coarse ceiling over the tiles its ground
-    /// path can cross from `z = 0` up to the grid's highest top.
-    pub(crate) fn top_for_ray(&self, x0: f32, y0: f32, d: (f32, f32)) -> f32 {
-        let z1 = self.max_top;
-        let (xa, ya) = (x0, y0);
-        let (xb, yb) = (x0 + d.0 * z1, y0 + d.1 * z1);
-        let bx = |x: f32| ((ifloor(x) - self.x0).div_euclid(BLOCK)).clamp(0, self.bw - 1);
-        let by = |y: f32| ((ifloor(y) - self.y0).div_euclid(BLOCK)).clamp(0, (self.h + BLOCK - 1) / BLOCK - 1);
-        let (bx0, bx1) = (bx(xa.min(xb)), bx(xa.max(xb)));
-        let (by0, by1) = (by(ya.min(yb)), by(ya.max(yb)));
-        let mut top = 0.0f32;
-        for y in by0..=by1 {
-            for x in bx0..=bx1 {
-                top = top.max(self.blocks[(y * self.bw + x) as usize]);
+    /// Coarse ceiling over the `BLOCK` x `BLOCK` tiles around a ground
+    /// point: nothing in that block reaches higher.
+    #[inline]
+    pub(crate) fn block_top(&self, x: i32, y: i32) -> f32 {
+        let bx = (x - self.x0).div_euclid(BLOCK).clamp(0, self.bw - 1);
+        let bh = (self.h + BLOCK - 1) / BLOCK;
+        let by = (y - self.y0).div_euclid(BLOCK).clamp(0, bh - 1);
+        self.blocks[(by * self.bw + bx) as usize]
+    }
+
+    /// The lowest height at which a ray's path is still over the block
+    /// holding `(x, y)`: below it the walk has moved on to another block, so
+    /// that block's ceiling no longer covers what is skipped.
+    #[inline]
+    pub(crate) fn block_exit(&self, p0: (f32, f32), d: (f32, f32), x: i32, y: i32) -> f32 {
+        let bx = (x - self.x0).div_euclid(BLOCK) * BLOCK + self.x0;
+        let by = (y - self.y0).div_euclid(BLOCK) * BLOCK + self.y0;
+        let mut lo = f32::MIN;
+        for (v0, dv, m0) in [(p0.0, d.0, bx as f32), (p0.1, d.1, by as f32)] {
+            if dv.abs() < 1e-9 {
+                continue;
             }
+            let (t0, t1) = ((m0 - v0) / dv, (m0 + BLOCK as f32 - v0) / dv);
+            lo = lo.max(t0.min(t1));
         }
-        top
+        lo
+    }
+
+    /// The heights whose ground point lies inside the grid, for a ray's
+    /// path `p(z) = p0 + d z`; `None` when the path never enters it. The
+    /// walk has nothing to meet outside this span, so a range hundreds of
+    /// metres up costs nothing where it cannot be seen.
+    pub(crate) fn z_span(&self, p0: (f32, f32), d: (f32, f32)) -> Option<(f32, f32)> {
+        let (mut lo, mut hi) = (f32::MIN, f32::MAX);
+        let box_ = [(p0.0, d.0, self.x0 as f32, (self.x0 + self.w) as f32), (p0.1, d.1, self.y0 as f32, (self.y0 + self.h) as f32)];
+        for (v0, dv, m0, m1) in box_ {
+            if dv.abs() < 1e-9 {
+                if v0 < m0 || v0 > m1 {
+                    return None;
+                }
+                continue;
+            }
+            let (t0, t1) = ((m0 - v0) / dv, (m1 - v0) / dv);
+            let (a, b) = if t0 < t1 { (t0, t1) } else { (t1, t0) };
+            lo = lo.max(a);
+            hi = hi.min(b);
+        }
+        (lo <= hi).then_some((lo, hi))
     }
 
     /// The tile range the grid covers.

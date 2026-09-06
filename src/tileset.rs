@@ -9,10 +9,18 @@ use crate::assets::{Assets, Tier, TilesetSpec};
 use crate::biome::{Form, COVERS, FORMS};
 use crate::sprite::Sprite;
 
-/// Tile footprints as (half width in columns, half height in rows). Tiles
-/// step by these amounts and each footprint tessellates the screen. With 1:2
-/// cells, 2x1 reads as a 45-degree diamond, 3x1 about 1.5:1, the rest 2:1.
-pub const ZOOMS: [(i32, i32); 7] = [(2, 1), (3, 1), (4, 1), (6, 2), (8, 2), (12, 3), (16, 4)];
+/// Tile footprints as (half width in columns, half height in rows), one per
+/// zoom, each an exact halving of the next (ADR-004): far 2x1 (1:8), mid
+/// 4x1 (1:4), near 8x2 (1:2), close 16x4 (1:1). Tiles step by these amounts
+/// and each footprint tessellates the screen; with 1:2 cells, 2x1 and 4x1
+/// read as 45-degree diamonds, the rest 2:1.
+pub const ZOOMS: [(i32, i32); 4] = [(2, 1), (4, 1), (8, 2), (16, 4)];
+
+/// The zooms by name, in `ZOOMS` order.
+pub const ZOOM_NAMES: [&str; 4] = ["far", "mid", "near", "close"];
+
+/// The scale each zoom draws at, in `ZOOMS` order.
+pub const ZOOM_RATIOS: [&str; 4] = ["1:8", "1:4", "1:2", "1:1"];
 
 /// Glyph vocabulary for canopies, trunks, roofs and walls, and the
 /// hand-drawn one-glyph tree sprites for the smallest tiles.

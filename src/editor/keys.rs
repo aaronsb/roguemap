@@ -206,7 +206,7 @@ mod tests {
     fn shared_keys_agree_with_the_game() {
         use crate::input::{self, SCENE};
         assert_eq!(lookup(Mode::Normal, Char('[')), Some(Season(-0.25)));
-        assert_eq!(input::lookup(SCENE, Char(']')), Some(input::Action::StepSeason(0.25)));
+        assert_eq!(input::lookup(SCENE, Char(']'), false), Some(input::Action::StepSeason(0.25)));
         assert_eq!(lookup(Mode::Normal, Char('.')), Some(Hour(1.0)));
         assert_eq!(lookup(Mode::Normal, Char('g')), Some(Glyphs));
         assert_eq!(lookup(Mode::Normal, Char('q')), Some(Quit));

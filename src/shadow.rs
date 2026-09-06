@@ -3,8 +3,8 @@
 //! the highest sun ray any occluder blocks over each ground point. A point
 //! below that height is in shadow. Occluders are terrain steeper than the
 //! sun's ray, stack columns with their roofs, and tree canopies, each
-//! swept along the sun's ground direction by its height times the shadow
-//! length per unit, which is the cloud shadows' own factor.
+//! swept along the sun's ground direction by its height in metres times the
+//! shadow length per metre, which is the cloud shadows' own factor.
 
 use crate::blocks::Profile;
 use crate::grid::HeightGrid;
@@ -26,7 +26,7 @@ pub(crate) struct ShadowMask {
     top: Vec<f32>,
     /// Unit ground direction shadows fall along.
     pub(crate) u: (f32, f32),
-    /// Tiles of shadow per unit of occluder height.
+    /// Tiles of shadow per metre of occluder height.
     pub(crate) k: f32,
 }
 
@@ -37,7 +37,7 @@ impl ShadowMask {
         if world.daylight() <= 0.0 {
             return None;
         }
-        let k = world.shadow_per_unit();
+        let k = world.shadow_per_metre();
         if k < 0.05 {
             return None; // the sun is overhead: nothing reaches past its own footprint
         }
@@ -45,14 +45,14 @@ impl ShadowMask {
         let (w, h) = (((x1 - x0 + 1) as f32 * RES) as i32, ((y1 - y0 + 1) as f32 * RES) as i32);
         let u = world.shadow_dir();
         let mut mask = ShadowMask { x0, y0, w, h, top: vec![CLEAR; (w * h) as usize], u, k };
-        let hw = sc.cam.hw;
+        let volumes = crate::raster::lod_of(sc.cam.rows_per_metre()).volumes;
         for (mx, my, _, g) in grid.cells() {
             let (cx, cy) = (mx as f32 + 0.5, my as f32 + 0.5);
             // Terrain: a tile whose ground drops faster than the sun's ray
             // along the shadow direction shades what lies below it.
             let here = grid.sample(cx, cy).max(SEA as f32);
             let ahead = grid.sample(cx + u.0, cy + u.1).max(SEA as f32);
-            if (here - ahead) * k > 1.0 {
+            if (here - ahead) * k > 2.0 {
                 mask.stamp((cx, cy), 0.6, 0.0, (k * (here - ahead) + 1.5).min(MAX_SWEEP), here, None);
             }
             if let Some(st) = g.stack {
@@ -65,7 +65,7 @@ impl ShadowMask {
                 }
             }
         }
-        if hw >= 4 {
+        if volumes {
             for v in &grid.volumes {
                 let len = (k * (v.top() - v.ground) + 1.5).min(MAX_SWEEP);
                 let r = v.radius;
@@ -186,11 +186,11 @@ mod tests {
         cam.look_at(10, 10, &map, w, h);
         let r = Renderer::new(w, h);
         let sc = Scene::new(&map, ts, &world, &cam, 0.0);
-        let (x0, y0, x1, y1) = r.visible_bounds(&cam);
-        let grid = HeightGrid::build(&sc, x0, y0, x1, y1);
+        let (x0, y0, x1, y1) = r.visible_bounds(&cam, 40.0);
+        let grid = HeightGrid::build(&sc, x0, y0, x1, y1, w, h);
         let mask = ShadowMask::build(&sc, &grid).expect("the sun is up");
-        let k = world.shadow_per_unit();
-        assert!((k - 0.5).abs() < 0.02, "at 15:00 a unit of height throws half a tile: {k}");
+        let k = world.shadow_per_metre();
+        assert!((k - 0.5).abs() < 0.02, "at 15:00 a metre of height throws half a tile: {k}");
         let (ux, uy) = mask.u;
         assert!(ux < 0.0 && uy < 0.0, "shadows fall toward -x, -y like the cloud shadows: {:?}", mask.u);
         let ground = 5.5;

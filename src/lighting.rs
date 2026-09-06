@@ -15,14 +15,16 @@ fn mul(c: Rgb, l: [f32; 3]) -> Rgb {
     )
 }
 
-/// Summed point light at a world position. Height counts half as much as
-/// distance along the ground; flickering lights pulse on their own phase,
-/// dipping by `flicker_amount` at `flicker_omega` radians per second.
+/// Summed point light at a world position, in metres: positions are tiles
+/// and heights metres, and a light's radius is metres. Height counts half
+/// as much as distance along the ground; flickering lights pulse on their
+/// own phase, dipping by `flicker_amount` at `flicker_omega` radians per
+/// second.
 fn point_light_at(wx: f32, wy: f32, wz: f32, lights: &[&Light], t: f32) -> [f32; 3] {
     let mut pl = [0.0f32; 3];
     for (li, light) in lights.iter().enumerate() {
-        let dx = wx - light.mx as f32;
-        let dy = wy - light.my as f32;
+        let dx = (wx - light.mx as f32) * crate::map::TILE_METRES;
+        let dy = (wy - light.my as f32) * crate::map::TILE_METRES;
         let dz = (wz - light.z as f32) * 0.5;
         let d = (dx * dx + dy * dy + dz * dz).sqrt();
         if d >= light.radius {
@@ -126,7 +128,9 @@ mod tests {
 
     #[test]
     fn point_light_gives_its_intensity_at_zero_and_nothing_at_its_radius() {
-        let l = Light { mx: 2, my: 3, z: 1, color: [1.0, 0.5, 0.0], radius: 4.0, intensity: 1.8, falloff: 2.0, flicker_amount: 0.0, flicker_omega: 0.0 };
+        // The radius is metres and positions are tiles of 2 m (ADR-004), so
+        // a radius of 8 m reaches four tiles.
+        let l = Light { mx: 2, my: 3, z: 1, color: [1.0, 0.5, 0.0], radius: 8.0, intensity: 1.8, falloff: 2.0, flicker_amount: 0.0, flicker_omega: 0.0 };
         let lights = [&l];
         let at = |dx: f32| point_light_at(2.0 + dx, 3.0, 1.0, &lights, 0.0);
         assert_eq!(at(0.0), [1.8, 0.9, 0.0]);
@@ -135,8 +139,9 @@ mod tests {
         let (near, mid, edge) = (at(0.5), at(2.0), at(3.9));
         assert!(near[0] > mid[0] && mid[0] > edge[0] && edge[0] > 0.0, "it falls off through the radius");
         assert_eq!(near[2], 0.0, "a light with no blue adds no blue");
-        // Height counts half as much as ground distance.
-        let (above, beside) = (point_light_at(2.0, 3.0, 1.0 + 2.0, &lights, 0.0), point_light_at(2.0 + 1.0, 3.0, 1.0, &lights, 0.0));
+        // Height counts half as much as ground distance: four metres up is
+        // one tile along.
+        let (above, beside) = (point_light_at(2.0, 3.0, 1.0 + 4.0, &lights, 0.0), point_light_at(2.0 + 1.0, 3.0, 1.0, &lights, 0.0));
         assert_eq!(above, beside);
     }
 

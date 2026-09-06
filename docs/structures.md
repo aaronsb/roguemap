@@ -8,8 +8,8 @@ Trees are volumes on the same ray walk. The decision is
 [ADR-002](adr/ADR-002-block-geometry-structures-and-trees.md); this note
 is what is built.
 
-Sizes are metres: a tile is 2 m square, a height unit is one metre and
-draws as one row today (ADR-004 will make rows per metre depend on zoom).
+Sizes are metres: a tile is 2 m square and a metre of height draws as the
+zoom's rows per metre, 6 at 1:1 down to 0.75 at 1:8 (ADR-004).
 
 ## Data
 
@@ -136,11 +136,12 @@ Once per frame a mask is built in map space over the visible tiles
 highest sun ray any occluder blocks over each ground point; a surface
 point below that height is in shadow. Every occluder is a disc swept along
 the sun's ground direction, the one the cloud shadows use, by its height
-times the shadow length per unit of height (`World::shadow_per_unit`:
-half the cotangent of the sun's elevation, capped at 1.8 tiles per metre
-as the cloud shadows are capped, so dawn and dusk stretch shadows without
-covering the map; sweeps stop at 12 tiles). Terrain casts where the
-ground drops faster than the sun's ray along that direction; a stack is a
+times the shadow length per metre of height (`World::shadow_per_metre`:
+the cotangent of the sun's elevation over the tile's 2 m, capped at 1.8
+tiles per metre as the cloud shadows are capped, so dawn and dusk stretch
+shadows without covering the map; sweeps stop at 12 tiles). Terrain casts
+where the ground drops more than two tiles' worth of shadow across a tile
+along that direction; a stack is a
 disc over its footprint swept from the eaves plus half the roof peak; a
 canopy a disc of its radius swept from its base. An occluder never stamps
 its own footprint, and the light pass looks the mask up a fifth of a tile
@@ -156,17 +157,19 @@ cast yet.
 
 ## Level of detail
 
-| zoom (half width) | structures | trees | shadows |
-|---|---|---|---|
-| 0-1 (2-3) | column to the eaves, flat, material colours, no glyph bands | one-glyph billboard | terrain, stacks |
-| 2-3 (4-6) | profiles on, no window or door glyphs, 4 bisections | volumes with normal shading, trunks, outline glyphs, 30% fill; crown seams not supersampled | + canopies |
-| 4-5 (8-12) | windows, doors, roof glyphs | crown seams supersampled | |
-| 6 (16) | 5 bisections, door two cells wide | cactus arms, 45% fill | |
+Detail keys off the zoom's rows per metre (ADR-004), not its footprint:
+
+| zoom | rows per metre | structures | trees | shadows |
+|---|---|---|---|---|
+| far 2x1 (1:8) | 0.75 | column to the eaves, flat, material colours, no glyph bands | one-glyph billboard | terrain, stacks |
+| mid 4x1 (1:4) | 1.5 | profiles on, no window or door glyphs, 4 bisections | volumes with normal shading, trunks, outline glyphs, 30% fill; crown seams not supersampled | + canopies |
+| near 8x2 (1:2) | 3 | windows, doors, roof glyphs | | |
+| close 16x4 (1:1) | 6 | 5 bisections, door two cells wide | cactus arms, 45% fill, crown seams supersampled | |
 
 Nothing is placed per detail; the block kind, the species and the
 adjacency rules produce all of it. Measured at 168x71 in the snapshot
 timing (`frames=20`, seed 7, the filled world at the origin), every zoom
-draws in 9 to 14 ms.
+draws in 11 to 14 ms.
 
 ## Order of work
 
@@ -175,9 +178,11 @@ draws in 9 to 14 ms.
 2. Done: the structure test above the terrain with flat, gable and hip
    profiles; adjacency merging and face glyph bands; trees as volumes;
    cast shadows.
-3. Next: the settlement system paints towns and roads; the editor paints
+3. Done: the scale pass (ADR-004): heights are metres and project through
+   the zoom's rows per metre.
+4. Next: the settlement system paints towns and roads; the editor paints
    by hand through `Map::set_stack`; bridges (`deck`) and props casting
-   short shadows at the closest zooms; the scale pass (ADR-004).
+   short shadows at the closest zooms.
 
 ## Volumes are stand-ins
 

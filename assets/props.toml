@@ -10,7 +10,7 @@ density = 0.05
 terrain = ["rock", "dirt", "snow"]
 cover = []
 near_water = false
-min_zoom = 3
+min_zoom = 2
 tags = ["stone"]
 passable = false
 
@@ -26,7 +26,7 @@ density = 0.06
 terrain = ["rock", "dirt", "grass"]
 cover = ["moss", "dry"]
 near_water = false
-min_zoom = 3
+min_zoom = 2
 tags = ["stone"]
 
 [[prop]]
@@ -41,7 +41,7 @@ density = 0.09
 terrain = ["grass"]
 cover = ["grass"]
 near_water = false
-min_zoom = 3
+min_zoom = 2
 tags = ["flammable"]
 
 [[prop]]
@@ -56,7 +56,7 @@ density = 0.14
 terrain = ["sand", "grass"]
 cover = []
 near_water = true
-min_zoom = 3
+min_zoom = 2
 tags = ["flammable"]
 
 [[prop]]
@@ -71,7 +71,7 @@ density = 0.07
 terrain = ["grass", "dirt", "sand"]
 cover = ["dry"]
 near_water = false
-min_zoom = 3
+min_zoom = 2
 tags = ["flammable"]
 
 [[prop]]
@@ -86,7 +86,7 @@ density = 0.08
 terrain = ["grass", "rock"]
 cover = ["moss"]
 near_water = false
-min_zoom = 3
+min_zoom = 2
 tags = ["flammable"]
 
 [[prop]]
@@ -101,11 +101,11 @@ density = 0.0
 terrain = ["sand", "grass", "dirt", "rock", "snow"]
 cover = []
 near_water = false
-min_zoom = 3
+min_zoom = 2
 light = "campfire"
 emits = ["light", "heat"]
 affects = ["flammable"]
-reach = 1.5
+reach = 3.0
 passable = false
 heat = 1.0
 states = ["lit", "burnt"]

@@ -5,7 +5,7 @@ use crate::biome;
 use crate::canvas::{Canvas, Rgb};
 use crate::frame::Rect;
 use crate::input::{self, WORLDMAP};
-use crate::map::{Map, ALPINE_Z, SEA};
+use crate::map::{relief_fraction, Map, ROCK_Z, SEA};
 use crate::palette::{Palette, ROCK, SAND};
 use crate::ui::CHROME;
 use crate::world::World;
@@ -74,16 +74,16 @@ impl WorldMap {
         let plot = Self::plot_palette(map);
         let c = map.climate(x, y);
         if c.z < SEA {
-            let depth = ((SEA - c.z) as f32 / 3.0).clamp(0.0, 1.0);
+            let depth = ((SEA - c.z) as f32 / -crate::map::FLOOR).clamp(0.0, 1.0);
             return plot.water_shallow.lerp(plot.water_deep, depth);
         }
         let mut col = biome::ground_color(&map.assets.biomes[c.biome], world.season);
-        if c.z >= ALPINE_Z - 2 {
+        if c.z >= ROCK_Z {
             col = plot.surfaces[ROCK].color;
         } else if c.z == SEA {
             col = plot.surfaces[SAND].color;
         }
-        let lift = 0.8 + (c.z - SEA) as f32 * 0.03;
+        let lift = 0.8 + 0.36 * relief_fraction((c.z - SEA) as f32);
         col.scale(lift).lerp(plot.snow(), world.snow_at(c.temp))
     }
 
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn teleport_lands_on_the_nearest_land_tile_to_the_cursor() {
         // A lake with two islets; the cursor sits nearer the western one.
-        let map = Map::synthetic(24, 24, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (4, 10) || (x, y) == (20, 10) { 6 } else { 1 }));
+        let map = Map::synthetic(24, 24, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (4, 10) || (x, y) == (20, 10) { 6 } else { -4 }));
         let mut world = World::new(1);
         world.spawn_player(&map, 20, 10);
         let mut wm = WorldMap::new();

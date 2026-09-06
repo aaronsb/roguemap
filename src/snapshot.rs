@@ -7,10 +7,11 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use crate::assets::Assets;
+use crate::blocks::Stack;
 use crate::camera::Camera;
 use crate::canvas::Canvas;
 use crate::frame::FrameCtx;
-use crate::map::Map;
+use crate::map::{FixtureSpec, Flora, Map, Terrain};
 use crate::render::{Renderer, Scene};
 use crate::settings::Settings;
 use crate::tileset::Tileset;
@@ -54,14 +55,25 @@ impl SnapArgs {
 /// size, fill (1 for an unbounded world), cx, cy (tile to centre on),
 /// popover (1), fire (1 to place a campfire at centre), player (1), hud
 /// (0|1), worldmap (1) with scale, open (frame names of ui.toml, comma
-/// separated), frames (N, to time rendering).
+/// separated), frames (N, to time rendering), scene (`scale` for the
+/// yardstick of ADR-004: a person, an oak and a house on flat ground).
 pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> Canvas {
     let a = SnapArgs::parse(args);
     let (sw, sh) = (w as i32, h as i32);
     let seed = a.num("seed", 7.0) as u64;
     let size = a.num("size", 32.0) as usize;
     let tilesets = Tileset::all(&assets);
-    let mut map = Map::new(size, size, seed, assets.clone());
+    // `scene=scale` is the yardstick of ADR-004: flat ground with a 2 m
+    // person between an 18 m oak and a house, so one frame per zoom shows
+    // what a metre is worth there.
+    let scale = a.text("scene") == Some("scale");
+    let mut map = if scale {
+        let biome = assets.koppen.get("Cf").copied().unwrap_or(0);
+        let spec = FixtureSpec { w: 24, h: 24, z: 3, biome, terrain: Terrain::Grass, temp: 10, grass: 2, material: assets.biomes[biome].material };
+        Map::fixture(spec, assets.clone())
+    } else {
+        Map::new(size, size, seed, assets.clone())
+    };
     let mut world = World::new(seed);
 
     let mut settings = Settings::new(&assets);
@@ -111,7 +123,17 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         world.tod = tod;
         world.weather.precip = precip;
     }
-    if a.flag("player") {
+    if scale {
+        let (mx, my) = (map.w as i32 / 2, map.h as i32 / 2);
+        let oak = assets.species.iter().position(|s| s.name == "oak").unwrap_or(0) as u8;
+        let house = assets.blocks.iter().position(|b| b.name == "house").unwrap_or(0) as u8;
+        if let Some(mut t) = map.get(mx - 3, my) {
+            t.tree = Some(Flora { species: oak, variant: 2 });
+            map.set_tile(mx - 3, my, t);
+        }
+        map.set_stack(mx + 3, my, Some(Stack { kind: house, levels: 1 }));
+        world.spawn_player(&map, mx, my);
+    } else if a.flag("player") {
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
     }
     if a.flag("fire") {

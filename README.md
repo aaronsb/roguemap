@@ -24,6 +24,7 @@ Rendered by `make screenshots` with the canonical snapshot pipeline.
 |---|---|
 | ![island](docs/screenshots/island.png) The island view | ![rotated](docs/screenshots/rotated.png) Rotated 25 degrees off compass |
 | ![filled](docs/screenshots/filled.png) Filled world at 4x1 | ![closeup](docs/screenshots/closeup.png) Encounter zoom at 16x4 |
+| ![scale-zclose](docs/screenshots/scale-zclose.png) The yardstick at 1:1: a 2 m person, an 18 m oak, a house | ![scale-zfar](docs/screenshots/scale-zfar.png) The same ground at 1:8 |
 | ![night](docs/screenshots/night.png) Night, campfire and lit windows | ![winter](docs/screenshots/winter.png) Winter after two days of storm |
 | ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom | ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses |
 | ![worldmap](docs/screenshots/worldmap.png) World map, large extent | ![ascii](docs/screenshots/ascii.png) The ASCII glyph set |
@@ -52,7 +53,7 @@ the help line at the bottom of the screen.
 | `c` | centre on the player |
 | `r` / `R` | rotate a quarter turn about the screen centre |
 | `(` / `)` | rotate five degrees |
-| `z` / `Z` | zoom in / out through seven tile sizes, 2x1 to 16x4 cells |
+| `z` / `Z` | zoom in / out through the four scales: far 2x1 (1:8), mid 4x1 (1:4), near 8x2 (1:2), close 16x4 (1:1) |
 | `v` | toggle island / filled world view |
 | `g` | toggle PETSCII / ASCII glyphs |
 | `[` / `]` | step the season by a quarter |
@@ -262,14 +263,35 @@ direction, the one the cloud shadows use. The note is
 [ADR-002](docs/adr/ADR-002-block-geometry-structures-and-trees.md). Sizes
 in every table are metres, with a 2 m tile.
 
+## Scale
+
+The world is metres (ADR-004). A tile is 2 m square, the person 2 m tall,
+a house level 3 m, an oak 18 m; terrain runs from a sea bed 12 m down to
+120 m at the top of a range, and a tile's gameplay height is that field
+floored to whole metres. Each zoom is an exact halving of the next, and
+its footprint gives both scales:
+
+| zoom | footprint | ratio | columns per metre | rows per metre | a 2 m person |
+|---|---|---|---|---|---|
+| close | 16x4 | 1:1 | 11.3 | 6 | 12 rows |
+| near | 8x2 | 1:2 | 5.7 | 3 | 6 rows |
+| mid | 4x1 | 1:4 | 2.8 | 1.5 | 3 rows |
+| far | 2x1 | 1:8 | 1.4 | 0.75 | one glyph |
+
+Heights project through rows per metre, so an 18 m oak stands 108 rows at
+1:1 with the person under its canopy, and 13 rows at 1:8. One keypress
+moves one tile at every zoom — a whole block at 1:1, an eighth of one at
+1:8 — and shift with an arrow strides eight tiles.
+
 ## Level of detail
 
-Every zoom level carries its own sprite tier for the player and props. A
-tree is a single glyph at the two smallest zooms and a volume from 4x1 up,
-with the set's outline glyphs and normal shading; buildings are flat
-columns at the overview and gain roof profiles, then windows and doors, as
-the zoom grows. The player is `@` at the overview and a nine-row figure at
-the largest zoom.
+Detail keys off rows per metre. A tree is a single glyph at the overview
+and a volume from 1:4 up, with the set's outline glyphs and normal
+shading; buildings are flat columns at the overview and gain roof
+profiles, then windows and doors, as the zoom grows. Sprites pick the art
+tier whose rows are nearest what the thing stands at that zoom, and stand
+with their feet on the ground: the player is `@` at the overview and a
+twelve-row figure at 1:1.
 
 ## Headless snapshots
 
@@ -282,7 +304,9 @@ centre on), `zoom`, `rot` (quarter turns), `deg` (degrees), `t` (animation
 time), `tod`, `season`, `cover`, `wind`, `precip` (0..1), `simdays` (run a
 storm that many days first), `glyphs` (petscii or ascii), `player` (1),
 `fire` (1 for a campfire at the centre), `hud` (0 or 1), `popover` (1),
-`worldmap` (1) with `scale`, and `frames` (N, to time rendering). The output
+`worldmap` (1) with `scale`, `scene` (`scale` for the yardstick frame: a
+person between an oak and a house on flat ground), and `frames` (N, to time
+rendering). The output
 lists one cell per line as codepoint and foreground and background colour;
 `tools/cells2png.py` renders it with the Unscii font.
 

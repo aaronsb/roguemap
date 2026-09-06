@@ -155,8 +155,8 @@ impl Renderer {
     pub fn draw(&mut self, cv: &mut Canvas, sc: &Scene, opts: &RenderOptions) {
         self.frame_lights.clear();
         self.sky_pass(sc);
-        let (x0, y0, x1, y1) = self.visible_bounds(sc.cam);
-        let grid = HeightGrid::build(sc, x0, y0, x1, y1);
+        let (x0, y0, x1, y1) = self.visible_bounds(sc.cam, self.view_ceiling(sc));
+        let grid = HeightGrid::build(sc, x0, y0, x1, y1, self.w, self.h);
         self.shadow = ShadowMask::build(sc, &grid);
         self.heights = Some(grid);
         self.stack_lights(sc);
@@ -193,22 +193,57 @@ impl Renderer {
         }
     }
 
-    /// Map-space bounding box of everything that can appear on screen.
-    pub(crate) fn visible_bounds(&self, cam: &Camera) -> (i32, i32, i32, i32) {
+    /// Map-space bounding box of everything that can appear on screen, for
+    /// terrain reaching `top` metres. A tall thing far behind the view can
+    /// still show over the horizon, so the box stretches away from the
+    /// camera by however many tiles `top` is worth in rows — up to
+    /// `MAX_DEPTH`, past which a range hundreds of metres up is left out
+    /// rather than made to cost a frame.
+    pub(crate) fn visible_bounds(&self, cam: &Camera, top: f32) -> (i32, i32, i32, i32) {
+        /// Tiles the box may stretch beyond the ground the screen covers.
+        const MAX_DEPTH: f32 = 24.0;
         let corners = [(0.0, 0.0), (self.w as f32, 0.0), (0.0, self.h as f32), (self.w as f32, self.h as f32)];
-        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for &(sx, sy) in &corners {
-            for z in [0.0, crate::grid::TOP_CAP] {
-                let (x, y) = cam.unproject(sx, sy, z);
-                x0 = x0.min(x);
-                y0 = y0.min(y);
-                x1 = x1.max(x);
-                y1 = y1.max(y);
-            }
-        }
+        let ground = corners.map(|(sx, sy)| cam.unproject(sx, sy, 0.0));
+        let fold = |f: fn(f32, f32) -> f32, pick: fn((f32, f32)) -> f32, ps: &[(f32, f32)]| ps.iter().fold(pick(ps[0]), |a, &p| f(a, pick(p)));
+        let (gx0, gx1) = (fold(f32::min, |p| p.0, &ground), fold(f32::max, |p| p.0, &ground));
+        let (gy0, gy1) = (fold(f32::min, |p| p.1, &ground), fold(f32::max, |p| p.1, &ground));
+        let high = corners.map(|(sx, sy)| cam.unproject(sx, sy, top.max(0.0)));
+        let x0 = fold(f32::min, |p| p.0, &high).max(gx0 - MAX_DEPTH).min(gx0);
+        let x1 = fold(f32::max, |p| p.0, &high).min(gx1 + MAX_DEPTH).max(gx1);
+        let y0 = fold(f32::min, |p| p.1, &high).max(gy0 - MAX_DEPTH).min(gy0);
+        let y1 = fold(f32::max, |p| p.1, &high).min(gy1 + MAX_DEPTH).max(gy1);
         // Widest sprite art is about 16 columns either side of its tile,
         // and a crown reaches a few tiles from its trunk.
         let m = ((16.0 / cam.a()).ceil() as i32 + 2).max(5);
         (x0.floor() as i32 - m, y0.floor() as i32 - m, x1.ceil() as i32 + m, y1.ceil() as i32 + m)
+    }
+
+    /// How high the frame must look: the chunk ceilings over the tiles the
+    /// view can reach, plus what a crown or a roof adds over them. Two
+    /// passes, since a taller ceiling widens the box it was measured over.
+    fn view_ceiling(&self, sc: &Scene) -> f32 {
+        let mut top = 0.0f32;
+        for _ in 0..2 {
+            let (x0, y0, x1, y1) = self.visible_bounds(sc.cam, top);
+            // One sample every half chunk, so no chunk in the box is missed.
+            let step = 16;
+            let line = |a: i32, b: i32| (a..=b).step_by(step as usize).chain(std::iter::once(b)).collect::<Vec<i32>>();
+            let (xs, ys) = (line(x0, x1), line(y0, y1));
+            let ceiling = ys.iter().flat_map(|y| xs.iter().map(move |x| (*x, *y))).map(|(x, y)| sc.map.ceiling(x, y)).max().unwrap_or(0);
+            let next = (ceiling as f32 + crate::grid::CROWN_CAP).min(crate::grid::TOP_CAP);
+            if next <= top {
+                break;
+            }
+            top = next;
+        }
+        top
+    }
+
+    /// The tile range the frame is drawn over: the grid's, once it is built.
+    pub(crate) fn tile_bounds(&self, cam: &Camera) -> (i32, i32, i32, i32) {
+        match &self.heights {
+            Some(g) => g.bounds(),
+            None => self.visible_bounds(cam, 0.0),
+        }
     }
 }

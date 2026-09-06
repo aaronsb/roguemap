@@ -14,16 +14,61 @@ use crate::blocks::Stack;
 use crate::noise::{fbm, hash};
 use crate::volume::{size_scale, variant_scale};
 
-/// Tiles below this height are water; the water surface is drawn at this level.
-pub const SEA: i32 = 3;
+/// Sea level: heights are metres above it, so the shoreline is zero.
+pub const SEA: i32 = 0;
+/// The sea bed and the island's plinth: the walk stops here.
+pub const FLOOR: f32 = -12.0;
+/// Metres of water under the shoreline per unit of the generator's field.
+const DEPTH: f32 = 4.0;
 /// Height from which terrain is bare rock; the treeline sits a little below
 /// it and buildings up there are built of stone.
-pub const ALPINE_Z: i32 = 12;
-pub const MAX_Z: i32 = 14;
-/// Side of a tile in metres. Every size in the tables is in metres; a
-/// height unit is one metre and draws as one row (ADR-004 will make rows
-/// per metre depend on zoom).
+pub const ROCK_Z: i32 = 51;
+/// Height from which what is built is built of stone.
+pub const STONE_Z: i32 = 40;
+/// The alpine line: nothing grows above it and it is snow-capped.
+pub const ALPINE_Z: i32 = 76;
+/// Ceiling of the relief: the top of a range.
+pub const MAX_Z: i32 = RELIEF as i32;
+/// Metres from the shoreline to the top of a range (ADR-004).
+pub const RELIEF: f32 = 120.0;
+/// How the generator's field becomes metres: relief grows as this power of
+/// the field above the shoreline, so a valley floor is a metre or two over
+/// the water and only a range reaches `RELIEF`.
+const RELIEF_EXP: f32 = 1.6;
+/// The generator's field: unitless, `SEA_UNITS` at the shoreline and
+/// `FIELD_UNITS` at the top. Rivers, lakes and the biome bands are shaped
+/// in it, then `relief` turns it into metres.
+const FIELD_UNITS: f32 = 15.0;
+const SEA_UNITS: f32 = 3.0;
+/// Field value where bare rock starts; `ROCK_Z` is its height in metres.
+const ROCK_UNITS: f32 = 10.0;
+/// Degrees the air cools between the shoreline and the top of a range. The
+/// world's 300 m of relief stands in for a continent's, so the lapse rate
+/// follows `relief_fraction` rather than a real rate per metre, and the
+/// treeline, the snow line and the biome bands sit where they did.
+const LAPSE: f32 = 26.4;
+/// Side of a tile in metres. Every size in the tables is in metres, and a
+/// metre draws as `Camera::rows_per_metre` rows (ADR-004).
 pub const TILE_METRES: f32 = 2.0;
+
+/// Metres of height for a value of the generator's field: linear down to
+/// the sea bed, and a rising curve above the shoreline so lowlands are
+/// gentle and ranges reach `RELIEF`.
+pub fn relief(units: f32) -> f32 {
+    if units <= SEA_UNITS {
+        (units - SEA_UNITS) * DEPTH
+    } else {
+        RELIEF * ((units - SEA_UNITS) / (FIELD_UNITS - SEA_UNITS)).clamp(0.0, 1.0).powf(RELIEF_EXP)
+    }
+}
+
+/// Where a height stands in the world's relief, 0 at the shoreline and 1 at
+/// the top of a range: `relief` inverted. Height bands that were linear in
+/// the generator's field — the lapse rate, the world map's shading — are
+/// linear in this.
+pub fn relief_fraction(metres: f32) -> f32 {
+    (metres.max(0.0) / RELIEF).powf(1.0 / RELIEF_EXP)
+}
 
 const CHUNK: i32 = 32;
 /// Water bodies larger than this are treated as open water.
@@ -77,6 +122,8 @@ impl Stack {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Tile {
+    /// Gameplay height: the smooth field floored to whole metres, the
+    /// terrace the tile stands on.
     pub z: i32,
     pub terrain: Terrain,
     pub tree: Option<Flora>,
@@ -96,7 +143,7 @@ pub struct Tile {
     pub temp: i8,
     /// Whether a cardinal neighbour is water.
     pub near_water: bool,
-    /// Smooth height at the tile centre, before flooring.
+    /// Smooth height in metres at the tile centre, before flooring.
     pub hf: f32,
 }
 
@@ -156,7 +203,7 @@ pub struct Climate {
 pub struct FixtureSpec {
     pub w: usize,
     pub h: usize,
-    /// Tile height; the smooth field sits half a unit above it.
+    /// Tile height in metres; the smooth field sits half a metre above it.
     pub z: i32,
     /// Index into the biome table.
     pub biome: usize,
@@ -194,7 +241,7 @@ struct Chunk {
     max_z: i32,
 }
 
-/// Terrain kind from the height and climate at a tile.
+/// Terrain kind from the height in metres and the climate at a tile.
 fn terrain_for(z: i32, temp: f32, near_water: bool, patch: f32) -> Terrain {
     if z < SEA {
         Terrain::Water
@@ -202,7 +249,7 @@ fn terrain_for(z: i32, temp: f32, near_water: bool, patch: f32) -> Terrain {
         Terrain::Sand
     } else if temp <= -16.0 {
         Terrain::Snow
-    } else if z >= ALPINE_Z - 2 {
+    } else if z >= ROCK_Z {
         Terrain::Rock
     } else if patch > 0.72 {
         Terrain::Dirt
@@ -214,7 +261,7 @@ fn terrain_for(z: i32, temp: f32, near_water: bool, patch: f32) -> Terrain {
 /// Local building material: stone on rock and near the alpine zone,
 /// otherwise the biome's.
 fn material_for(terrain: Terrain, z: i32, biome: &Biome, stone: usize) -> usize {
-    if terrain == Terrain::Rock || z >= ALPINE_Z - 3 {
+    if terrain == Terrain::Rock || z >= STONE_Z {
         stone
     } else {
         biome.material
@@ -283,6 +330,33 @@ impl Map {
         Some(self.with_chunk(x, y, |c| c.tiles[(y.rem_euclid(CHUNK) * CHUNK + x.rem_euclid(CHUNK)) as usize]))
     }
 
+    /// The tiles of a range, row-major, generating each chunk once: the
+    /// per-frame grid reads thousands of tiles, and going chunk by chunk
+    /// keeps that to one lookup per chunk rather than one per tile.
+    pub fn tiles_in(&self, x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<Option<Tile>> {
+        let (w, h) = ((x1 - x0 + 1).max(0), (y1 - y0 + 1).max(0));
+        let mut out = vec![None; (w * h) as usize];
+        for cy in y0.div_euclid(CHUNK)..=y1.div_euclid(CHUNK) {
+            for cx in x0.div_euclid(CHUNK)..=x1.div_euclid(CHUNK) {
+                let (bx, by) = (cx * CHUNK, cy * CHUNK);
+                if self.bounded && (bx + CHUNK <= 0 || by + CHUNK <= 0 || bx >= self.w as i32 || by >= self.h as i32) {
+                    continue;
+                }
+                let mut chunks = self.chunks.borrow_mut();
+                let chunk = chunks.entry((cx, cy)).or_insert_with(|| self.generate_chunk(cx, cy));
+                for ty in y0.max(by)..=y1.min(by + CHUNK - 1) {
+                    for tx in x0.max(bx)..=x1.min(bx + CHUNK - 1) {
+                        if !self.contains(tx, ty) {
+                            continue;
+                        }
+                        out[((ty - y0) * w + (tx - x0)) as usize] = Some(chunk.tiles[((ty - by) * CHUNK + (tx - bx)) as usize]);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Ceiling over everything in the chunk containing a position (terrain,
     /// stacks and crowns), generating it if needed; zero outside a bounded
     /// map.
@@ -291,6 +365,18 @@ impl Map {
             return 0;
         }
         self.with_chunk(x, y, |c| c.max_z)
+    }
+
+    /// Highest anything reaches over the map's own tiles, in metres, from
+    /// the chunk ceilings. The view uses it to know how many rows the
+    /// terrain needs above its footprint.
+    pub fn relief_ceiling(&self) -> i32 {
+        let step = |n: usize| {
+            let last = n as i32 - 1;
+            (0..n as i32).step_by(CHUNK as usize).chain(std::iter::once(last)).collect::<Vec<i32>>()
+        };
+        let (xs, ys) = (step(self.w), step(self.h));
+        ys.iter().flat_map(|y| xs.iter().map(move |x| (*x, *y))).map(|(x, y)| self.ceiling(x, y)).max().unwrap_or(1).max(1)
     }
 
     /// Place or clear a stack on a tile, over what the generator put there,
@@ -327,29 +413,37 @@ impl Map {
         (cx, cy)
     }
 
-    /// Smooth height at a fractional position, in height units. A slow
+    /// Smooth height at a fractional position, in metres. A slow
     /// continental field sets oceans, plains and ranges over hundreds of
     /// tiles; local noise adds hills; rivers follow the mid-level contour of
-    /// another slow field. Tile heights are this field floored at the tile
-    /// centre, so the column geometry is a terrace of it.
+    /// another slow field. The shaping happens in the generator's own units;
+    /// `relief` turns the result into metres. Tile heights are this field
+    /// floored at the tile centre, so the column geometry is a terrace of it
+    /// one metre at a time.
     pub fn height_smooth(&self, xf: f32, yf: f32) -> f32 {
         if let Some(f) = &self.fixture {
             return f.z as f32 + 0.5;
         }
+        relief(self.field(xf, yf))
+    }
+
+    /// The generator's height field in its own units, before `relief`.
+    fn field(&self, xf: f32, yf: f32) -> f32 {
         let local = fbm(xf * 0.045, yf * 0.045, self.seed, 4);
         let n = self.control_height(xf, yf) * 0.62 + local * 0.38;
         let n = ((n - 0.5) * 1.6 + 0.5).clamp(0.0, 0.999);
-        let mut z = n.powf(1.15) * (MAX_Z as f32 + 1.0);
+        let mut z = n.powf(1.15) * FIELD_UNITS;
 
-        if z > SEA as f32 + 1.0 && z < (ALPINE_Z - 2) as f32 {
+        // Rivers are cut in the field, between the shore and the highlands.
+        if z > SEA_UNITS + 1.0 && z < ROCK_UNITS {
             let r = crate::noise::value(xf * 0.012 + 5.0, yf * 0.012 + 9.0, self.seed ^ 0x51E);
             let d = (r - 0.5).abs();
             if d < 0.008 {
-                z = SEA as f32 - 1.5;
+                z = SEA_UNITS - 1.5;
             } else if d < 0.016 {
-                z = z.min(SEA as f32 - 0.5);
+                z = z.min(SEA_UNITS - 0.5);
             } else if d < 0.045 {
-                z = z.min(SEA as f32 + (d - 0.016) * 90.0 + 0.5);
+                z = z.min(SEA_UNITS + (d - 0.016) * 90.0 + 0.5);
             }
         }
         z
@@ -366,7 +460,7 @@ impl Map {
     }
 
     /// Fine relief added to the smooth field at close zooms: fractal detail
-    /// under one height unit, so it never changes a tile's terrace but gives
+    /// under a metre, so it never changes a tile's terrace but gives
     /// slopes, shorelines and patches sub-tile shape.
     pub fn detail(&self, xf: f32, yf: f32, octaves: u32) -> f32 {
         if octaves == 0 || self.fixture.is_some() {
@@ -403,7 +497,7 @@ impl Map {
             Terrain::Sand
         } else if temp <= -16.0 {
             Terrain::Snow
-        } else if h >= (ALPINE_Z - 2) as f32 {
+        } else if h >= ROCK_Z as f32 {
             Terrain::Rock
         } else if self.patch(xf, yf) > 0.72 {
             Terrain::Dirt
@@ -416,12 +510,14 @@ impl Map {
         self.height(x, y) < SEA
     }
 
-    /// Annual mean temperature: a slow latitude-like field, minus a lapse
-    /// rate with height, so the same region cools going uphill.
+    /// Annual mean temperature: a slow latitude-like field, minus the lapse
+    /// rate with height, so the same region cools going uphill. The lapse
+    /// follows the relief curve, so the bands sit where they did before
+    /// heights became metres (`LAPSE`).
     pub fn temperature(&self, x: i32, y: i32, z: i32) -> f32 {
         let lat = fbm(x as f32 * 0.0022, y as f32 * 0.0022, self.seed ^ 0x7E, 2) * 2.0 - 1.0;
         let local = fbm(x as f32 * 0.02, y as f32 * 0.02, self.seed ^ 0x7F, 2) * 2.0 - 1.0;
-        26.0 - 36.0 * (lat + 1.0) * 0.5 + local * 3.0 - (z.max(SEA) - SEA) as f32 * 2.2
+        26.0 - 36.0 * (lat + 1.0) * 0.5 + local * 3.0 - LAPSE * relief_fraction((z.max(SEA) - SEA) as f32)
     }
 
     /// Precipitation on a 0..100 scale from a slow moisture field.
@@ -626,9 +722,9 @@ mod tests {
 
     #[test]
     fn synthetic_tiles_come_from_the_closure() {
-        let m = Map::synthetic(8, 8, test_assets(), 1, |x, y| Tile::flat(if (x, y) == (3, 4) { 9 } else { 2 }));
+        let m = Map::synthetic(8, 8, test_assets(), 1, |x, y| Tile::flat(if (x, y) == (3, 4) { 9 } else { -2 }));
         assert_eq!(m.get(3, 4).unwrap().z, 9);
-        assert_eq!(m.get(0, 0).unwrap().terrain, Terrain::Water);
+        assert_eq!(m.get(0, 0).unwrap().terrain, Terrain::Water, "below sea level is water");
         assert_eq!(m.ceiling(0, 0), 10, "the ceiling rounds the smooth height 9.5 up");
         assert!(m.get(8, 0).is_none());
     }
@@ -658,7 +754,7 @@ mod tests {
 
     #[test]
     fn nearest_land_is_the_closest_land_tile_to_a_water_cursor() {
-        let m = Map::synthetic(16, 16, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (10, 6) { 5 } else { 1 }));
+        let m = Map::synthetic(16, 16, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (10, 6) { 5 } else { -2 }));
         assert_eq!(m.nearest_land(2, 2), (10, 6));
         assert_eq!(m.nearest_land(15, 15), (10, 6));
         assert_eq!(m.nearest_land(10, 6), (10, 6), "a land cursor is its own nearest land");
@@ -769,6 +865,48 @@ mod tests {
         assert!(m.ceiling(6, 6) as f32 >= t.top(&m.assets), "the ceiling covers the placed tree's crown");
         m.set_tile(40, 40, t);
         assert!(m.get(40, 40).is_none());
+    }
+
+    #[test]
+    fn relief_puts_a_valley_floor_a_few_metres_over_the_water_and_a_range_at_the_ceiling() {
+        // The generator's field becomes metres through `relief` (ADR-004):
+        // the shoreline is zero, the sea bed FLOOR, a valley floor a metre
+        // or two up and the top of a range RELIEF.
+        assert_eq!(relief(SEA_UNITS), 0.0);
+        assert_eq!(relief(0.0), FLOOR);
+        assert_eq!(relief(FIELD_UNITS), RELIEF);
+        let valley = relief(SEA_UNITS + 1.0);
+        assert!((1.0..4.0).contains(&valley), "a valley floor is a few metres over the water: {valley}");
+        assert!(relief(ROCK_UNITS).round() as i32 == ROCK_Z, "bare rock starts at ROCK_Z: {}", relief(ROCK_UNITS));
+        // The curve rises, and `relief_fraction` inverts it.
+        let mut last = FLOOR;
+        for i in 0..=60 {
+            let u = i as f32 * 0.25;
+            let m = relief(u);
+            assert!(m >= last, "the curve rises at {u}");
+            last = m;
+            if u > SEA_UNITS {
+                let back = relief_fraction(m) * (FIELD_UNITS - SEA_UNITS) + SEA_UNITS;
+                assert!((back - u).abs() < 0.01, "relief_fraction inverts relief at {u}: {back}");
+            }
+        }
+    }
+
+    #[test]
+    fn generated_heights_are_metres_within_the_relief() {
+        let mut m = Map::new(8, 8, 7, test_assets());
+        m.bounded = false;
+        let (mut lowest, mut highest) = (f32::MAX, f32::MIN);
+        for y in (-400..400).step_by(37) {
+            for x in (-400..400).step_by(31) {
+                let h = m.height_smooth(x as f32, y as f32);
+                lowest = lowest.min(h);
+                highest = highest.max(h);
+                assert!((FLOOR..=RELIEF).contains(&h), "({x}, {y}): {h} m is outside the relief");
+                assert_eq!(m.height(x, y), m.height_smooth(x as f32 + 0.5, y as f32 + 0.5).floor() as i32, "the tile terraces at whole metres");
+            }
+        }
+        assert!(lowest < 0.0 && highest > 40.0, "the sample holds sea bed and highlands: {lowest} to {highest}");
     }
 
     #[test]

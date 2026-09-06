@@ -11,8 +11,11 @@ pub enum Action {
     /// `assets/ui.toml` carries the same key, which a test checks.
     Toggle(&'static str),
     Quit,
-    /// Move the player by a screen (or map) direction.
+    /// Move the player by a screen (or map) direction, one tile per press
+    /// at every zoom.
     Walk(i32, i32),
+    /// Move the player eight tiles that way: a stride at any zoom.
+    Run(i32, i32),
     /// Slide the view by whole tiles.
     Pan(i32, i32),
     Centre,
@@ -37,9 +40,13 @@ pub enum Action {
 }
 
 /// A group of keys that share a help entry. `label` names the keys on the
-/// help line, blank to keep the group off it.
+/// help line, blank to keep the group off it. `shift` marks a group that
+/// needs the shift key; it only tells a plain press from a shifted one
+/// where the key is not a character, since shift with a letter arrives as
+/// the capital.
 pub struct Binding {
     pub keys: &'static [(KeyCode, Action)],
+    pub shift: bool,
     pub label: &'static str,
     pub help: &'static str,
 }
@@ -48,9 +55,10 @@ use Action::*;
 use KeyCode::{Char, Down, Enter, Esc, Left, Right, Tab, Up};
 
 pub const SCENE: &[Binding] = &[
-    Binding { keys: &[(Tab, Toggle("settings")), (Char('o'), Toggle("settings"))], label: "tab", help: "settings" },
-    Binding { keys: &[(Char('m'), Toggle("worldmap"))], label: "m", help: "world map" },
+    Binding { shift: false, keys: &[(Tab, Toggle("settings")), (Char('o'), Toggle("settings"))], label: "tab", help: "settings" },
+    Binding { shift: false, keys: &[(Char('m'), Toggle("worldmap"))], label: "m", help: "world map" },
     Binding {
+        shift: false,
         keys: &[
             (Char('w'), Walk(0, -1)),
             (Char('k'), Walk(0, -1)),
@@ -64,42 +72,51 @@ pub const SCENE: &[Binding] = &[
         label: "wasd/hjkl",
         help: "walk",
     },
-    Binding { keys: &[(Left, Pan(1, 0)), (Right, Pan(-1, 0)), (Up, Pan(0, 1)), (Down, Pan(0, -1))], label: "arrows", help: "pan" },
-    Binding { keys: &[(Char('c'), Centre)], label: "c", help: "centre" },
+    Binding { shift: false, keys: &[(Left, Pan(1, 0)), (Right, Pan(-1, 0)), (Up, Pan(0, 1)), (Down, Pan(0, -1))], label: "arrows", help: "pan" },
     Binding {
+        shift: true,
+        keys: &[(Up, Run(0, -1)), (Down, Run(0, 1)), (Left, Run(-1, 0)), (Right, Run(1, 0))],
+        label: "shift+arrows",
+        help: "run eight",
+    },
+    Binding { shift: false, keys: &[(Char('c'), Centre)], label: "c", help: "centre" },
+    Binding {
+        shift: false,
         keys: &[(Char('r'), RotateQuarter(1)), (Char('R'), RotateQuarter(-1)), (Char('('), RotateDegrees(-5.0)), (Char(')'), RotateDegrees(5.0))],
         label: "r/R ( )",
         help: "rotate",
     },
-    Binding { keys: &[(Char('z'), Zoom(1)), (Char('Z'), Zoom(-1))], label: "z/Z", help: "zoom" },
-    Binding { keys: &[(Char('v'), Cycle("view"))], label: "v", help: "fill" },
-    Binding { keys: &[(Char('g'), Cycle("glyphs"))], label: "g", help: "glyphs" },
-    Binding { keys: &[(Char('['), StepSeason(-0.25)), (Char(']'), StepSeason(0.25))], label: "[ ]", help: "season" },
-    Binding { keys: &[(Char(','), StepHour(-1.0)), (Char('.'), StepHour(1.0))], label: ", .", help: "time" },
-    Binding { keys: &[(Char('p'), Cycle("clock"))], label: "p", help: "pause" },
-    Binding { keys: &[(Char('W'), Cycle("weather"))], label: "W", help: "weather" },
-    Binding { keys: &[(Char('f'), Campfire)], label: "f", help: "fire" },
-    Binding { keys: &[(Char('F'), ClearFires)], label: "F", help: "clear" },
-    Binding { keys: &[(Char('H'), Cycle("hud"))], label: "H", help: "hud" },
-    Binding { keys: &[(Char('i'), Toggle("inventory"))], label: "i", help: "inventory" },
-    Binding { keys: &[(Char('I'), Toggle("stats"))], label: "I", help: "stats" },
-    Binding { keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
-    Binding { keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
-    Binding { keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
+    Binding { shift: false, keys: &[(Char('z'), Zoom(1)), (Char('Z'), Zoom(-1))], label: "z/Z", help: "zoom" },
+    Binding { shift: false, keys: &[(Char('v'), Cycle("view"))], label: "v", help: "fill" },
+    Binding { shift: false, keys: &[(Char('g'), Cycle("glyphs"))], label: "g", help: "glyphs" },
+    Binding { shift: false, keys: &[(Char('['), StepSeason(-0.25)), (Char(']'), StepSeason(0.25))], label: "[ ]", help: "season" },
+    Binding { shift: false, keys: &[(Char(','), StepHour(-1.0)), (Char('.'), StepHour(1.0))], label: ", .", help: "time" },
+    Binding { shift: false, keys: &[(Char('p'), Cycle("clock"))], label: "p", help: "pause" },
+    Binding { shift: false, keys: &[(Char('W'), Cycle("weather"))], label: "W", help: "weather" },
+    Binding { shift: false, keys: &[(Char('f'), Campfire)], label: "f", help: "fire" },
+    Binding { shift: false, keys: &[(Char('F'), ClearFires)], label: "F", help: "clear" },
+    Binding { shift: false, keys: &[(Char('H'), Cycle("hud"))], label: "H", help: "hud" },
+    Binding { shift: false, keys: &[(Char('i'), Toggle("inventory"))], label: "i", help: "inventory" },
+    Binding { shift: false, keys: &[(Char('I'), Toggle("stats"))], label: "I", help: "stats" },
+    Binding { shift: false, keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
+    Binding { shift: false, keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
+    Binding { shift: false, keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
 ];
 
 pub const SETTINGS: &[Binding] = &[
-    Binding { keys: &[(Up, CursorMove(-1)), (Char('k'), CursorMove(-1)), (Down, CursorMove(1)), (Char('j'), CursorMove(1))], label: "up/down", help: "select" },
+    Binding { shift: false, keys: &[(Up, CursorMove(-1)), (Char('k'), CursorMove(-1)), (Down, CursorMove(1)), (Char('j'), CursorMove(1))], label: "up/down", help: "select" },
     Binding {
+        shift: false,
         keys: &[(Left, Adjust(-1)), (Char('h'), Adjust(-1)), (Right, Adjust(1)), (Char('l'), Adjust(1)), (Enter, Adjust(1)), (Char(' '), Adjust(1))],
         label: "left/right",
         help: "change",
     },
-    Binding { keys: &[(Esc, Close), (Tab, Close), (Char('q'), Close)], label: "esc", help: "close" },
+    Binding { shift: false, keys: &[(Esc, Close), (Tab, Close), (Char('q'), Close)], label: "esc", help: "close" },
 ];
 
 pub const WORLDMAP: &[Binding] = &[
     Binding {
+        shift: false,
         keys: &[
             (Up, CursorStep(0, -1)),
             (Char('k'), CursorStep(0, -1)),
@@ -117,21 +134,24 @@ pub const WORLDMAP: &[Binding] = &[
         label: "arrows",
         help: "move",
     },
-    Binding { keys: &[(Char('z'), Extent(1)), (Char('Z'), Extent(-1))], label: "z", help: "extent" },
-    Binding { keys: &[(Enter, Teleport), (Char('t'), Teleport)], label: "enter", help: "teleport" },
-    Binding { keys: &[(Esc, Close), (Char('m'), Close), (Char('q'), Close)], label: "m/esc", help: "close" },
+    Binding { shift: false, keys: &[(Char('z'), Extent(1)), (Char('Z'), Extent(-1))], label: "z", help: "extent" },
+    Binding { shift: false, keys: &[(Enter, Teleport), (Char('t'), Teleport)], label: "enter", help: "teleport" },
+    Binding { shift: false, keys: &[(Esc, Close), (Char('m'), Close), (Char('q'), Close)], label: "m/esc", help: "close" },
 ];
 
 /// Keys every focused frame shares (ADR-005). A frame's own content sees
 /// the key first, so a prompt collects characters before these apply.
 pub const FRAME: &[Binding] = &[
-    Binding { keys: &[(Up, CursorMove(-1)), (Char('k'), CursorMove(-1)), (Down, CursorMove(1)), (Char('j'), CursorMove(1))], label: "up/down", help: "scroll" },
-    Binding { keys: &[(Esc, Close)], label: "esc", help: "close" },
+    Binding { shift: false, keys: &[(Up, CursorMove(-1)), (Char('k'), CursorMove(-1)), (Down, CursorMove(1)), (Char('j'), CursorMove(1))], label: "up/down", help: "scroll" },
+    Binding { shift: false, keys: &[(Esc, Close)], label: "esc", help: "close" },
 ];
 
-/// The action a key triggers in a mode.
-pub fn lookup(table: &[Binding], key: KeyCode) -> Option<Action> {
-    table.iter().flat_map(|b| b.keys.iter()).find(|(k, _)| *k == key).map(|&(_, a)| a)
+/// The action a key triggers in a mode. A shifted press takes a `shift`
+/// group first, then falls back to the plain groups, since a capital letter
+/// carries the modifier too.
+pub fn lookup(table: &[Binding], key: KeyCode, shift: bool) -> Option<Action> {
+    let find = |want: bool| table.iter().filter(|b| b.shift == want).flat_map(|b| b.keys.iter()).find(|(k, _)| *k == key).map(|&(_, a)| a);
+    if shift { find(true).or_else(|| find(false)) } else { find(false) }
 }
 
 /// The help line for a mode: every labelled group as "keys action", joined
@@ -148,7 +168,7 @@ mod tests {
     #[test]
     fn keys_are_unique_within_a_mode() {
         for (name, table) in [("scene", SCENE), ("settings", SETTINGS), ("worldmap", WORLDMAP), ("frame", FRAME)] {
-            let keys: Vec<KeyCode> = table.iter().flat_map(|b| b.keys.iter().map(|(k, _)| *k)).collect();
+            let keys: Vec<(bool, KeyCode)> = table.iter().flat_map(|b| b.keys.iter().map(|(k, _)| (b.shift, *k))).collect();
             for (i, k) in keys.iter().enumerate() {
                 assert!(!keys[..i].contains(k), "{name}: {k:?} bound twice");
             }
@@ -157,10 +177,15 @@ mod tests {
 
     #[test]
     fn lookup_finds_aliases() {
-        assert_eq!(lookup(SCENE, Char('k')), Some(Walk(0, -1)));
-        assert_eq!(lookup(SCENE, Tab), Some(Toggle("settings")));
-        assert_eq!(lookup(SCENE, Char('x')), None);
-        assert_eq!(lookup(WORLDMAP, Char('t')), Some(Teleport));
+        assert_eq!(lookup(SCENE, Char('k'), false), Some(Walk(0, -1)));
+        assert_eq!(lookup(SCENE, Tab, false), Some(Toggle("settings")));
+        assert_eq!(lookup(SCENE, Char('x'), false), None);
+        assert_eq!(lookup(WORLDMAP, Char('t'), false), Some(Teleport));
+        // Arrows pan; with shift they are a stride of eight tiles, and a
+        // shifted key with no group of its own still finds its plain one.
+        assert_eq!(lookup(SCENE, Up, false), Some(Pan(0, 1)));
+        assert_eq!(lookup(SCENE, Up, true), Some(Run(0, -1)));
+        assert_eq!(lookup(SCENE, Char('Z'), true), Some(Zoom(-1)));
     }
 
     #[test]

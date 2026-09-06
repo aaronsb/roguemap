@@ -44,7 +44,11 @@ impl Seasonal {
     }
 }
 
-fn three() -> u8 {
+fn near_zoom() -> u8 {
+    2
+}
+
+fn three_levels() -> u8 {
     3
 }
 
@@ -111,7 +115,7 @@ pub struct HooksRow {
     /// Tags it can act on within reach.
     #[serde(default, skip_serializing_if = "is_none_or_empty")]
     pub affects: Vec<String>,
-    /// How far its effects act, in tiles; zero means it only emits.
+    /// How far its effects act, in metres; zero means it only emits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reach: Option<f32>,
 }
@@ -435,8 +439,8 @@ pub struct PropRow {
     pub cover: Vec<Cover>,
     #[serde(default)]
     pub near_water: bool,
-    /// Smallest zoom the prop is drawn at.
-    #[serde(default = "three")]
+    /// Smallest zoom the prop is drawn at; near by default.
+    #[serde(default = "near_zoom")]
     pub min_zoom: u8,
     #[serde(flatten)]
     pub hooks: HooksRow,
@@ -506,7 +510,7 @@ pub struct BlockRow {
     #[serde(default = "yes")]
     pub door: bool,
     /// Validation and editor cap on levels.
-    #[serde(default = "three")]
+    #[serde(default = "three_levels")]
     pub max_levels: u8,
     /// Bridge: the top sits at the bank height over water.
     #[serde(default)]
@@ -532,13 +536,15 @@ pub struct CreatureRow {
     #[serde(flatten)]
     pub identity: IdentityRow,
     pub art: String,
+    /// Width, depth and height in metres: a person is 2 m tall.
+    pub size: [f32; 3],
     pub color: Rgb,
     #[serde(alias = "glyph_color")]
     pub glyph: Rgb,
     /// Terrain it may walk on; absent means every land kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub can_enter: Option<Vec<Terrain>>,
-    /// Tiles per second.
+    /// Metres per second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f32>,
     /// Tags it eats.
@@ -547,7 +553,7 @@ pub struct CreatureRow {
     /// idle, wander, graze, flee, hunt, patrol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviour: Option<String>,
-    /// Perception range in tiles.
+    /// Perception range in metres.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sight: Option<f32>,
     /// Block kind it returns to at night.
@@ -631,7 +637,7 @@ pub struct LightRow {
     pub identity: IdentityRow,
     /// Colour as 0..1 floats.
     pub color: [f32; 3],
-    /// Throw in tiles.
+    /// Throw in metres.
     pub radius: f32,
     pub intensity: f32,
     /// Falloff exponent.
@@ -785,18 +791,20 @@ pub struct TinyRefs {
 
 // art/**/*.txt
 
-/// Sprite tiers by zoom. A tier names the zoom its sprite is used from
-/// (`min_zoom`); a sprite uses the tier with the largest `min_zoom` at or
-/// below the zoom, and a header may override a tier's default.
+/// Sprite tiers, one per zoom (ADR-004): tiny is 1:8, small 1:4, medium
+/// 1:2 and large 1:1. A tier names the zoom its sprite is drawn at
+/// (`min_zoom`), which is what the editor's panes show; what the scene
+/// draws is the tier whose row count is nearest the thing's height in rows
+/// at that zoom (`ArtIndex::for_rows`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Tier {
-    /// Zooms 0 and 1.
+    /// Zoom 0, far, 1:8.
     Tiny = 0,
-    /// Zooms 2 and 3.
+    /// Zoom 1, mid, 1:4.
     Small = 1,
-    /// Zooms 4 and 5.
+    /// Zoom 2, near, 1:2.
     Medium = 2,
-    /// Zoom 6.
+    /// Zoom 3, close, 1:1.
     Large = 3,
 }
 
@@ -804,22 +812,12 @@ pub const TIERS: [Tier; 4] = [Tier::Tiny, Tier::Small, Tier::Medium, Tier::Large
 
 impl Tier {
     pub fn of_zoom(zoom: usize) -> Tier {
-        match zoom {
-            0 | 1 => Tier::Tiny,
-            2 | 3 => Tier::Small,
-            4 | 5 => Tier::Medium,
-            _ => Tier::Large,
-        }
+        TIERS[zoom.min(TIERS.len() - 1)]
     }
 
-    /// The zoom a tier is drawn from by default.
+    /// The zoom a tier is drawn at by default: its own.
     pub fn min_zoom(self) -> usize {
-        match self {
-            Tier::Tiny => 0,
-            Tier::Small => 2,
-            Tier::Medium => 4,
-            Tier::Large => 6,
-        }
+        self as usize
     }
 
     pub fn name(self) -> &'static str {
@@ -934,12 +932,12 @@ mod tests {
         assert_eq!(a.tier, Tier::Small);
         assert_eq!(a.center, 2);
         assert_eq!(a.base_rows, 1);
-        assert_eq!(a.min_zoom, 2);
+        assert_eq!(a.min_zoom, 1, "the small tier is drawn at the mid zoom");
         assert_eq!(a.rows, vec![" ab ".to_string(), "cdef".to_string()]);
         assert_eq!(ArtFile::parse(&a.to_text()).unwrap(), a);
-        let b = ArtFile::parse("# name=x tier=large min_zoom=5\nab\n").unwrap();
-        assert_eq!(b.min_zoom, 5);
-        assert!(b.to_text().contains(" min_zoom=5"));
+        let b = ArtFile::parse("# name=x tier=large min_zoom=2\nab\n").unwrap();
+        assert_eq!(b.min_zoom, 2);
+        assert!(b.to_text().contains(" min_zoom=2"));
         assert_eq!(ArtFile::parse(&b.to_text()).unwrap(), b);
         assert!(ArtFile::parse("# name=x tier=large min_zoom=9\nab\n").is_err());
     }
@@ -956,11 +954,13 @@ mod tests {
 
     #[test]
     fn tiers_follow_zooms() {
-        assert_eq!(Tier::of_zoom(0), Tier::Tiny);
-        assert_eq!(Tier::of_zoom(1), Tier::Tiny);
-        assert_eq!(Tier::of_zoom(3), Tier::Small);
-        assert_eq!(Tier::of_zoom(5), Tier::Medium);
-        assert_eq!(Tier::of_zoom(6), Tier::Large);
+        // One tier per zoom, tiny at the overview and large at 1:1.
+        assert_eq!(crate::tileset::ZOOMS.len(), TIERS.len());
+        for (zoom, tier) in TIERS.iter().enumerate() {
+            assert_eq!(Tier::of_zoom(zoom), *tier);
+            assert_eq!(tier.min_zoom(), zoom);
+        }
+        assert_eq!(Tier::of_zoom(9), Tier::Large, "past the last zoom is the last tier");
         assert_eq!(Tier::parse("medium"), Some(Tier::Medium));
     }
 

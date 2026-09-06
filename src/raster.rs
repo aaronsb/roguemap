@@ -9,29 +9,34 @@ use crate::blocks::{face_normal, Ground, Profile, Roof, NO_FACE};
 use crate::camera::Camera;
 use crate::canvas::Rgb;
 use crate::grid::{Geo, HeightGrid, TOP_CAP};
-use crate::map::{Terrain, Tile, SEA};
+use crate::map::{Terrain, Tile, FLOOR, SEA, TILE_METRES};
 use crate::noise::{hash, ifloor, smoothstep};
 use crate::palette::{surface_color, DIRT};
 use crate::render::{GCell, Hit, HitKind, Renderer, Scene, FACE_LEFT, FACE_RIGHT, FACE_TOP, SKY_DEPTH};
 use crate::volume::Part;
 
-/// Detail octaves for a zoom: none at the overview, more up close.
+/// Detail octaves for a zoom: none at the overview, more up close. Keyed
+/// off rows per metre, as the rest of the level of detail is (ADR-004).
 pub(crate) fn detail_octaves(cam: &Camera) -> u32 {
-    match cam.hw {
-        0..=3 => 0,
-        4..=6 => 1,
-        7..=12 => 2,
-        _ => 3,
+    let rpm = cam.rows_per_metre();
+    if rpm < 1.0 {
+        0
+    } else if rpm < 2.0 {
+        1
+    } else if rpm < 4.0 {
+        2
+    } else {
+        3
     }
 }
 
 /// What the walk draws at a zoom (the level-of-detail table of ADR-002).
 #[derive(Clone, Copy)]
-struct Lod {
+pub(crate) struct Lod {
     /// Roof profiles; below this stacks are flat columns.
     profiles: bool,
     /// Trees as volumes; below this they are one-glyph billboards.
-    volumes: bool,
+    pub(crate) volumes: bool,
     /// Window and door bands, roof glyphs and normal shading.
     bands: bool,
     /// Supersample the seams of crowns too; below this only the set's
@@ -42,9 +47,15 @@ struct Lod {
     bisections: u32,
 }
 
+/// The level of detail at a zoom, by rows per metre: 0.75 far, 1.5 mid,
+/// 3 near, 6 close.
+pub(crate) fn lod_of(rows_per_metre: f32) -> Lod {
+    let rpm = rows_per_metre;
+    Lod { profiles: rpm >= 1.5, volumes: rpm >= 1.5, bands: rpm >= 3.0, canopy_aa: rpm >= 6.0, close: rpm >= 6.0, bisections: if rpm >= 6.0 { 5 } else { 4 } }
+}
+
 fn lod(cam: &Camera) -> Lod {
-    let hw = cam.hw;
-    Lod { profiles: hw >= 4, volumes: hw >= 4, bands: hw >= 8, canopy_aa: hw >= 8, close: hw >= 16, bisections: if hw >= 16 { 5 } else { 4 } }
+    lod_of(cam.rows_per_metre())
 }
 
 /// The sun's ground direction, toward +x +y as the terrain shading has it.
@@ -169,7 +180,7 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
         Terrain::Water => {
             let wave = sc.chop * smoothstep(6.0, 160.0, tile.body_size as f32);
             let phase = (sc.t * (0.6 + wave) + sx as f32 * 0.13 + sy as f32 * 0.37 + (hv >> 16) as f32 * 0.001).sin();
-            let pond = tile.body_size < 60 && tile.z >= SEA - 1;
+            let pond = tile.body_size < 60 && tile.z >= SEA - 4;
             if pond && vig > 0.3 && r < density_of.cattail + 0.06 * vig {
                 let ch = ts.cattail[((hv >> 20) % 2) as usize];
                 return (ch, Rgb(120, 140, 70).lerp(Rgb(150, 120, 60), 1.0 - vig));
@@ -309,17 +320,41 @@ impl Renderer {
         let p0 = cam.unproject(sx, sy, 0.0);
         let (s, c) = cam.angle.sin_cos();
         let b = cam.b();
-        let d = (s / b, c / b);
-        let top = grid.top_for_ray(p0.0, p0.1, d).min(start);
-        let steps = (2.0 / b).ceil().max(1.0) as i32;
+        // Tiles of ground the point moves per metre of height, so that the
+        // screen position stays put: heights project through rows per metre.
+        let rpm = cam.rows_per_metre();
+        let d = (s * rpm / b, c * rpm / b);
+        // Only the heights whose ground point lies in the grid can be met,
+        // and outside them the walk would step through hundreds of metres of
+        // air over a range it cannot see.
+        let (zlo, zhi) = grid.z_span(p0, d)?;
+        let top = grid.max_top.min(start).min(zhi);
+        // Two screen rows per step, which is about a tile of ground at
+        // every zoom: fine enough that a step cannot cross a terrace.
+        let steps = (rpm / 2.0).ceil().max(1.0) as i32;
+        let bottom = ((zlo.max(FLOOR)) * steps as f32).floor() as i32;
         let mut i = (top * steps as f32).ceil() as i32;
         let mut z_prev = i as f32 / steps as f32;
         let mut prev: Option<(i32, i32, &Geo)> = None;
-        while i >= 0 {
+        while i >= bottom {
             let zf = i as f32 / steps as f32;
             i -= 1;
             let (x, y) = (p0.0 + d.0 * zf, p0.1 + d.1 * zf);
             let (mx, my) = (ifloor(x), ifloor(y));
+            // High over the coarse ceiling of the block it is crossing, the
+            // walk has nothing to meet: drop to that ceiling, or to where the
+            // path leaves the block, whichever comes first.
+            let ceiling = grid.block_top(mx, my);
+            if zf > ceiling {
+                let jump = ceiling.max(grid.block_exit(p0, d, mx, my));
+                let next = (jump * steps as f32).ceil() as i32;
+                if next < i {
+                    i = next;
+                    prev = None;
+                    z_prev = next as f32 / steps as f32;
+                    continue;
+                }
+            }
             let Some(geo) = grid.geo(mx, my) else {
                 prev = None;
                 z_prev = zf;
@@ -347,11 +382,17 @@ impl Renderer {
     #[allow(clippy::too_many_arguments)]
     fn terrain_hit(&self, sc: &Scene, tile: Tile, mx: i32, my: i32, x: f32, y: f32, h: f32, s: f32, c: f32) -> Hit {
         let e = 0.25;
-        let gx = (self.field_height(sc, x + e, y) - self.field_height(sc, x - e, y)) / (2.0 * e);
-        let gy = (self.field_height(sc, x, y + e) - self.field_height(sc, x, y - e)) / (2.0 * e);
+        // Metres of rise per metre of run, so the slope reads the same at
+        // every zoom and the cliff threshold is an angle.
+        let k = 1.0 / (2.0 * e * TILE_METRES);
+        let gx = (self.field_height(sc, x + e, y) - self.field_height(sc, x - e, y)) * k;
+        let gy = (self.field_height(sc, x, y + e) - self.field_height(sc, x, y - e)) * k;
         let slope = (gx * gx + gy * gy).sqrt();
         let sun = (-(gx + gy) * 0.5).clamp(-1.0, 1.0);
-        const CLIFF: f32 = 1.6;
+        /// Ground steeper than this is drawn as a cliff face: three metres
+        /// of rise per two of run, steep enough that the sub-metre detail
+        /// on flat ground never reaches it.
+        const CLIFF: f32 = 1.5;
         let (face, below) = if slope < CLIFF {
             (FACE_TOP, 0)
         } else {
@@ -741,8 +782,8 @@ mod tests {
     /// A renderer with the height grid built for the view, as `draw` does.
     fn prepared(sc: &Scene, w: i32, h: i32) -> Renderer {
         let mut r = Renderer::new(w, h);
-        let (x0, y0, x1, y1) = r.visible_bounds(sc.cam);
-        r.heights = Some(HeightGrid::build(sc, x0, y0, x1, y1));
+        let (x0, y0, x1, y1) = r.visible_bounds(sc.cam, 40.0);
+        r.heights = Some(HeightGrid::build(sc, x0, y0, x1, y1, w, h));
         r
     }
 
@@ -770,8 +811,8 @@ mod tests {
         let mut map = Map::synthetic(8, 8, assets, 3, |_, _| Tile::flat(6));
         map.bounded = false;
         let (w, h) = (120, 40);
-        // No sub-tile relief at the overview zooms: the surface is exactly flat.
-        for (zoom, angle) in [(0, FRAC_PI_4), (1, 1.1), (0, 3.0), (1, 5.2)] {
+        // No sub-tile relief at the overview zoom: the surface is exactly flat.
+        for (zoom, angle) in [(0, FRAC_PI_4), (0, 1.1), (0, 3.0), (0, 5.2)] {
             let mut cam = Camera::new();
             cam.angle = angle;
             cam.set_zoom(zoom, w, h);
@@ -788,67 +829,68 @@ mod tests {
                 }
             }
         }
-        // Up close the field carries relief under one height unit, so every
-        // hit stays within that of the tile height.
+        // Up close the field carries relief under a metre, so every hit stays
+        // within that of the tile height.
         let mut cam = Camera::new();
-        cam.set_zoom(4, w, h);
+        cam.set_zoom(3, w, h);
         cam.look_at(0, 0, &map, w, h);
         let sc = Scene::new(&map, ts, &world, &cam, 0.0);
         let r = prepared(&sc, w, h);
         for y in 0..h {
             for x in 0..w {
-                let hit = r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5).unwrap_or_else(|| panic!("zoom 4: no hit at ({x}, {y})"));
-                assert!((hit.h - 6.5).abs() < 0.5 && hit.tile.z == 6, "zoom 4 cell ({x}, {y}): h {}", hit.h);
+                let hit = r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5).unwrap_or_else(|| panic!("close: no hit at ({x}, {y})"));
+                assert!((hit.h - 6.5).abs() < 0.5 && hit.tile.z == 6, "close cell ({x}, {y}): h {}", hit.h);
             }
         }
     }
 
     #[test]
-    fn front_slopes_of_a_raised_tile_are_cliff_hits_on_the_predicted_side() {
+    fn front_slopes_of_a_raised_plateau_are_cliff_hits_on_the_predicted_side() {
         let assets = test_assets();
         let ts = &Tileset::all(&assets)[0];
         let world = World::new(1);
-        // One tile seven units above a plain: the field makes it a peak whose
-        // slopes fall to the neighbouring tile centres.
-        let map = Map::synthetic(16, 16, assets, 0, |x, y| Tile::flat(if (x, y) == (5, 5) { 10 } else { 3 }));
+        // A 5x5 plateau seven metres over a plain: its sides fall from the
+        // edge tiles to the neighbouring tile centres, which at a metre a
+        // row and more is a cliff.
+        let map = Map::synthetic(16, 16, assets, 0, |x, y| Tile::flat(if (3..=7).contains(&x) && (3..=7).contains(&y) { 10 } else { 3 }));
         let (w, h) = (120, 40);
-        let (peak_x, peak_y, peak_z) = (5.5, 5.5, 10.5);
+        let (mid_x, mid_y, top_z) = (5.5, 5.5, 10.5);
         for angle in [FRAC_PI_4, FRAC_PI_4 + 0.3, 3.0 * FRAC_PI_4 - 0.2, PI + 0.4, 5.0 * FRAC_PI_4 + 0.1, 7.0 * FRAC_PI_4 - 0.25, 1.0, 5.6] {
             let mut cam = Camera::new();
             cam.angle = angle;
-            cam.set_zoom(6, w, h);
+            cam.set_zoom(1, w, h);
             cam.look_at(5, 5, &map, w, h);
             let sc = Scene::new(&map, ts, &world, &cam, 0.0);
             let r = prepared(&sc, w, h);
+            let centre = cam.project(mid_x, mid_y, top_z);
             let (s, c) = angle.sin_cos();
-            let peak = cam.project(peak_x, peak_y, peak_z);
-            // A point partway down each slope that faces the camera.
-            let slopes = [(0.4 * s.signum(), 0.0, s.abs()), (0.0, 0.4 * c.signum(), c.abs())];
-            for (dx, dy, facing) in slopes {
+            // Half way down the middle of each side that faces the camera:
+            // the sides are at +x and +y toward the camera's own direction,
+            // and the slope falls seven metres over the tile beyond the
+            // plateau's edge.
+            let half = 0.45;
+            let edge = 2.0; // tile centres: the middle of the plateau to its edge tile
+            let sides = [((edge + half) * s.signum(), 0.0, s.abs()), (0.0, (edge + half) * c.signum(), c.abs())];
+            let mut probes = 0;
+            for (dx, dy, facing) in sides {
                 if facing < 0.3 {
-                    continue; // this slope is nearly edge-on
+                    continue; // this side is nearly edge-on
                 }
-                let (px, py) = cam.project(peak_x + dx, peak_y + dy, peak_z - 0.4 * 7.0);
-                let expected = if px > peak.0 + 1.0 {
-                    FACE_RIGHT
-                } else if px < peak.0 - 1.0 {
-                    FACE_LEFT
-                } else {
-                    continue;
-                };
-                let hit = r.ray(&sc, px, py).unwrap_or_else(|| panic!("angle {angle}: no hit on the slope"));
-                assert_eq!((hit.mx, hit.my), (5, 5), "angle {angle}: the slope belongs to the raised tile");
-                assert_eq!(hit.face, expected, "angle {angle}: slope toward screen x {px:.1} from the peak at {:.1}", peak.0);
-                assert!(hit.below >= 1 && hit.h > 3.5 && hit.h < peak_z, "angle {angle}: a cliff hit partway down (h {})", hit.h);
+                let (px, py) = cam.project(mid_x + dx, mid_y + dy, top_z - half * 7.0);
+                if (px - centre.0).abs() < 2.0 {
+                    continue; // its slope points neither way on screen
+                }
+                let expected = if px > centre.0 { FACE_RIGHT } else { FACE_LEFT };
+                let hit = r.ray(&sc, px, py).unwrap_or_else(|| panic!("angle {angle}: no hit on the plateau's side"));
+                assert_eq!(hit.face, expected, "angle {angle}: the side at screen x {px:.1} from the middle at {:.1}", centre.0);
+                assert!(hit.below >= 1 && hit.h > 3.0 && hit.h < top_z + 0.5, "angle {angle}: a cliff hit partway down (h {})", hit.h);
+                probes += 1;
             }
-            // Just below the apex on the camera's side the walk reaches the
-            // top of the raised tile. (At the apex pixel itself the height
-            // steps of the walk can carry the ray over the point onto the
-            // far slope, which is the walk's own sampling, not geometry.)
-            let (px, py) = cam.project(peak_x + 0.2 * s, peak_y + 0.2 * c, peak_z - 7.0 * 0.2 * (s.abs() + c.abs()));
-            let near_top = r.ray(&sc, px, py).unwrap_or_else(|| panic!("angle {angle}: no hit below the apex"));
-            assert_eq!((near_top.mx, near_top.my), (5, 5), "angle {angle}: below the apex is the raised tile");
-            assert!(near_top.h > 9.0 && near_top.h < peak_z + 0.5, "angle {angle}: near the top (h {})", near_top.h);
+            assert!(probes > 0, "angle {angle}: at least one side faces the camera");
+            // Over the middle of the plateau the walk reaches its top.
+            let top = r.ray(&sc, centre.0, centre.1 + 0.5).unwrap_or_else(|| panic!("angle {angle}: no hit over the plateau"));
+            assert_eq!(top.face, FACE_TOP, "angle {angle}: the middle of the plateau is a top");
+            assert!(top.h > 9.5 && top.h < top_z + 0.5, "angle {angle}: at the plateau's height (h {})", top.h);
         }
     }
 
@@ -863,7 +905,7 @@ mod tests {
         for angle in [FRAC_PI_4, FRAC_PI_4 + 0.4, 3.0 * FRAC_PI_4, 4.2] {
             let mut cam = Camera::new();
             cam.angle = angle;
-            cam.set_zoom(3, w, h);
+            cam.set_zoom(1, w, h);
             cam.look_at(4, 4, &map, w, h);
             let sc = Scene::new(&map, ts, &world, &cam, 0.0);
             let r = prepared(&sc, w, h);
@@ -874,22 +916,36 @@ mod tests {
                 let (sx, sy) = ((top[far].0 + top[n].0) / 2.0, (top[far].1 + top[n].1) / 2.0 - 1.5);
                 assert!(r.ray(&sc, sx, sy).is_none(), "angle {angle}: above the far edge is sky");
             }
-            // The edge slopes from the plateau to sea level as a cliff, and
-            // below the waterline the plinth carries on down to height zero.
+            // The edge falls from the plateau to sea level as a cliff, and
+            // below the waterline the plinth carries on down to the sea bed.
             let sea = square(&cam, 0.0, 0.0, 8.0, SEA as f32);
             let near = corner_by(&sea, |a, b| a > b);
+            let rpm = cam.rows_per_metre();
             for n in [(near + 1) % 4, (near + 3) % 4] {
                 let (sx, sy) = ((sea[near].0 + sea[n].0) / 2.0, (sea[near].1 + sea[n].1) / 2.0);
-                let cliff = r.ray(&sc, sx, sy - 1.0).unwrap_or_else(|| panic!("angle {angle}: no hit on the island's side"));
-                assert!(cliff.face != FACE_TOP && cliff.h > SEA as f32 && cliff.h < plateau, "angle {angle}: the side is a cliff (h {})", cliff.h);
-                // Below the waterline the walk is under the island's edge
-                // surface: still a cliff hit on an edge tile, at the edge.
-                let hit = r.ray(&sc, sx, sy + 1.5).unwrap_or_else(|| panic!("angle {angle}: no plinth below the near edge"));
-                assert!(hit.face != FACE_TOP && hit.below >= 1 && hit.h > SEA as f32 && hit.h < plateau, "angle {angle}: the plinth is a wall hit (h {})", hit.h);
+                // Down this column: the island's side is met as a cliff face
+                // above the waterline, and below it the plinth is a wall on an
+                // edge tile, until the walk runs out under the sea bed.
+                let face = (0..(plateau * rpm).ceil() as i32)
+                    .map(|i| r.ray(&sc, sx, sy - i as f32))
+                    .find(|hit| hit.is_some_and(|h| h.face != FACE_TOP))
+                    .flatten();
+                let cliff = face.unwrap_or_else(|| panic!("angle {angle}: no cliff on the island's side"));
+                assert!(cliff.h > SEA as f32 && cliff.h <= plateau + 0.5, "angle {angle}: the side is a cliff (h {})", cliff.h);
+                let deep = (SEA as f32 - crate::map::FLOOR) * rpm;
+                let hit = (1..deep as i32)
+                    .map(|i| r.ray(&sc, sx, sy + i as f32))
+                    .find(|hit| hit.is_some_and(|h| h.face != FACE_TOP))
+                    .flatten()
+                    .unwrap_or_else(|| panic!("angle {angle}: no plinth below the near edge"));
+                assert!(hit.below >= 1 && hit.h > SEA as f32 && hit.h <= plateau + 0.5, "angle {angle}: the plinth is a wall hit (h {})", hit.h);
                 let edge = |v: f32| !(0.5..=7.5).contains(&v);
                 assert!(edge(hit.x) || edge(hit.y), "angle {angle}: on the island's edge ({:.2}, {:.2})", hit.x, hit.y);
                 assert!(map.get(hit.mx, hit.my).is_some(), "angle {angle}: the plinth belongs to an island tile");
-                assert!(r.ray(&sc, sx, sy + 8.0).is_none(), "angle {angle}: below the plinth is sky again");
+                // The plinth ends at the sea bed: that many metres below the
+                // waterline, in rows.
+                let below = (SEA as f32 - crate::map::FLOOR) * rpm + 4.0;
+                assert!(r.ray(&sc, sx, sy + below).is_none(), "angle {angle}: below the plinth is sky again");
             }
         }
     }
@@ -901,24 +957,25 @@ mod tests {
         let world = World::new(1);
         let house = assets.blocks.iter().position(|b| b.name == "house").unwrap();
         let pine = assets.species.iter().position(|s| s.name == "pine").unwrap();
-        // The camera looks from +x +y, so the tree at (1, 1) stands behind
-        // the house at (5, 5) and neither hides the other.
+        // The camera looks from +x +y: the tree at (2, 6) stands to one side
+        // of the house at (5, 5), so neither hides the other and both are on
+        // screen at every zoom.
         let map = Map::synthetic(16, 16, assets.clone(), 0, move |x, y| {
             let mut t = Tile::flat(5);
             if (x, y) == (5, 5) {
                 t.stack = Some(Stack { kind: house as u8, levels: 2 });
             }
-            if (x, y) == (1, 1) {
+            if (x, y) == (2, 6) {
                 t.tree = Some(Flora { species: pine as u8, variant: 2 });
             }
             t
         });
         let (w, h) = (120, 40);
         let lh = assets.blocks[house].level_height;
-        for zoom in [2usize, 4, 6] {
+        for zoom in [1usize, 2, 3] {
             let mut cam = Camera::new();
             cam.set_zoom(zoom, w, h);
-            cam.look_at(7, 7, &map, w, h);
+            cam.look_at(4, 6, &map, w, h);
             let sc = Scene::new(&map, ts, &world, &cam, 0.0);
             let r = prepared(&sc, w, h);
             // Straight over the tile centre at the eaves height and above:
@@ -938,7 +995,7 @@ mod tests {
             // The tree: a crown over the trunk, met on the flank facing the
             // camera half way up (a slanting ray only grazes a cone's apex),
             // and plain ground beside it.
-            let v = r.grid().volumes.iter().find(|v| (v.mx, v.my) == (1, 1)).expect("the pine has a volume");
+            let v = r.grid().volumes.iter().find(|v| (v.mx, v.my) == (2, 6)).expect("the pine has a volume");
             let (fx, fy) = cam.forward();
             let half = v.h0 + 0.5 * v.height;
             let (px, py) = cam.project(v.cx + 0.5 * v.radius * fx, v.cy + 0.5 * v.radius * fy, half);
@@ -952,8 +1009,8 @@ mod tests {
         }
         // At the overview trees are billboards: no volumes are built.
         let mut cam = Camera::new();
-        cam.set_zoom(1, w, h);
-        cam.look_at(7, 7, &map, w, h);
+        cam.set_zoom(0, w, h);
+        cam.look_at(4, 6, &map, w, h);
         let sc = Scene::new(&map, ts, &world, &cam, 0.0);
         let r = prepared(&sc, w, h);
         assert!(r.grid().volumes.is_empty());

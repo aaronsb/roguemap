@@ -20,7 +20,7 @@ pub struct LightSpec {
     pub identity: Identity,
     /// Colour as 0..1 floats.
     pub color: [f32; 3],
-    /// Throw in tiles.
+    /// Throw in metres.
     pub radius: f32,
     pub intensity: f32,
     /// Falloff exponent over the normalised distance.
@@ -130,15 +130,15 @@ pub struct World {
 }
 
 impl World {
-    /// Cloud base altitude in height units (rows at 1x zoom).
-    pub const CLOUD_ALTITUDE: f32 = 10.0;
+    /// Cloud base altitude in metres over the ground.
+    pub const CLOUD_ALTITUDE: f32 = 20.0;
 
-    /// Tiles of shadow per unit of height: half the cotangent of the sun's
-    /// elevation, capped so dawn and dusk stretch shadows without covering
-    /// the map. Cloud and cast shadows both use it.
-    pub fn shadow_per_unit(&self) -> f32 {
+    /// Tiles of shadow per metre of height: the cotangent of the sun's
+    /// elevation over the tile's own size, capped so dawn and dusk stretch
+    /// shadows without covering the map. Cloud and cast shadows both use it.
+    pub fn shadow_per_metre(&self) -> f32 {
         let elev = self.elevation().max(0.08);
-        (0.5 * (1.0 - elev * elev).sqrt() / elev).min(1.8)
+        ((1.0 - elev * elev).sqrt() / elev / crate::map::TILE_METRES).min(1.8)
     }
 
     /// Unit ground direction shadows fall along: the sun stands to the
@@ -148,9 +148,9 @@ impl World {
     }
 
     /// Ground offset in tiles from a cloud to its shadow: the shadow
-    /// direction times the altitude times the length per unit.
+    /// direction times the altitude times the length per metre.
     pub fn shadow_shift(&self) -> (f32, f32) {
-        let len = Self::CLOUD_ALTITUDE * self.shadow_per_unit();
+        let len = Self::CLOUD_ALTITUDE * self.shadow_per_metre();
         let (ux, uy) = self.shadow_dir();
         (len * ux, len * uy)
     }
@@ -431,9 +431,9 @@ mod tests {
     use crate::render::{RenderOptions, Renderer, Scene};
     use crate::tileset::Tileset;
 
-    /// An 8x8 island of grass at height 5 with a pond at (5, 4).
+    /// An 8x8 island of grass 5 m over the water with a pond at (5, 4).
     fn pond_map() -> Map {
-        Map::synthetic(8, 8, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (5, 4) { 1 } else { 5 }))
+        Map::synthetic(8, 8, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (5, 4) { -3 } else { 5 }))
     }
 
     #[test]

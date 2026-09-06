@@ -62,9 +62,12 @@ impl Preview {
         for p in &mut self.panes {
             p.cam.angle = angle;
             p.cam.set_zoom(p.tier.min_zoom(), p.w, p.h);
-            // Sprites grow upward from the tile, so the tile sits in the
-            // lower part of the pane: aim a quarter of the height above it.
-            p.cam.look_at_point(fx.cx as f32 + 0.5, fx.cy as f32 + 0.5, hf + (p.h / 4) as f32, p.w, p.h);
+            // What is shown grows upward from the tile, so the tile sits in
+            // the lower part of the pane: aim half way up the subject, and
+            // at least a quarter of the pane's rows above the ground
+            // (ADR-004: those rows are rows per metre metres).
+            let above = (fx.top * 0.5).max((p.h / 4) as f32 / p.cam.rows_per_metre());
+            p.cam.look_at_point(fx.cx as f32 + 0.5, fx.cy as f32 + 0.5, hf + above, p.w, p.h);
             p.renderer.draw(&mut p.canvas, &Scene::new(&fx.map, ts, &fx.world, &p.cam, t), &opts);
         }
     }

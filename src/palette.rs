@@ -130,13 +130,15 @@ impl Palette {
 /// `wet_darkening`; grass has no row and darkens fully.
 pub fn surface_color(tile: &Tile, pal: &Palette, world: &World, assets: &Assets) -> Rgb {
     if tile.terrain == Terrain::Water {
-        let depth = ((SEA - tile.z) as f32 / 3.0).clamp(0.0, 1.0);
+        let depth = ((SEA - tile.z) as f32 / -crate::map::FLOOR).clamp(0.0, 1.0);
         return pal.water_shallow.lerp(pal.water_deep, depth);
     }
     let season = world.season;
     let surface = tile.terrain.surface().map(|i| &assets.surfaces.surface[i]);
     let wet_darkening = surface.map(|s| s.conditions.wet_darkening).unwrap_or(1.0);
-    let lift = (0.86 + tile.draw_z() as f32 * 0.018) * (1.0 - 0.28 * world.wet_at(tile.temp as f32) * wet_darkening);
+    // Height lifts the colour through the relief, not per metre: the world
+    // holds 300 m of it (ADR-004).
+    let lift = (0.914 + 0.216 * crate::map::relief_fraction(tile.draw_z() as f32)) * (1.0 - 0.28 * world.wet_at(tile.temp as f32) * wet_darkening);
     let c = if let Some(i) = tile.terrain.surface() {
         let color = pal.surfaces[i].color;
         if assets.surfaces.surface[i].relief {

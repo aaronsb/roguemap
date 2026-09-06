@@ -8,10 +8,10 @@ use crate::render::{Renderer, Scene};
 use crate::world::World;
 
 /// Where screen cells meet the cloud plane for one frame: a ray from a
-/// virtual camera of height C through the ground point under a cell,
-/// raised H rows, meets the plane at altitude H at that point pulled toward
-/// the screen centre by 1 - H/C. Panning therefore moves clouds by
-/// C/(C - H) relative to the ground.
+/// virtual camera of height C metres through the ground point under a cell,
+/// raised by the rows the cloud altitude H is worth, meets the plane at
+/// altitude H at that point pulled toward the screen centre by 1 - H/C.
+/// Panning therefore moves clouds by C/(C - H) relative to the ground.
 pub(crate) struct CloudView {
     cx: f32,
     cy: f32,
@@ -25,7 +25,7 @@ impl CloudView {
         let c = cam.altitude();
         let k = 1.0 - altitude / c;
         let (cx, cy) = cam.unproject(w as f32 / 2.0, h as f32 / 2.0, 0.0);
-        let rows = altitude * cam.hh as f32 / 2.0;
+        let rows = altitude * cam.rows_per_metre();
         CloudView { cx, cy, k, rows }
     }
 

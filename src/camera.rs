@@ -1,12 +1,24 @@
 //! The isometric camera: a view angle, a screen offset and a tile footprint.
 //! Projection maps a world point to a screen cell; unprojection walks back
 //! to the ground at a chosen height.
+//!
+//! World positions are metres (ADR-004). A tile is `TILE_METRES` square and
+//! each zoom is an exact halving of the next, so the scale of a zoom is two
+//! numbers derived from its footprint: `columns_per_metre` across the
+//! ground and `rows_per_metre` up the screen. Heights project through the
+//! second, so a 2 m person is 12 rows at 1:1 and 1.5 at 1:8.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, SQRT_2};
 
-use crate::map::{Map, MAX_Z, SEA};
-use crate::tileset::ZOOMS;
+use crate::map::{Map, SEA, TILE_METRES};
+use crate::tileset::{ZOOMS, ZOOM_NAMES, ZOOM_RATIOS};
 use crate::world::World;
+
+/// Rows a metre of height draws as at a footprint half width; see
+/// `Camera::rows_per_metre`.
+pub fn rows_per_metre_of(hw: i32) -> f32 {
+    hw as f32 * 3.0 / 8.0
+}
 
 pub struct Camera {
     /// View angle in radians; pi/4 is the classic compass view.
@@ -45,12 +57,15 @@ impl Camera {
         Camera { angle: FRAC_PI_4, ox: 0.0, oy: 0.0, zoom: 0, hw: ZOOMS[0].0, hh: ZOOMS[0].1, focus_z: SEA as f32 }
     }
 
-    /// Largest zoom at which the whole map fits the screen, else the smallest.
+    /// Largest zoom at which the whole map fits the screen, else the
+    /// smallest. The relief of the map itself, not the world's ceiling,
+    /// sets how many rows the terrain needs above its footprint.
     pub fn fitting_zoom(map: &Map, sw: i32, sh: i32) -> usize {
         let n = map.w.max(map.h) as i32;
+        let relief = map.relief_ceiling() as f32;
         ZOOMS
             .iter()
-            .rposition(|&(hw, hh)| 2 * n * hw <= sw && 2 * n * hh + MAX_Z + 4 <= sh)
+            .rposition(|&(hw, hh)| 2 * n * hw <= sw && 2 * n * hh + (relief * rows_per_metre_of(hw)).ceil() as i32 + 4 <= sh)
             .unwrap_or(0)
     }
 
@@ -62,10 +77,31 @@ impl Camera {
         self.hh as f32 * SQRT_2
     }
 
-    /// Screen position of a world point.
+    /// Screen columns a metre of ground spans: the tile's own scale, since
+    /// a tile is `TILE_METRES` square.
+    pub fn columns_per_metre(&self) -> f32 {
+        self.a() / TILE_METRES
+    }
+
+    /// Screen rows a metre of height draws as, from the same footprint:
+    /// three rows per eight columns of half width, so a 2 m person is 12
+    /// rows at 1:1 and halves with every zoom out. On 1:2 cells that is 96
+    /// pixels of height against 90 pixels of ground per metre, so vertical
+    /// and horizontal scale agree.
+    pub fn rows_per_metre(&self) -> f32 {
+        rows_per_metre_of(self.hw)
+    }
+
+    /// The zoom's name and the scale it draws at, for the HUD.
+    pub fn zoom_name(&self) -> (&'static str, &'static str) {
+        let i = self.zoom % ZOOMS.len();
+        (ZOOM_NAMES[i], ZOOM_RATIOS[i])
+    }
+
+    /// Screen position of a world point; `z` is metres.
     pub fn project(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
         let (s, c) = self.angle.sin_cos();
-        (self.a() * (x * c - y * s) + self.ox, self.b() * (x * s + y * c) - z + self.oy)
+        (self.a() * (x * c - y * s) + self.ox, self.b() * (x * s + y * c) - z * self.rows_per_metre() + self.oy)
     }
 
     /// Screen cell anchoring a tile: its centre projected and floored.
@@ -74,11 +110,11 @@ impl Camera {
         (sx.floor() as i32, sy.floor() as i32)
     }
 
-    /// World point at height `z` under a screen position.
+    /// World point at height `z` metres under a screen position.
     pub fn unproject(&self, sx: f32, sy: f32, z: f32) -> (f32, f32) {
         let (s, c) = self.angle.sin_cos();
         let u = (sx - self.ox) / self.a();
-        let v = (sy - self.oy + z) / self.b();
+        let v = (sy - self.oy + z * self.rows_per_metre()) / self.b();
         (u * c + v * s, -u * s + v * c)
     }
 
@@ -106,13 +142,13 @@ impl Camera {
         Anchor { mx, my, z, sx: sx.floor() as i32, sy: sy.floor() as i32, depth: self.tile_depth(mx, my) }
     }
 
-    /// Virtual camera altitude in height units for cloud parallax; higher
-    /// when zoomed out.
+    /// Virtual camera altitude in metres for cloud parallax; higher when
+    /// zoomed out.
     pub fn altitude(&self) -> f32 {
         match self.hw {
-            0..=2 => 48.0,
-            3 => 64.0,
-            _ => 120.0,
+            0..=2 => 100.0,
+            3..=4 => 130.0,
+            _ => 240.0,
         }
     }
 
@@ -290,6 +326,80 @@ mod tests {
         assert_eq!(cam.zoom, ZOOMS.len() - 1);
         cam.zoom_by(1, 120, 40);
         assert_eq!(cam.zoom, 0);
+    }
+
+    #[test]
+    fn each_zoom_is_an_exact_halving_of_the_next_in_rows_and_columns_per_metre() {
+        // far 2x1 (1:8), mid 4x1 (1:4), near 8x2 (1:2), close 16x4 (1:1).
+        let expected = [(0.75, 1.414), (1.5, 2.828), (3.0, 5.657), (6.0, 11.314)];
+        assert_eq!(ZOOMS.len(), expected.len());
+        let mut cam = Camera::new();
+        for (zoom, (rows, columns)) in expected.iter().enumerate() {
+            cam.set_zoom(zoom, 120, 40);
+            assert_eq!(cam.rows_per_metre(), *rows, "zoom {zoom} rows per metre");
+            assert!((cam.columns_per_metre() - columns).abs() < 1e-3, "zoom {zoom} columns per metre: {}", cam.columns_per_metre());
+            if zoom > 0 {
+                let (below_rows, below_columns) = expected[zoom - 1];
+                assert_eq!(*rows, below_rows * 2.0, "zoom {zoom} is twice the zoom below");
+                assert!((columns - below_columns * 2.0).abs() < 1e-3);
+            }
+        }
+        assert_eq!(cam.zoom_name(), ("close", "1:1"));
+    }
+
+    #[test]
+    fn a_two_metre_person_is_twelve_rows_at_one_to_one_and_halves_with_every_zoom_out() {
+        let mut cam = Camera::new();
+        let person = 2.0;
+        let rows: Vec<f32> = (0..ZOOMS.len())
+            .map(|zoom| {
+                cam.set_zoom(zoom, 120, 40);
+                person * cam.rows_per_metre()
+            })
+            .collect();
+        assert_eq!(rows, vec![1.5, 3.0, 6.0, 12.0]);
+    }
+
+    #[test]
+    fn heights_project_through_rows_per_metre() {
+        let mut cam = Camera::new();
+        for zoom in 0..ZOOMS.len() {
+            cam.set_zoom(zoom, 120, 40);
+            cam.look_at_point(4.5, 4.5, 0.0, 120, 40);
+            let ground = cam.project(4.5, 4.5, 0.0);
+            for metres in [1.0, 2.0, 18.0, -3.0] {
+                let up = cam.project(4.5, 4.5, metres);
+                assert!((up.0 - ground.0).abs() < 1e-4, "zoom {zoom}: height does not move a point sideways");
+                assert!(((ground.1 - up.1) - metres * cam.rows_per_metre()).abs() < 1e-3, "zoom {zoom}: {metres} m is {} rows", ground.1 - up.1);
+                // And back: the ground point under that screen position at
+                // the same height is where it started.
+                let (bx, by) = cam.unproject(up.0, up.1, metres);
+                assert!((bx - 4.5).abs() < 1e-3 && (by - 4.5).abs() < 1e-3, "zoom {zoom}: round trip at {metres} m");
+            }
+        }
+    }
+
+    #[test]
+    fn one_keypress_is_one_tile_at_every_zoom_and_the_tile_is_the_footprint() {
+        let mut cam = Camera::new();
+        for zoom in 0..ZOOMS.len() {
+            cam.set_zoom(zoom, 120, 40);
+            for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+                for screen_space in [true, false] {
+                    let (mx, my) = cam.walk_step(screen_space, dx, dy);
+                    assert!(mx.abs() <= 1 && my.abs() <= 1 && (mx, my) != (0, 0), "zoom {zoom}: ({dx}, {dy}) is one tile, not ({mx}, {my})");
+                    // One tile of the map is one tile footprint on screen,
+                    // whatever the zoom: a block at 1:1, half a block at 1:2.
+                    let from = cam.project(6.5, 6.5, 0.0);
+                    let to = cam.project(6.5 + mx as f32, 6.5 + my as f32, 0.0);
+                    let (ox, oy) = ((to.0 - from.0).abs(), (to.1 - from.1).abs());
+                    let footprint = |v: f32, half: i32| (v - half as f32).abs() < 1e-3 || (v - 2.0 * half as f32).abs() < 1e-3 || v < 1e-3;
+                    assert!(footprint(ox, cam.hw), "zoom {zoom}: {ox} columns is not a footprint of {}", cam.hw);
+                    assert!(footprint(oy, cam.hh), "zoom {zoom}: {oy} rows is not a footprint of {}", cam.hh);
+                    assert!(ox + oy > 1e-3);
+                }
+            }
+        }
     }
 
     #[test]

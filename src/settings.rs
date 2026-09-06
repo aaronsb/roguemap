@@ -221,6 +221,6 @@ mod tests {
                 assert!(a.setting(key).is_some(), "input.rs cycles unknown setting {key}");
             }
         }
-        assert_eq!(input::lookup(SCENE, KeyCode::Char('v')), Some(Action::Cycle("view")));
+        assert_eq!(input::lookup(SCENE, KeyCode::Char('v'), false), Some(Action::Cycle("view")));
     }
 }

@@ -185,7 +185,7 @@ pub struct Biome {
 pub struct Prop {
     pub name: String,
     pub identity: Identity,
-    /// Art name; the tier is picked by zoom.
+    /// Art name; the tier is picked from the prop's height in rows.
     pub art: String,
     /// Width, depth and height in metres.
     pub size: [f32; 3],
@@ -213,11 +213,14 @@ pub struct Creature {
     pub name: String,
     pub identity: Identity,
     pub art: String,
+    /// Width, depth and height in metres; the art tier is picked from the
+    /// rows the height is worth at the zoom (ADR-004).
+    pub size: [f32; 3],
     pub color: Rgb,
     pub glyph: Rgb,
     /// Terrain it may walk on.
     pub can_enter: Vec<Terrain>,
-    /// Tiles per second.
+    /// Metres per second.
     pub speed: f32,
     pub diet: Vec<String>,
     pub behaviour: String,

@@ -19,6 +19,9 @@ use roguemap::world::World;
 use roguemap::worldmap::WorldMap;
 use roguemap::{lsystem, snapshot, terminal, ui};
 
+/// Tiles a shift-arrow stride covers.
+const STRIDE: i32 = 8;
+
 /// Whether the main loop goes on after a key.
 enum Loop {
     Continue,
@@ -116,8 +119,9 @@ impl App {
         if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
             return Loop::Quit;
         }
+        let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         let Some(focused) = self.frames.focus().map(str::to_string) else {
-            return match input::lookup(input::SCENE, k.code) {
+            return match input::lookup(input::SCENE, k.code, shift) {
                 Some(a) => self.scene_action(a),
                 None => Loop::Continue,
             };
@@ -132,12 +136,12 @@ impl App {
         }
         match focused.as_str() {
             "settings" => {
-                if let Some(a) = input::lookup(input::SETTINGS, k.code) {
+                if let Some(a) = input::lookup(input::SETTINGS, k.code, shift) {
                     self.settings_action(a);
                 }
             }
             "worldmap" => {
-                if let Some(a) = input::lookup(input::WORLDMAP, k.code) {
+                if let Some(a) = input::lookup(input::WORLDMAP, k.code, shift) {
                     self.worldmap_action(a);
                 }
             }
@@ -151,7 +155,8 @@ impl App {
         match a {
             Action::Quit => return Loop::Quit,
             Action::Toggle(name) => self.toggle(name),
-            Action::Walk(dx, dy) => self.walk((dx, dy)),
+            Action::Walk(dx, dy) => self.walk((dx, dy), 1),
+            Action::Run(dx, dy) => self.walk((dx, dy), STRIDE),
             Action::Pan(dx, dy) => self.cam.pan(dx, dy),
             Action::Centre => {
                 if let Some(p) = self.world.player() {
@@ -204,13 +209,22 @@ impl App {
         }
     }
 
-    /// Move the player one step and keep the camera on them. In screen
-    /// space a key moves the figure that way on screen, which is a diagonal
-    /// in map space; in map-axes mode keys follow the map's own north and
-    /// east.
-    fn walk(&mut self, dir: (i32, i32)) {
+    /// Move the player `tiles` steps and keep the camera on them. One
+    /// keypress is one tile at every zoom (ADR-004), so a step is a whole
+    /// block at 1:1 and an eighth of one at 1:8. In screen space a key moves
+    /// the figure that way on screen, which is a diagonal in map space; in
+    /// map-axes mode keys follow the map's own north and east. A stride
+    /// stops where a step is refused.
+    fn walk(&mut self, dir: (i32, i32), tiles: i32) {
         let (dx, dy) = self.cam.walk_step(self.settings.screen_space(), dir.0, dir.1);
-        if self.world.try_move(&self.map, dx, dy) {
+        let mut moved = false;
+        for _ in 0..tiles {
+            if !self.world.try_move(&self.map, dx, dy) {
+                break;
+            }
+            moved = true;
+        }
+        if moved {
             if let Some((mx, my)) = self.world.player().map(|p| (p.mx, p.my)) {
                 self.log(format!("walked to {mx}, {my}"));
             }

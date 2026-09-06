@@ -85,17 +85,21 @@ tree-snap: build ## Render one L-system species to OUT (NAME=species ARGS="cols 
 	./tree-snap.sh $(OUT) "$(NAME)" $(ARGS)
 
 screenshots: build ## Render the documentation screenshots into docs/screenshots
-	./snap.sh $(SHOTS)/island.png zoom=1 t=3 tod=12
-	./snap.sh $(SHOTS)/rotated.png zoom=1 t=3 tod=12 deg=25
-	./snap.sh $(SHOTS)/filled.png fill=1 zoom=2 cx=0 cy=0 t=3 tod=12 player=1
-	./snap.sh $(SHOTS)/closeup.png fill=1 zoom=6 cx=0 cy=0 t=3 tod=12 player=1
-	./snap.sh $(SHOTS)/night.png fill=1 zoom=4 cx=500 cy=-300 t=3 tod=22 fire=1
-	./snap.sh $(SHOTS)/winter.png fill=1 zoom=2 cx=500 cy=-300 t=3 tod=12 season=3 simdays=2
+	./snap.sh $(SHOTS)/island.png zoom=0 t=3 tod=12
+	./snap.sh $(SHOTS)/rotated.png zoom=0 t=3 tod=12 deg=25
+	./snap.sh $(SHOTS)/filled.png fill=1 zoom=1 cx=0 cy=0 t=3 tod=12 player=1
+	./snap.sh $(SHOTS)/closeup.png fill=1 zoom=3 cx=0 cy=0 t=3 tod=12 player=1
+	./snap.sh $(SHOTS)/night.png fill=1 zoom=2 cx=500 cy=-300 t=3 tod=22 fire=1
+	./snap.sh $(SHOTS)/winter.png fill=1 zoom=1 cx=500 cy=-300 t=3 tod=12 season=3 simdays=2
 	./snap.sh $(SHOTS)/clouds.png fill=1 zoom=0 cx=0 cy=0 t=3 tod=14 cover=0.4
-	./snap.sh $(SHOTS)/steppe.png fill=1 zoom=2 cx=-500 cy=400 t=3 tod=12
+	./snap.sh $(SHOTS)/steppe.png fill=1 zoom=1 cx=-500 cy=400 t=3 tod=12
 	./snap.sh $(SHOTS)/worldmap.png fill=1 worldmap=1 scale=2 cx=0 cy=0
-	./snap.sh $(SHOTS)/settings.png popover=1 zoom=1
-	./snap.sh $(SHOTS)/ascii.png zoom=2 fill=1 cx=0 cy=0 t=3 tod=12 glyphs=ascii
+	./snap.sh $(SHOTS)/settings.png popover=1 zoom=0
+	./snap.sh $(SHOTS)/ascii.png zoom=1 fill=1 cx=0 cy=0 t=3 tod=12 glyphs=ascii
+	./snap.sh $(SHOTS)/scale-zfar.png scene=scale zoom=0 t=3 tod=12
+	./snap.sh $(SHOTS)/scale-zmid.png scene=scale zoom=1 t=3 tod=12
+	./snap.sh $(SHOTS)/scale-znear.png scene=scale zoom=2 t=3 tod=12
+	./snap.sh $(SHOTS)/scale-zclose.png scene=scale zoom=3 t=3 tod=12
 	./edit-snap.sh $(SHOTS)/editor.png table=species row=oak
 	./tree-snap.sh $(SHOTS)/lsystem-oak.png "gnarled oak" 110 55 7 1
 	./tree-snap.sh $(SHOTS)/lsystem-willow.png "weeping willow" 110 55 7 1

@@ -237,7 +237,7 @@ const PROP: [Field; 10] = [
     req("terrain", Kind::EnumList(&TERRAINS)),
     opt("cover", Kind::EnumList(&COVERS)),
     opt("near_water", Kind::Bool),
-    opt("min_zoom", Kind::U8 { max: 6 }),
+    opt("min_zoom", Kind::U8 { max: 3 }),
 ];
 
 const BLOCK: [Field; 18] = [
@@ -261,9 +261,10 @@ const BLOCK: [Field; 18] = [
     opt("chance", Kind::U64),
 ];
 
-const CREATURE: [Field; 11] = [
+const CREATURE: [Field; 12] = [
     req("name", Kind::Str),
     req("art", Kind::Ref { table: TableKind::Art, extra: &[] }),
+    req("size", Kind::Metres(3)),
     req("color", Kind::Rgb),
     req("glyph", Kind::Rgb),
     opt("can_enter", Kind::EnumList(&TERRAINS)),

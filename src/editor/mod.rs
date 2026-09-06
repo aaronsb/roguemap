@@ -106,7 +106,7 @@ pub const ART_FIELDS: [Field; 5] = [
     Field { name: "tier", kind: Kind::Enum(&["tiny", "small", "medium", "large"]), required: true },
     Field { name: "center", kind: Kind::U8 { max: 255 }, required: true },
     Field { name: "base_rows", kind: Kind::U8 { max: 255 }, required: true },
-    Field { name: "min_zoom", kind: Kind::U8 { max: 6 }, required: true },
+    Field { name: "min_zoom", kind: Kind::U8 { max: 3 }, required: true },
 ];
 
 pub struct Editor {

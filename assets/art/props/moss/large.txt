@@ -1,2 +1,2 @@
-# name=moss tier=large center=1 base_rows=0 min_zoom=5
+# name=moss tier=large center=1 base_rows=0
 """

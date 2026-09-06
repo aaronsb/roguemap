@@ -27,9 +27,9 @@ read by any system.
 | dead_chance | 0..1 | 0.02 | species | Chance an instance stands dead: no leaves, grey bark, a broken crown. The roll is a hash of the tile seed, so the same tree is dead every time. |
 | roof | enum | flat | blocks | Profile above the column: none, flat, gable, hip. |
 | art | string | none | props, creatures | Name of an art file set; tiers are chosen by zoom. Absent means no picture. |
-| size | [w, d, h] metres | required | props, species, blocks (creatures with the scale pass) | Real extent: width, depth, height. A block's is one tile at one level (a house level [2, 2, 3]); a species' is a mature tree's spread and height (an oak [10, 10, 18]); a boulder [1.2, 1.0, 0.8]. The scale pass (ADR-004) will derive rows and columns at each zoom from it; today the volumes and footprints follow from it. |
+| size | [w, d, h] metres | required | props, species, blocks, creatures | Real extent: width, depth, height. A block's is one tile at one level (a house level [2, 2, 3]); a species' is a mature tree's spread and height (an oak [10, 10, 18]); a boulder [1.2, 1.0, 0.8]; the person [0.6, 0.4, 2.0]. The renderer draws it through the zoom's rows and columns per metre (ADR-004), and a sprite's art tier is the one whose rows are nearest the height it stands. |
 | size_class | small, mixed, large | mixed | species | Scales the species' size: 0.8, 1, 1.15. |
-| radius, height, trunk, trunk_radius | metres | from size by shape | species | Crown radius and height, trunk height and radius, when a row wants other proportions than its shape derives. |
+| radius, height, trunk, trunk_radius | metres | from size by shape | species | Crown radius and height, trunk height and radius, when a row wants other proportions than its shape derives. The canopy is `size` plus these; there is no other spelling of it. |
 | color, glyph_color | rgb | required | props, lights | Fill and glyph colours; seasonal tables use four values. |
 | canopy, canopy_glyph | rgb x4 | required | species | Spring, summer, autumn, winter colours. |
 | material | name or rule | by_biome | blocks | Wall and roof colours by material; `by_biome` (or `local`) takes the tile's material. |
@@ -75,11 +75,11 @@ occupied, asleep, carrying.
 | cover | cover list | any | props | Ground cover kinds required (grass, dry, moss, bare). |
 | biomes | name list | any | props, blocks, creatures | Biomes it may appear in; species use the biome's own weighted list instead. |
 | near_water | bool | false | props, blocks | Requires a cardinal neighbour of water. |
-| min_height, max_height | height units | none | props, species, blocks | Elevation band. |
-| max_slope | height units per tile | none | blocks, props | Refuses steep ground; buildings want flat tiles. |
+| min_height, max_height | metres | none | props, species, blocks | Elevation band above sea level. |
+| max_slope | metres per metre | none | blocks, props | Refuses steep ground; buildings want flat tiles. |
 | density | 0..1 | required for props | props | Chance per placement cell where the rules pass. |
 | cluster | 0..1 | 0 | props, species | Tendency to appear beside its own kind; 0 is independent, 1 is only in groups. |
-| spacing | tiles | 0 | blocks, creatures | Minimum distance from another of the same kind. |
+| spacing | metres | 0 | blocks, creatures | Minimum distance from another of the same kind. |
 | levels | count pair | [1, 1] | blocks | Levels the generator gives a stack, `[min, max]`; `[0, 0]` for ground kinds. |
 | settle_min, chance | 0..1, percent | 1.0, 0 | blocks | The generator's rule: settlement field a tile needs, and the share of qualifying tiles that carry one. |
 
@@ -99,7 +99,7 @@ occupied, asleep, carrying.
 | Property | Type | Default | Tables | Meaning |
 |---|---|---|---|---|
 | light | name | none | props, blocks, creatures | Row in lights.toml this asset emits. |
-| color, radius, intensity, falloff, flicker_amount, flicker_rate | see lights | required | lights | The light itself: colour, throw in tiles, brightness, falloff exponent, flicker depth and speed. |
+| color, radius, intensity, falloff, flicker_amount, flicker_rate | see lights | required | lights | The light itself: colour, throw in metres, brightness, falloff exponent, flicker depth and speed. |
 | heat | 0..1 | 0 | props, blocks | Warmth given off; drives melting and comfort (reserved). |
 | fuel | minutes | none | props | How long it burns before going out; none means indefinitely (reserved). |
 
@@ -110,7 +110,7 @@ occupied, asleep, carrying.
 | tags | string list | [] | all placeables | What it is: flammable, edible, wooden, stone, wet, sacred. Read by other assets' `affects`. |
 | emits | string list | [] | all placeables | What it puts out continuously: light, heat, smoke, sound, scent. |
 | affects | string list | [] | all placeables | Tags it can act on within reach: a bonfire affects flammable; a lamp affects nothing. |
-| reach | tiles | 0 | all placeables | How far its effects act. Zero means it only emits. |
+| reach | metres | 0 | all placeables | How far its effects act. Zero means it only emits. |
 | verbs | string list | [] | props, blocks, creatures | Actions a player may take: examine, harvest, enter, light, extinguish, climb. |
 | yields | name and count list | [] | props, species | What harvesting produces, for a future inventory. |
 | states | string list | [] | props, blocks, species | Named states with their own art or colours: unlit, lit, burning, burnt, ruined, sapling, mature, dead. |
@@ -124,15 +124,18 @@ occupied, asleep, carrying.
 | sway | 0..1 | species 1, others 0 | species, props | How much wind moves it. |
 | sheds | bool | true for deciduous | species | Whether it drops leaves in autumn. |
 
-## Creatures (reserved table)
+## Creatures
+
+Creatures carry the identity, appearance and condition properties above,
+`size` in metres like every other placeable, and:
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| speed | tiles per second | 1 | Movement rate. |
+| speed | metres per second | 2 | Movement rate. |
 | can_enter | terrain list | land | Terrain it may walk on; swimming and flying widen it. |
 | diet | tag list | [] | Tags it eats; connects to `yields` and `tags`. |
 | behaviour | name | idle | Wander, graze, flee, hunt, patrol. |
-| sight | tiles | 8 | Perception range. |
+| sight | metres | 16 | Perception range. |
 | home | block name | none | Where it returns at night. |
 
 ## Instances
@@ -160,10 +163,12 @@ placing them.
 
 - Names are lower case with spaces; references are by name, never by index.
 - Colours are `[r, g, b]` integers 0..255 in tables and 0..1 floats in lights.
-- Distances and heights are metres; anything stored discretely is
-  centimetres. A tile is 2 m, the person 2 m, a house level 3 m, a tower
-  level 4 m, a barn 5 m (ADR-004). A height unit draws as one row until the
-  scale pass.
+- Distances and heights are metres, in every table and every field:
+  sizes, crown radii, roof rises, window pitches, reaches, perception
+  ranges and light radii. Anything stored discretely is centimetres. A
+  tile is 2 m, the person 2 m, a house level 3 m, a tower level 4 m, a
+  barn 5 m, an oak 18 m (ADR-004). A metre draws as the zoom's rows per
+  metre: 6 rows at 1:1, 3 at 1:2, 1.5 at 1:4 and 0.75 at 1:8.
 - Lists of pairs keep authoring order, since hash-driven picks read them
   in order.
 - Every row has a description. The editor shows it beside the preview and

@@ -103,6 +103,9 @@ pub struct Fixture {
     pub glyphs: Option<usize>,
     /// A line naming what was placed, for the preview title.
     pub caption: String,
+    /// How tall the subject stands over the ground, in metres, so a pane
+    /// can frame it (ADR-004): a tree's crown, a stack's roof, a creature.
+    pub top: f32,
 }
 
 fn spec(assets: &Assets, biome: usize, terrain: Terrain) -> FixtureSpec {
@@ -133,6 +136,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
     let mut terrain = Terrain::Grass;
     let mut glyphs = None;
     let mut caption = String::new();
+    let mut top = 0.0f32;
 
     // Rows that change the fixture's ground rather than stand on it.
     match subject.kind {
@@ -158,6 +162,8 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             t.tree = Some(Flora { species: subject.row as u8, variant: s.variant % 4 });
             map.set_tile(cx, cy, t);
             let sp = &assets.species[subject.row];
+            let (_, d) = sp.volume();
+            top = (d.trunk + d.height) * crate::volume::size_scale(sp.size_class) * crate::volume::variant_scale(s.variant % 4);
             caption = format!("showing {} (variant {}) on {} ground", sp.name, s.variant % 4, assets.biomes[biome].name);
         }
         TableKind::Biomes => {
@@ -173,6 +179,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             let mut t = centre;
             t.stack = Some(Stack { kind: house, levels: 1 });
             map.set_tile(cx, cy, t);
+            top = assets.blocks[house as usize].level_height + assets.blocks[house as usize].max_rise;
             let trees: Vec<&str> = b.species.iter().filter_map(|(i, _)| assets.species.get(*i).map(|sp| sp.name.as_str())).collect();
             let material = assets.materials.get(b.material).map(|m| m.name.as_str()).unwrap_or("?");
             caption = if trees.is_empty() {
@@ -188,6 +195,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                 t.stack = Some(Stack { kind: house, levels: 1 });
                 map.set_tile(cx + dx, cy + dy, t);
             }
+            top = assets.blocks[house as usize].level_height + assets.blocks[house as usize].max_rise;
             caption = format!("showing a 2x2 house built of {}", assets.materials[subject.row].name);
         }
         TableKind::Blocks if subject.row < assets.blocks.len() => {
@@ -201,7 +209,9 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                 t.stack = Some(Stack { kind: subject.row as u8, levels });
                 map.set_tile(cx + dx, cy + dy, t);
             }
-            caption = format!("showing {} in pattern {name}", assets.blocks[subject.row].name);
+            let b = &assets.blocks[subject.row];
+            top = levels as f32 * b.level_height + b.max_rise;
+            caption = format!("showing {} in pattern {name}", b.name);
         }
         TableKind::Props if subject.row < assets.props.len() => {
             for sub in [5, 6, 9, 10] {
@@ -209,10 +219,12 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
                 let y = cy as f32 + (sub / 4) as f32 / 4.0 + 0.125;
                 world.placed.push(PlacedProp { x, y, prop: subject.row });
             }
+            top = assets.props[subject.row].size[2];
             caption = format!("showing four {} on the centre tile", assets.props[subject.row].name);
         }
         TableKind::Creatures if subject.row < assets.creatures.len() => {
             world.entities.push(Entity { kind: subject.row as u8, mx: cx, my: cy });
+            top = assets.creatures[subject.row].size[2];
             caption = format!("showing {} standing on {} ground", assets.creatures[subject.row].name, assets.biomes[biome].name);
         }
         TableKind::Lights if subject.row < assets.lights.len() => {
@@ -255,7 +267,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             _ => format!("showing {} ground", assets.biomes[biome].name),
         };
     }
-    Fixture { map, world, cx, cy, biome: biome % assets.biomes.len().max(1), glyphs, caption }
+    Fixture { map, world, cx, cy, biome: biome % assets.biomes.len().max(1), glyphs, caption, top }
 }
 
 #[cfg(test)]
