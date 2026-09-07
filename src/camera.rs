@@ -7,18 +7,22 @@
 //! An orthographic projection (ADR-010) projects through a basis of three
 //! numbers: columns per tile across the screen, rows per tile of ground
 //! depth toward the camera and rows per metre of height. The table
-//! (ADR-009) is a zoom's columns per metre, the pitch of the ground
-//! plane on screen, from 30 degrees to straight down, and a relief, the
-//! factor height is drawn taller than the pitch implies. Its scales are ADR-004's, each zoom an exact halving of the
-//! next: `columns_per_metre` across the ground and `rows_per_metre` up
-//! the screen. Heights project through the second, so a 2 m person is 12
-//! rows at 1:1 and 1.5 at 1:8 at the floor tilt, and none at all straight
-//! down, where `detail_rows` keeps the level of detail the zoom's.
+//! (ADR-009) is a zoom's columns per metre, the pitch of the ground plane
+//! on screen, from 30 degrees to straight down, and a relief, the factor
+//! height is drawn taller than the pitch implies. Its scales are
+//! ADR-004's, each zoom an exact halving of the next: `columns_per_metre`
+//! across the ground and `rows_per_metre` up the screen. Heights project
+//! through the second, so a 2 m person is 12 rows at 1:1 and 1.5 at 1:8
+//! at the floor tilt, and none at all straight down, where `detail_rows`
+//! keeps the level of detail the zoom's.
 //!
-//! A perspective projection is a view from an eye: the chase, shoulder and
-//! first-person modes each place the eye from the character by a `Placement`, and the basis is the scale at the
-//! character's depth, so level of detail and the sprite tiers keep one
-//! answer per frame while every projection and ray comes from the eye.
+//! A perspective projection is a view from an eye: the chase, shoulder
+//! and first-person modes each place the eye from the character by a
+//! `Placement`, and the basis is the scale at the character's depth, so
+//! level of detail and the sprite tiers keep one answer per frame while
+//! every projection and ray comes from the eye. The detail scale drops
+//! the pitch's cosine, which is the projection's foreshortening and not
+//! the thing's own size.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, SQRT_2};
 
@@ -664,7 +668,7 @@ impl Camera {
         let depth = self.depth_ref();
         let rows = self.focal / 2.0 / depth;
         self.basis = Basis { cols: self.focal / depth * TILE_METRES, rows: rows * sp * TILE_METRES, rise: rows * cp };
-        self.detail = self.basis.rise;
+        self.detail = rows;
         self.zoom = Camera::nearest_zoom(self.detail);
         self.foot = Camera::cells_of(&Camera::table_basis(ZOOMS[self.zoom], Camera::TILT_RANGE.0, Camera::RELIEF));
     }
@@ -793,12 +797,15 @@ impl Camera {
     }
 
     /// Rows a metre of an upright thing facing the viewer draws as: the
-    /// zoom's `rows_per_metre` at the floor tilt, to the bit, at every
-    /// tilt. The level of detail, the sprite tiers and the walk's samples
-    /// per metre key off it, so a plan view at 1:1 resolves the ground as
-    /// finely as a tilted one and a person seen from overhead is still a
-    /// person-sized billboard. In perspective it is the scale at the
-    /// character's depth; `detail_rows_at` gives any other point's.
+    /// vantage's own scale, which neither the angle nor the projection
+    /// moves. The table's is the zoom's `rows_per_metre` at the floor
+    /// tilt, to the bit; a placement's is `focal_rows` over the depth its
+    /// scale is stated at, with no foreshortening, since the cosine in
+    /// `rows_per_metre` is the projection's and not the thing's. The
+    /// level of detail, the sprite tiers and the walk's samples per metre
+    /// key off it, so a plan view at 1:1 resolves the ground as finely as
+    /// a tilted one and a person seen from overhead is still a
+    /// person-sized billboard. `detail_rows_at` gives another point's.
     pub fn detail_rows(&self) -> f32 {
         self.detail
     }
@@ -811,7 +818,7 @@ impl Camera {
             return self.detail;
         }
         let depth = self.view_depth(x, y, z).max(0.5);
-        self.focal / 2.0 * self.pitch.cos() / depth
+        self.focal / 2.0 / depth
     }
 
     /// Metres along the view direction from the eye to a point.
@@ -2105,10 +2112,13 @@ mod tests {
             let (sx0, _) = cam.project(cx, cy, cz);
             let (sx1, _) = cam.project(cx + rx / TILE_METRES, cy + ry / TILE_METRES, cz);
             assert!(((sx1 - sx0) - cam.columns_per_metre()).abs() < 0.05, "{}: a metre across is {} columns, stated {}", cam.mode_name(), sx1 - sx0, cam.columns_per_metre());
-            assert_eq!(cam.detail_rows(), cam.rows_per_metre(), "{}: from an eye the detail scale is the height scale", cam.mode_name());
-            assert!((cam.detail_rows_at(cx, cy, cz) - cam.rows_per_metre()).abs() < 1e-3);
+            // The detail scale is the vantage's scale at that depth, and
+            // the height scale is that foreshortened by the pitch.
+            assert!((cam.detail_rows() - cam.focal_rows() / depth).abs() < 1e-3, "{}: {} rows a metre, stated {}", cam.mode_name(), cam.focal_rows() / depth, cam.detail_rows());
+            assert!((cam.rows_per_metre() - cam.detail_rows() * cam.pitch.cos()).abs() < 1e-4, "{}", cam.mode_name());
+            assert!((cam.detail_rows_at(cx, cy, cz) - cam.detail_rows()).abs() < 1e-3);
             let far = (cx + (cx - ex), cy + (cy - ey), cz + (cz - ez));
-            assert!((cam.detail_rows_at(far.0, far.1, far.2) * 2.0 - cam.rows_per_metre()).abs() < 1e-2, "{}: twice the depth is half the rows", cam.mode_name());
+            assert!((cam.detail_rows_at(far.0, far.1, far.2) * 2.0 - cam.detail_rows()).abs() < 1e-2, "{}: twice the depth is half the rows", cam.mode_name());
             // Level of detail keys off the stated scale, and the preset
             // carried is the one nearest it.
             let nearest = Camera::nearest_zoom(cam.detail_rows());
