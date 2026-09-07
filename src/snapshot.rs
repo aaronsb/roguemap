@@ -66,7 +66,9 @@ impl SnapArgs {
 /// with scale, open (frame names of ui.toml, comma separated), frames (N,
 /// to time rendering), scene (`scale` for the yardstick of ADR-004: a
 /// person, an oak and a house on flat ground), camera (isometric, chase,
-/// shoulder or first-person: ADR-007), pitch and fov (degrees, for a
+/// shoulder or first-person: ADR-007; free for the detached eye of
+/// ADR-009, placed where the switch from the view named by from= leaves
+/// it, the table by default), pitch and fov (degrees, for a
 /// perspective camera), tilt (degrees, 30 to 90, of the isometric table:
 /// ADR-009), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
@@ -103,13 +105,19 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     // through its settings row; a perspective mode takes pitch= and fov=
     // in degrees, fov= through its row where the row lists the value.
     let mode = a.text("camera").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).unwrap_or(0);
-    settings.set("camera", mode);
+    // The free eye is placed from the view it is entered from (ADR-009),
+    // named by from= and the table by default, so that view is aimed first
+    // and the mode taken after.
+    let free = mode == Camera::MODES.len() - 1;
+    let from = a.text("from").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).filter(|m| *m != mode).unwrap_or(0);
+    settings.set("camera", if free { from } else { mode });
     // coupling=body-turns|view-only is whether the body turns with the
     // view (ADR-009), which is what the walk keys below mean.
     if let Some(c) = a.text("coupling").and_then(|c| Coupling::NAMES.iter().position(|n| *n == c)) {
         settings.set("coupling", c);
     }
     let fov = a.kv.get("fov").and_then(|v| v.parse::<f32>().ok());
+    let pitch = a.kv.get("pitch").and_then(|v| v.parse::<f32>().ok());
     if let Some(fov) = fov {
         settings.set_fov_near(fov);
         if settings.fov_degrees() != Some(fov) {
@@ -126,7 +134,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         if let Some(fov) = fov {
             cam.set_fov_override(Some(fov));
         }
-        if let Some(pitch) = a.kv.get("pitch").and_then(|v| v.parse::<f32>().ok()) {
+        if let Some(pitch) = pitch {
             cam.pitch_by(pitch.to_radians() - cam.pitch);
         }
     }
@@ -185,7 +193,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
             }
         }
         world.spawn_player(&map, mx, my, cam.angle());
-    } else if a.flag("player") || cam.is_perspective() {
+    } else if a.flag("player") || free || cam.is_perspective() {
         // A perspective view is placed from the character, so it always
         // has one, standing at the view centre; px, py put them elsewhere.
         let (px, py) = if cam.is_perspective() { (cx, cy) } else { (map.w as i32 / 2, map.h as i32 / 2) };
@@ -204,6 +212,15 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     // A perspective view is placed from the character.
     if let Some(p) = world.player().filter(|_| cam.is_perspective()) {
         cam.look_at_entity(p, &map, sw, sh);
+    }
+    // camera=free detaches the eye where the switch from the aimed table
+    // would leave it, and the character stands where it was put.
+    if free {
+        settings.set("camera", Camera::MODES.len() - 1);
+        cam = cam.in_mode(Camera::MODES.len() - 1);
+        if let Some(pitch) = pitch {
+            cam.pitch_by(pitch.to_radians() - cam.pitch);
+        }
     }
     // walk=KEYS,SECONDS holds walk keys (w, a, s, d and the diagonals) for
     // that long in 40 ms ticks of the same held-key set, walk and camera

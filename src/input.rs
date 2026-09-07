@@ -32,6 +32,9 @@ pub enum Action {
     Step(&'static str, i32),
     /// Turn a perspective view up or down by degrees.
     Pitch(f32),
+    /// Enter the free camera, or return to the mode it was entered from
+    /// (ADR-009).
+    FreeCamera,
     StepSeason(f32),
     StepHour(f32),
     Campfire,
@@ -102,6 +105,10 @@ pub const SCENE: &[Binding] = &[
         label: "yubn",
         help: "diagonals",
     },
+    // A view for looking around is reached from anywhere rather than
+    // through a popover, and its help entry falls past the same 120th
+    // column the diagonals do (ADR-009).
+    Binding { shift: false, keys: &[(Char('V'), FreeCamera)], label: "V", help: "free camera" },
     Binding { shift: false, keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
 ];
 
@@ -684,7 +691,9 @@ mod tests {
         let scene = help_line(SCENE, "  ");
         assert!(scene.len() > 120, "the scene help line already runs past 120 columns");
         assert_eq!(&scene[..120], " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run  c centre  r/R ( ) rotate  z/Z zoom  v fill  g ");
-        assert!(scene.find("yubn diagonals").is_some_and(|at| at > 120), "an entry added to the table falls past the columns the golden frames pin");
+        for entry in ["yubn diagonals", "V free camera"] {
+            assert!(scene.find(entry).is_some_and(|at| at > 120), "{entry}: an entry added to the table falls past the columns the golden frames pin");
+        }
         for frame in ["inventory", "stats", "history", "conversation"] {
             assert!(SCENE.iter().flat_map(|b| b.keys).any(|&(_, a)| a == Toggle(frame)), "{frame} has no toggle key");
         }

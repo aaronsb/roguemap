@@ -15,7 +15,7 @@ use roguemap::map::Map;
 use roguemap::render::{Renderer, Scene};
 use roguemap::settings::Settings;
 use roguemap::tileset::Tileset;
-use roguemap::world::World;
+use roguemap::world::{World, PLAYER};
 use roguemap::worldmap::WorldMap;
 use roguemap::{lsystem, snapshot, terminal, ui};
 
@@ -40,6 +40,9 @@ struct App {
     /// The corner the inset view was last in, so the toggle key can put it
     /// back where the settings row had it.
     inset_corner: usize,
+    /// The camera mode the free camera suspended (ADR-009), which `V`
+    /// returns to: state beside the camera, since no settings row holds it.
+    suspended: Option<usize>,
     /// Whether the isometric view is still easing after a walk (ADR-008):
     /// set by a walk key, cleared once the figure is back inside the dead
     /// zone or by a pan, so the pan keys keep their effect.
@@ -76,6 +79,7 @@ impl App {
             cam,
             settings,
             inset_corner,
+            suspended: None,
             settling: false,
             walking: false,
             held: Held::new(key_release),
@@ -93,18 +97,24 @@ impl App {
     /// the keys down make, the player's walk along it, and the camera
     /// easing after them — every tick in a perspective mode, and in the
     /// isometric mode while a walk is still settling. The end of a walk
-    /// goes to the history.
+    /// goes to the history. The free camera addresses the eye instead
+    /// (ADR-009): the keys fly it, and the character stands where it was
+    /// left.
     fn tick(&mut self, dt: f32) {
         self.world.tick(dt);
-        self.walk_held();
-        let walking = self.world.step_walk(&self.map, dt);
-        if self.walking && !walking {
-            if let Some((x, y)) = self.world.player().map(|p| p.metres()) {
-                self.log(format!("walked to {x:.2}, {y:.2} m"));
+        if self.cam.addresses_character() {
+            self.walk_held();
+            let walking = self.world.step_walk(&self.map, dt);
+            if self.walking && !walking {
+                if let Some((x, y)) = self.world.player().map(|p| p.metres()) {
+                    self.log(format!("walked to {x:.2}, {y:.2} m"));
+                }
             }
+            self.walking = walking;
+        } else {
+            self.fly_held(dt);
         }
-        self.walking = walking;
-        if self.cam.is_perspective() || self.settling {
+        if self.cam.addresses_character() && (self.cam.is_perspective() || self.settling) {
             let settled = self.cam.follow(&self.world, &self.map, self.sw, self.sh);
             self.settling = !settled;
         }
@@ -125,6 +135,41 @@ impl App {
             self.held.clear();
         }
         self.settling |= input::walk_keys(&mut self.world, &self.cam, self.settings.coupling(), self.settings.screen_space(), &self.held);
+    }
+
+    /// Fly the free camera by the keys down (ADR-009): the rows go along
+    /// the view direction, its pitch and all, so looking down and pressing
+    /// `w` descends, and the columns go across it. The pace is the
+    /// character's own speed, `World::RUN` times it with shift.
+    fn fly_held(&mut self, dt: f32) {
+        if self.frames.focus().is_some() {
+            self.held.clear();
+        }
+        let (mut forward, mut right) = (0.0f32, 0.0f32);
+        for (dx, dy) in self.held.dirs() {
+            forward = (forward - dy.signum() as f32).clamp(-1.0, 1.0);
+            right = (right + dx.signum() as f32).clamp(-1.0, 1.0);
+        }
+        if forward == 0.0 && right == 0.0 {
+            return;
+        }
+        let creatures = &self.map.assets.creatures;
+        let pace = creatures[PLAYER as usize % creatures.len()].speed * if self.held.running() { World::RUN } else { 1.0 } * dt;
+        self.cam.fly(forward * pace, right * pace);
+    }
+
+    /// Enter the free camera, or return to the mode it suspended
+    /// (ADR-009). The mode is the `camera` settings row, which the popover
+    /// cycles too, so the row is what says whether the eye is free.
+    fn free_camera(&mut self) {
+        let free = Camera::MODES.len() - 1;
+        if self.settings.get("camera") == free {
+            self.settings.set("camera", self.suspended.take().unwrap_or(0));
+            return;
+        }
+        self.suspended = Some(self.settings.get("camera"));
+        self.settings.set("camera", free);
+        self.world.stop_walk();
     }
 
     fn resize(&mut self, w: i32, h: i32) {
@@ -263,6 +308,7 @@ impl App {
             Action::RotateDegrees(deg) => self.cam.rotate_by(deg.to_radians(), sw, sh),
             Action::Zoom(steps) => self.cam.zoom_by(steps, sw, sh),
             Action::Pitch(deg) => self.cam.pitch_by(deg.to_radians()),
+            Action::FreeCamera => self.free_camera(),
             Action::Step(key, dir) => {
                 if key == "fov" {
                     self.settings.step_fov(dir, self.cam.fov_degrees());

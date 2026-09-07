@@ -115,6 +115,9 @@ pub enum Mode {
     Shoulder,
     /// At the character's eye; the character is not drawn.
     FirstPerson,
+    /// Detached, flown by the player (ADR-009): the anchor is the eye
+    /// itself, and the character stands where it was left.
+    Free,
 }
 
 /// How a perspective mode places its eye from the point it is aimed at
@@ -146,6 +149,9 @@ impl Placement {
     pub const SHOULDER: Placement = Placement { distance: 30.0, pitch: 20.0 * DEG, fov: 40.0 * DEG, lateral: 3.0, ahead: 12.0, visibility: 1.5 };
     /// First person: the eye itself, level, sixty degrees wide.
     pub const FIRST_PERSON: Placement = Placement { distance: 0.0, pitch: 0.0, fov: 60.0 * DEG, lateral: 0.0, ahead: 0.0, visibility: 1.0 };
+    /// The free camera: the eye itself, at whatever pitch the view it was
+    /// entered from had, sixty degrees wide.
+    pub const FREE: Placement = Placement { distance: 0.0, pitch: 0.0, fov: 60.0 * DEG, lateral: 0.0, ahead: 0.0, visibility: 1.0 };
 }
 
 const DEG: f32 = std::f32::consts::PI / 180.0;
@@ -265,7 +271,7 @@ impl Default for Camera {
 impl Camera {
     /// The camera modes the `camera` settings row offers, in its order:
     /// the isometric presets, then the perspective placements.
-    pub const MODES: [&'static str; 4] = ["isometric", "chase", "shoulder", "first-person"];
+    pub const MODES: [&'static str; 5] = ["isometric", "chase", "shoulder", "first-person", "free"];
 
     /// The height of a creature's eye as a fraction of its height: 1.7 m
     /// up a 2 m person.
@@ -400,6 +406,7 @@ impl Camera {
             Mode::Isometric | Mode::Chase => Placement::CHASE,
             Mode::Shoulder => Placement::SHOULDER,
             Mode::FirstPerson => Placement::FIRST_PERSON,
+            Mode::Free => Placement::FREE,
         }
     }
 
@@ -413,10 +420,14 @@ impl Camera {
             0 => Mode::Isometric,
             1 => Mode::Chase,
             2 => Mode::Shoulder,
-            _ => Mode::FirstPerson,
+            3 => Mode::FirstPerson,
+            _ => Mode::Free,
         };
         if mode == self.mode {
             return *self;
+        }
+        if mode == Mode::Free {
+            return self.free_from();
         }
         let mut cam = if mode == Mode::Isometric { Camera::isometric(self.zoom) } else { Camera::in_placement(mode, Camera::placement_of(mode), self.angle) };
         cam.tilt = self.tilt;
@@ -436,6 +447,50 @@ impl Camera {
         cam
     }
 
+    /// The free camera entered from this view (ADR-009): its eye is where
+    /// this view's is, so the switch does not jump. A perspective view
+    /// lends the eye and the pitch it has; the table lends the point under
+    /// the screen centre, pushed back along the yaw and up by the tilt at
+    /// the shoulder view's thirty metres and looked at down the tilt.
+    fn free_from(&self) -> Camera {
+        let mut cam = Camera::in_placement(Mode::Free, Placement::FREE, self.angle);
+        cam.tilt = self.tilt;
+        cam.fov_override = self.fov_override;
+        if self.screen != (0, 0) {
+            cam.screen = self.screen;
+        }
+        if self.is_perspective() {
+            cam.pitch = self.pitch;
+            cam.anchor = self.eye;
+        } else {
+            let (sw, sh) = cam.screen;
+            let (x, y) = self.focus(sw, sh);
+            let (s, c) = self.yaw;
+            let (sp, cp) = self.tilt.sin_cos();
+            let back = Placement::SHOULDER.distance;
+            cam.pitch = self.tilt;
+            cam.anchor = (x + s * cp * back / TILE_METRES, y + c * cp * back / TILE_METRES, self.focus_z + sp * back);
+        }
+        cam.apply_fov();
+        cam
+    }
+
+    /// Fly the eye (ADR-009): `forward` metres along the view direction,
+    /// its pitch and all, and `right` metres across it. The free camera's
+    /// anchor is its eye, so the view goes with it.
+    pub fn fly(&mut self, forward: f32, right: f32) {
+        let (d, r, _) = self.view_axes();
+        let (ax, ay, az) = self.anchor;
+        self.anchor = (ax + (d.0 * forward + r.0 * right) / TILE_METRES, ay + (d.1 * forward + r.1 * right) / TILE_METRES, az + d.2 * forward);
+        self.aim();
+    }
+
+    /// Whether the walk keys address the character (ADR-009), which is
+    /// also when the view follows them; the free camera flies the eye.
+    pub fn addresses_character(&self) -> bool {
+        self.mode != Mode::Free
+    }
+
     /// The mode's name, as the `camera` settings row shows it.
     pub fn mode_name(&self) -> &'static str {
         Camera::MODES[self.mode_index()]
@@ -448,6 +503,7 @@ impl Camera {
             Mode::Chase => 1,
             Mode::Shoulder => 2,
             Mode::FirstPerson => 3,
+            Mode::Free => 4,
         }
     }
 
@@ -1231,7 +1287,8 @@ impl Camera {
     pub const EASE: f32 = 0.3;
 
     /// One tick of following the player (ADR-008): move `EASE` of what is
-    /// left toward them and report whether the view has settled. In the
+    /// left toward them and report whether the view has settled. A free
+    /// camera follows nobody and is settled where it is (ADR-009). In the
     /// isometric mode the figure has a dead zone, the middle third of the
     /// screen each way, inside which the view does not move; outside it
     /// the offset eases by whole cells, never less than one while any
@@ -1239,6 +1296,9 @@ impl Camera {
     /// views ease the aimed point toward the character; the first-person
     /// view is the character's eye and snaps to it.
     pub fn follow(&mut self, world: &World, map: &Map, sw: i32, sh: i32) -> bool {
+        if !self.addresses_character() {
+            return true;
+        }
         let Some(p) = world.player() else { return true };
         let (x, y, z) = self.entity_point(p, map);
         if self.is_perspective() {
@@ -2183,11 +2243,64 @@ mod tests {
             assert_eq!(cam.mode_name(), *name);
             assert_eq!(cam.mode_index(), i);
             assert_eq!(cam.angle(), chase.angle());
-            assert_eq!(cam.anchor_point(), chase.anchor_point());
             assert_eq!(cam.is_perspective(), i != 0);
+            // The placed modes aim at the point the chase view aimed at;
+            // the free camera's anchor is the eye it took (ADR-009).
+            let aimed = if cam.mode() == Mode::Free { chase.eye() } else { chase.anchor_point() };
+            assert_eq!(cam.anchor_point(), aimed);
         }
         let back_to_iso = chase.in_mode(0);
         assert_eq!(back_to_iso.zoom, chase.in_mode(0).in_mode(1).in_mode(0).zoom);
+    }
+
+    /// The free camera (ADR-009): entered without a jump from either kind
+    /// of view, flown by the keys, following nobody, and leaving the mode
+    /// it suspended where it was.
+    #[test]
+    fn the_free_eye_is_entered_where_the_view_was_and_flies_from_there() {
+        let assets = crate::assets::test_assets();
+        let map = Map::synthetic(16, 16, assets.clone(), 0, |_, _| crate::map::Tile::flat(5));
+        let mut world = World::new(1);
+        world.spawn_player(&map, 8, 8, 0.0);
+        let (sw, sh) = (120, 40);
+        let free = Camera::MODES.len() - 1;
+        // From the table: thirty metres back along the yaw and up by the
+        // tilt, looking down it, so the ground under the screen centre is
+        // still under the screen centre.
+        let mut table = Camera::isometric(2);
+        table.set_tilt(50.0 * DEG);
+        table.look_at(8, 8, &map, sw, sh);
+        let (fx, fy) = table.focus(sw, sh);
+        let eye = table.in_mode(free);
+        assert_eq!(eye.mode(), Mode::Free);
+        assert!(eye.is_perspective() && !eye.hides_player(), "an eye, and the character is drawn");
+        assert_eq!(eye.pitch_degrees(), table.tilt_degrees(), "looking down the tilt");
+        assert_eq!(eye.tilt_degrees(), table.tilt_degrees(), "and carrying the tilt back");
+        let (ex, ey, ez) = eye.eye();
+        let back = ((ex - fx) * TILE_METRES).hypot((ey - fy) * TILE_METRES).hypot(ez - table.focus_z);
+        assert!((back - Placement::SHOULDER.distance).abs() < 1e-3, "{back} m from the point under the centre");
+        assert!(ez > table.focus_z, "above the table's own plane");
+        // From an eye, the eye it already had.
+        let mut fp = Camera::first_person(FRAC_PI_4);
+        fp.look_at_entity(world.player().unwrap(), &map, sw, sh);
+        assert_eq!(fp.in_mode(free).eye(), fp.eye(), "the first-person eye stays put");
+        // The keys fly it and the character stands where it was: forward
+        // is the view direction, pitch and all, so a look down descends.
+        let (p0, mut flown) = (*world.player().unwrap(), eye);
+        flown.fly(10.0, 0.0);
+        let (nx, ny, nz) = flown.eye();
+        let moved = ((nx - ex) * TILE_METRES).hypot((ny - ey) * TILE_METRES).hypot(nz - ez);
+        assert!((moved - 10.0).abs() < 1e-3, "ten metres flown, not {moved}");
+        assert!(nz < ez, "looking down, forward descends");
+        assert_eq!(*world.player().unwrap(), p0, "and the character has not moved");
+        // It follows nobody, however far the character walks from it.
+        assert!(world.try_move(&map, 400, 400));
+        assert!(flown.follow(&world, &map, sw, sh), "settled where it is");
+        assert_eq!(flown.eye(), (nx, ny, nz));
+        // Leaving restores the mode it suspended, table and tilt.
+        let landed = flown.in_mode(0);
+        assert!(!landed.is_perspective() && landed.mode() == Mode::Isometric);
+        assert_eq!(landed.tilt_degrees(), table.tilt_degrees());
     }
 
     #[test]
