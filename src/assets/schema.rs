@@ -809,6 +809,9 @@ pub struct ArtSpec {
     pub round_bot: [char; 3],
     /// Trunks of width 1, 2 and 4.
     pub trunk: [String; 3],
+    /// Bare wood by screen direction: vertical, horizontal, rising,
+    /// falling.
+    pub dead_branch: [char; 4],
     pub cactus: char,
     pub roof_fill: char,
     pub door: char,

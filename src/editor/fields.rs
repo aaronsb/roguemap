@@ -310,7 +310,7 @@ const LIGHT: [Field; 7] = [
 
 const SETTING: [Field; 5] = [req("key", Kind::Str), req("label", Kind::Str), req("values", Kind::StrList), opt("default", Kind::U8 { max: 255 }), opt("shortcut", Kind::Glyph)];
 
-const TILESET: [Field; 31] = [
+const TILESET: [Field; 32] = [
     req("name", Kind::Str),
     req("antialias", Kind::Bool),
     req("roles.cover.grass", Kind::GlyphList(3)),
@@ -336,6 +336,7 @@ const TILESET: [Field; 31] = [
     req("art.round_mid", Kind::GlyphList(3)),
     req("art.round_bot", Kind::GlyphList(3)),
     req("art.trunk", Kind::StrList),
+    req("art.dead_branch", Kind::GlyphList(4)),
     req("art.cactus", Kind::Glyph),
     req("art.roof_fill", Kind::Glyph),
     req("art.door", Kind::Glyph),

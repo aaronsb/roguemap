@@ -893,6 +893,7 @@ impl Editor {
                 a.round_mid.to_vec(),
                 a.round_bot.to_vec(),
                 a.trunk.iter().flat_map(|s| s.chars()).collect(),
+                a.dead_branch.to_vec(),
             ];
             items.extend(groups.into_iter().flatten().filter(|c| *c != ' '));
         }

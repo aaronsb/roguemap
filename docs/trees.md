@@ -172,6 +172,12 @@ A living tree carries deadwood too, in the whorls `dead_whorls` sheds:
 they take the same grey bark, one branch at a time rather than the whole
 model.
 
+Bare wood is drawn with its own glyph. The trunk's is upright, which on a
+whorl reaching sideways reads as a slab, so a dead branch takes the
+tileset's `dead_branch` stroke for the direction it runs on screen —
+vertical, horizontal, rising or falling — and a dead crown takes those
+strokes scattered over it instead of the set's leaf fill.
+
 Each species carries a `dead_chance`, 0.02 by default. A tile's seed
 decides whether the tree standing on it is a snag. A dead tree grows from
 the habit's `dead_rules` at the same depth, or from its live rules one

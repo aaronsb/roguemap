@@ -34,6 +34,11 @@ pub struct Art {
     pub round_bot: [char; 3],
     /// Trunks of width 1, 2 and 4.
     pub trunk: [String; 3],
+    /// Bare wood — a shed whorl, a snag's crown — by the direction the
+    /// branch runs on screen: vertical, horizontal, rising, falling. A
+    /// trunk glyph on a branch that reaches sideways reads as a slab; a
+    /// stroke along it reads as a bare branch.
+    pub dead_branch: [char; 4],
     /// Sprites for the smallest tiles, per form in `FORMS` order.
     pub tiny: [Sprite; 4],
     pub cactus: char,
@@ -89,6 +94,7 @@ impl Tileset {
             round_mid: a.round_mid,
             round_bot: a.round_bot,
             trunk: a.trunk.clone(),
+            dead_branch: a.dead_branch,
             tiny: [tiny(&a.tiny.pine), tiny(&a.tiny.broadleaf), tiny(&a.tiny.scrub), tiny(&a.tiny.cactus)],
             cactus: a.cactus,
             roof_fill: a.roof_fill,

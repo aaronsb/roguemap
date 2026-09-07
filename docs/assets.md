@@ -128,7 +128,7 @@ one-glyph tree sprites for the two smallest zooms.
 Buildings and trees have no art: they are block geometry and volumes on
 the ray walk (docs/structures.md, ADR-002), textured with the tileset's
 `[art]` vocabulary (`pine_fill`, `round_mid`, `cactus`, `trunk`,
-`roof_fill`, `door`, `window`).
+`dead_branch`, `roof_fill`, `door`, `window`).
 
 A species with `shape = "lsystem"` is grown from a grammar rather than a
 canopy volume: it names a growth habit from `tree_styles.toml` and

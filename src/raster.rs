@@ -9,6 +9,7 @@ use crate::blocks::{face_normal, Ground, Profile, Roof, NO_FACE};
 use crate::camera::Camera;
 use crate::canvas::Rgb;
 use crate::grid::{Geo, HeightGrid, TOP_CAP};
+use crate::lsystem::dead_bark;
 use crate::map::{Terrain, Tile, FLOOR, SEA, TILE_METRES};
 use crate::noise::{hash, iceil, ifloor, smoothstep};
 use crate::palette::{surface_color, DIRT};
@@ -224,6 +225,26 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
         }
     }
     (' ', base)
+}
+
+/// The bare-wood glyph for a dead branch: the tileset's stroke for the
+/// direction the branch runs on screen, so a whorl reaching sideways is
+/// drawn along its length instead of taking the trunk's upright glyph.
+fn dead_branch(sc: &Scene, v: &crate::volume::Volume) -> char {
+    let cam = sc.cam;
+    let (s, c) = cam.angle.sin_cos();
+    let dx = cam.a() * (v.run.0 * c - v.run.1 * s);
+    let dy = cam.b() * (v.run.0 * s + v.run.1 * c) - v.height * cam.rows_per_metre();
+    let g = &sc.ts.art.dead_branch;
+    if dy.abs() * 2.0 < dx.abs() {
+        g[1]
+    } else if dx.abs() * 2.0 < dy.abs() {
+        g[0]
+    } else if dx * dy < 0.0 {
+        g[2]
+    } else {
+        g[3]
+    }
 }
 
 /// Where in a tile's volume list the last segment of a ray started
@@ -705,7 +726,7 @@ impl Renderer {
             }
             HitKind::Trunk => {
                 let v = &self.grid().volumes[hit.which as usize];
-                let bark = if v.dead { pal.trunk.lerp(Rgb(150, 146, 138), 0.55).scale(0.85) } else { pal.trunk };
+                let bark = if v.dead { dead_bark(pal.trunk) } else { pal.trunk };
                 // A branch at an angle is round in the light; a stand-in's
                 // trunk is a column and keeps its flat colour.
                 if v.shape == crate::volume::Shape::Branch {
@@ -929,8 +950,16 @@ impl Renderer {
                 let sp = &sc.assets.species[v.species as usize % sc.assets.species.len()];
                 let snow = sc.world.snow_at(hit.tile.temp as f32);
                 let live = biome::seasonal(&sp.canopy_glyph, sc.world.season).lerp(pal.snow_glyph(), snow * 0.5);
-                let glyph = if v.dead { pal.trunk_glyph } else { self.canopy_tint(live, v) };
                 let art = &ts.art;
+                let hv = ground_hash(cam, hit.x, hit.y, hit.tile.seed);
+                // A crown with no foliage is bare wood: strokes of branch,
+                // whichever way the cell falls, over the grey the walk gave
+                // it, and never the set's leaf fill.
+                if v.dead {
+                    let ch = if hv % 100 < 60 { art.dead_branch[((hv >> 20) % 4) as usize] } else { ' ' };
+                    return (base, ch, dead_bark(pal.trunk_glyph));
+                }
+                let glyph = self.canopy_tint(live, v);
                 // The set's outline where the crown turns away sideways.
                 if hit.nsx.abs() > 0.7 && sp.form != Form::Cactus {
                     let ch = match (sp.form, hit.nsx > 0.0) {
@@ -941,7 +970,6 @@ impl Renderer {
                     };
                     return (base, ch, glyph);
                 }
-                let hv = ground_hash(cam, hit.x, hit.y, hit.tile.seed);
                 let density = if lod.close { 45 } else { 30 };
                 if hv % 100 < density {
                     let ch = match sp.form {
@@ -953,7 +981,16 @@ impl Renderer {
                 }
                 (base, ' ', base)
             }
-            HitKind::Trunk => (base, ts.art.trunk[0].chars().next().unwrap_or(' '), pal.trunk_glyph),
+            HitKind::Trunk => {
+                let v = &self.grid().volumes[hit.which as usize];
+                if v.dead {
+                    // Bare wood: a stroke along the branch, not the trunk's
+                    // upright glyph, which on a whorl reaching sideways
+                    // reads as a slab.
+                    return (base, dead_branch(sc, v), dead_bark(pal.trunk_glyph));
+                }
+                (base, ts.art.trunk[0].chars().next().unwrap_or(' '), pal.trunk_glyph)
+            }
         }
     }
 
@@ -1343,6 +1380,51 @@ mod tests {
         let r = prepared(&sc, w, h);
         let b = r.grid().bounds();
         (r, b)
+    }
+
+    #[test]
+    fn dead_wood_carries_the_sets_bare_branch_glyph_and_never_the_trunks() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let sp = assets.species.iter().position(|s| s.name == "spruce").expect("a spruce in the set");
+        // A seed of zero rolls a standing snag: no foliage, so every volume
+        // the walk meets over this tile is bare wood.
+        let map = Map::synthetic(16, 16, assets.clone(), 0, move |x, y| {
+            let mut t = Tile::flat(5);
+            t.seed = 0;
+            if (x, y) == (8, 8) {
+                t.tree = Some(Flora { species: sp as u8, variant: 2 });
+            }
+            t
+        });
+        let world = World::new(1);
+        let (w, h) = (120, 40);
+        let trunk = ts.art.trunk[0].chars().next().unwrap();
+        let mut seen: Vec<char> = Vec::new();
+        for zoom in [2usize, 3] {
+            let mut cam = Camera::new();
+            cam.set_zoom(zoom, w, h);
+            cam.look_at(8, 8, &map, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            let r = prepared(&sc, w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    let Some(hit) = r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5) else { continue };
+                    if !hit.kind.is_tree() || !r.grid().volumes[hit.which as usize].dead {
+                        continue;
+                    }
+                    let (_, ch, _) = r.shade(&sc, &hit, x, y);
+                    assert!(ch == ' ' || ts.art.dead_branch.contains(&ch), "zoom {zoom}: a dead cell is bare wood, not {ch:?}");
+                    assert_ne!(ch, trunk, "zoom {zoom}: and never the trunk glyph");
+                    if ch != ' ' && !seen.contains(&ch) {
+                        seen.push(ch);
+                    }
+                }
+            }
+        }
+        // The bole is upright and the whorls reach sideways, so the strokes
+        // the snag is drawn with are not all one direction.
+        assert!(seen.len() >= 2, "the strokes follow the branches: {seen:?}");
     }
 
     #[test]

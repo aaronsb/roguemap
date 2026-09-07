@@ -32,6 +32,7 @@ round_top = ["▗", "▄", "▖"]
 round_mid = ["▐", "▓", "▌"]
 round_bot = ["▝", "▀", "▘"]
 trunk = ["▌", "▐▌", "▐██▌"]
+dead_branch = ["│", "─", "╱", "╲"]
 cactus = "▌"
 roof_fill = "▒"
 door = "▐"
