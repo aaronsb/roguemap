@@ -33,7 +33,7 @@ a test parses the tables below and holds each property against them
 | form | enum | required | species | Glyph pool and one-glyph sprite: pine, broadleaf, scrub, cactus, later lsystem. |
 | shape | enum | by form | species | Canopy volume for the geometry renderer (ADR-002): cone, ellipsoid, dome, cactus, or lsystem for a tree grown from a grammar (docs/lsystem.md). |
 | style | name | none | species | Growth habit from `tree_styles.toml`, for `shape = "lsystem"`: excurrent, decurrent, columnar, weeping, umbrella, vase, palm, shrub. |
-| lsystem | table | {} | species | Parameter overrides for the habit, or a grammar written out in full: `branch_angle`, `forks`, `taper`, `droop`, `leaf_density`, `asymmetry`, `jitter`, `prune_height`, `depth`, `length`, `leaf_radius`, `axiom`, `rules`, `dead_rules` (docs/lsystem.md). |
+| lsystem | table | {} | species | Parameter overrides for the habit, or a grammar written out in full: `branch_angle`, `forks`, `taper`, `droop`, `leaf_density`, `asymmetry`, `jitter`, `prune_height`, `depth`, `length`, `leaf_radius`, `leaf_flat`, `axiom`, `rules`, `dead_rules` (docs/lsystem.md). |
 | dead_chance | 0..1 | 0.02 | species | Chance an instance stands dead: no leaves, grey bark, a broken crown. The roll is a hash of the tile seed, so the same tree is dead every time. |
 | roof | enum | flat | blocks | Profile above the column: none, flat, gable, hip. |
 | art | name | required | props, creatures | Name of an art file set; the tier is chosen by zoom. Every prop and creature has one. |

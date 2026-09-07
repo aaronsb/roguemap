@@ -117,13 +117,29 @@ leaf clusters, cached in `grid::ModelCache` by species, tile seed, foliage
 quantised to nine steps, dead or alive, and detail level, so a season
 creeping forward does not regrow every tree every frame. A model lives
 four frames past the last frame that wanted it, and the cache holds three
-thousand. What the walk tests is the model at the size it is drawn,
-simplified as [trees.md](trees.md) describes.
+thousand. The walk draws the model wherever a tree is tall enough to read,
+which is every zoom but the overview, and what it tests is the model at
+the size it is drawn, simplified as [trees.md](trees.md) describes: a
+coarse level at 1:4, finer at 1:2 and finest at 1:1.
 
-Crowns are porous. `volume::foliage_at` hashes a point on a lattice of
-three cells per metre and hits foliage with the species' `leaf_density` as
-its probability; a failed roll passes the ray through, so a sparse crown
-shows flecks of what is behind it.
+A leaf cluster is solid: a grown crown's holes are the gaps its grammar
+left between the clusters, so sky and ground show through a thin crown
+where its branches really are. The habit's `stand_in` volume is the
+porous one — `volume::foliage_at` hashes a point on a lattice of three
+cells per metre and hits foliage with the species' `leaf_density` as its
+probability, and a failed roll passes the ray through — but the walk only
+meets a stand-in where a species has no grammar, since every habit's
+stand-in is built for the shadow mask alone.
+
+A stand reads as trees rather than as one canopy because each tree is
+separated from its neighbours twice over. Every instance takes its own
+canopy tint from its tile's seed, a sixth brighter or dimmer and nudged
+toward yellow or blue. And where one tree stands in front of another, the
+cells of the tree behind along the seam are darkened by a third
+(`Renderer::outline_crowns`), so every crown carries an outline against
+the crowns behind it. The seam is found in screen space from the hits:
+a tree cell whose four-neighbour belongs to a different tree on a nearer
+tile is on it.
 
 ## The shadow mask
 
@@ -204,10 +220,11 @@ Antialiasing needs both the setting and a tileset that allows it. The
 ASCII tileset sets `antialias = false`, so no sextant is ever emitted
 there and the same scene reads as plain printable characters. Crown seams
 are the expensive case: below 1:1 crown cells are not supersampled at all,
-and at 1:1, once trees are grown geometry, a crown against another crown
-is still skipped, because the branches already cut the outline at cell
-resolution and in a stand that seam is most of the screen. What is
-supersampled is the stand's edge against the sky, the ground or a wall.
+and at 1:1 a crown against another crown is still skipped, because the
+branches and clusters already cut the outline at cell resolution and in a
+stand that seam is most of the screen. What is supersampled is the
+stand's edge against the sky, the ground or a wall; what separates two
+crowns is the seam outline described under Trees.
 
 ## Level of detail
 
@@ -217,7 +234,7 @@ with the zoom scale in [scale.md](scale.md).
 | zoom | rpm | roof profiles | trees | window and roof glyphs | crown seams | bisections | detail octaves |
 |---|---|---|---|---|---|---|---|
 | far 1:8 | 0.75 | flat columns | one-glyph billboard | no | no | 4 | 0 |
-| mid 1:4 | 1.5 | yes | stand-in volumes | no | no | 4 | 1 |
+| mid 1:4 | 1.5 | yes | grown models, coarse | no | no | 4 | 1 |
 | near 1:2 | 3 | yes | grown models | yes | no | 4 | 2 |
 | close 1:1 | 6 | yes | grown, finer | yes | yes | 5 | 3 |
 
@@ -238,10 +255,20 @@ which renders N frames and prints the mean:
 
 At 168x71 with the inset open, seed 7, on the boreal stand at
 `cx=500 cy=-300` — the densest forest in the world — a frame takes about
-15.0 ms at 1:8, 14.6 at 1:4, 17.4 at 1:2 and 19.0 at 1:1. Over the filled
-world at the origin: 12.1, 14.1, 15.1 and 17.8. Part of the cost at the
+15.5 ms at 1:8, 15.9 at 1:4, 16.5 at 1:2 and 18.7 at 1:1. Over the filled
+world at the origin: 12.2, 16.2, 15.3 and 16.3. Part of the cost at the
 two outer zooms is the inset itself, which draws at 1:1. The event loop
 polls on a 40 ms tick, so the budget is 25 frames a second and every
 measurement above sits inside it. The first frame after a camera move is
 dearer than the rest, because the trees that came into view are grown on
 it.
+
+Most of a frame is the walk itself, and most of the walk is steps through
+air and terrain samples; the trees are a smaller share than their count
+suggests, because the tile index rejects a primitive on its distance from
+the segment's ground stroke and solves a leaf cluster from the index
+entry alone, without reading the cluster. What the grown trees do cost is
+rays that used to stop on a stand-in and now pass through a real gap —
+between the tiers of a spruce, or through a bare oak — down to the
+terrain, so a winter scene at 1:4 is a few milliseconds dearer than a
+summer one.

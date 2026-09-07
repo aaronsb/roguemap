@@ -71,9 +71,27 @@ is one command.
   view as `draw` builds it.
 - **Geometry.** A stack on a flat plain is met as a roof over its tile
   centre between the eaves and the peak, and as a wall at its near corner
-  below the eaves, at zooms 2, 4 and 6; a pine is met on its flank facing
-  the camera half way up, and ground four tiles from its trunk is ground;
-  at the overview the column still stands but no volumes are built.
+  below the eaves, at zooms 2, 4 and 6; a live pine, grown from its habit
+  at every one of those zooms, is met down its leader a metre and a half
+  under its top, on its flank half way up wherever the tiers leave no gap,
+  and ground four tiles from its trunk is ground; at the overview the
+  column still stands but no volumes are built.
+- **Level of detail.** A model is grown from one and a half rows per
+  metre up and not at the overview; the detail level counts the zooms a
+  model is grown at, and its lattice and twig cut halve with each zoom in.
+  An oak at the mid zoom is its model with fewer primitives than at the
+  near zoom, its stand-in beside them for the shadow mask.
+- **Grown models** (`src/lsystem/mod.rs`). A merged cluster is no smaller
+  than its biggest member and no wider on any axis than the box its
+  members fill or the screen they would cover side by side, and a cluster
+  on its own comes back as it was; the bole is a chain from the foot that
+  thins upward, survives a cut above every branch and joins into one
+  capsule under a coarse lattice; a bare tree keeps twigs down to
+  `BARE_TWIG` of the cut a leafy one drops them at; `leaf_flat` halves the
+  height of a cluster on a level branch and leaves an upright one round.
+- **Crown seams.** With two pines on the camera's diagonal, every cell of
+  the far crown beside a cell of the near one is darkened by `CROWN_SEAM`
+  and a cell inside the far crown keeps its colour.
 - **Roof profiles and runs** (`src/blocks.rs`). A gable is flat at the
   eaves and peaks at the ridge, continues across a merged run without a
   step and caps at `max_rise`; a hip rises from every edge; flat stays

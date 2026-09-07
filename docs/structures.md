@@ -130,7 +130,7 @@ dome or cactus); a row may give `radius`, `height`, `trunk` and
 `trunk_radius` in metres instead. The size class scales a species (small
 0.8, mixed 1, large 1.15), the tile's variant scales each tree (0.8 to
 1.1), and the tile's seed gives every instance its own height and crown
-radius a quarter either way, a canopy an eighth brighter or dimmer and
+radius a quarter either way, a canopy a sixth brighter or dimmer and
 slightly warmer or cooler, and a chance (the species' `dead_chance`) of
 standing dead: a grey-brown snag with no foliage that still casts. The
 trunk is jittered within its tile by the tile's seed.
@@ -220,8 +220,8 @@ because the trees that came into view are grown on it.
 3. Done: the scale pass (ADR-004): heights are metres and project through
    the zoom's rows per metre.
 4. Done: L-system species on the walk (docs/lsystem.md): every species
-   names a growth habit, the near zooms test its grown branches and leaf
-   clusters, and crowns are porous.
+   names a growth habit, every zoom but the overview tests its grown
+   branches and leaf clusters, and a stand reads as separate trees.
 5. Next: the settlement system paints towns and roads; the editor paints
    by hand through `Map::set_stack`; bridges (`deck`) and props casting
    short shadows at the closest zooms.
@@ -238,35 +238,43 @@ L-system species (docs/lsystem.md).
 
 Every species names a growth habit, so every tree in the world is grown
 from a grammar; the saguaro, which is a column and not a tree, keeps its
-own shape. From the near zooms up (three rows per metre and closer) the
-walk tests the tree's model: a `Branch` capsule per segment, round in
-metres and at any angle, and a `Cluster` ellipsoid per leaf clump. Below
-that a tree is the one volume its habit names through `stand_in`, sized
-from the species' `size` exactly as before, so the far zooms are
-unchanged. The stand-in is built either way: it is what the shadow mask
-sweeps, since a hundred thousand discs would cost more than the frame.
+own shape. From the mid zoom up (one and a half rows per metre and
+closer) the walk tests the tree's model: a `Branch` capsule per segment,
+round in metres and at any angle, and a `Cluster` ellipsoid per leaf
+clump. At the overview a tree is a one-glyph billboard. The one volume its
+habit names through `stand_in`, sized from the species' `size`, is built
+at every zoom that grows a model but marked so the walk never meets it:
+it is what the shadow mask sweeps, since a hundred thousand discs would
+cost more than the frame, and what the chunk ceiling bounds. The walk
+only meets a stand-in where a species has no grammar.
 
 What the walk tests is the model at the size it is drawn, not the model
 the grammar grew (`TreeModel::simplify`): leaf clusters within a lattice
-four rows of height across are merged into one, and branches thinner than
-about one column are dropped, because the foliage that grew on them
-covers them. A tree with no foliage — bare in winter, or a snag — keeps
-every twig, since the twigs are all there is of it. A grown model is
-cached per species, seed, foliage (quantised to nine steps), state and
-detail level in the renderer (`grid::ModelCache`), so a tree in view is
-grown once and not once a frame.
+four rows of height across, centred on the trunk, are merged into one
+that is no wider than the box they fill and covers no more of the screen
+than they would side by side, and branches thinner than about one column
+are dropped, because the foliage that grew on them covers them; the bole
+is kept as a chain whatever the zoom. A tree with no foliage — bare in
+winter, or a snag — keeps its twigs down to a third of that cut, since the
+twigs are all there is of it. A grown model is cached per species, seed,
+foliage (quantised to nine steps), state and detail level in the renderer
+(`grid::ModelCache`), so a tree in view is grown once and not once a
+frame. docs/trees.md, "The stand-in rule", has the levels and what keeps
+one tree apart from the next in a stand.
 
 ## Porous canopies
 
-A crown is not solid. A ray sample inside a canopy hits foliage with the
-species' leaf density as its probability, seeded by position so the holes
-stay put from frame to frame, and otherwise passes through and keeps
-walking; a segment with no crossing whose top lies inside the crown counts
-as a sample too, so a ray that entered through a hole goes on meeting
-foliage as it descends. Through a sparse crown you see flecks of what is
-behind: a character, a wall, the sky. L-system leaf clusters give the same
-result from their real gaps. The leaf density is the habit's
+A grown crown has holes where its grammar left none of its clusters, and
+each cluster is solid: through a spruce you see the sky between its
+tiers, through a bare oak the ground behind it. A stand-in crown is
+porous instead. A ray sample inside one hits foliage with the species'
+leaf density as its probability, seeded by position so the holes stay put
+from frame to frame, and otherwise passes through and keeps walking; a
+segment with no crossing whose top lies inside the crown counts as a
+sample too, so a ray that entered through a hole goes on meeting foliage
+as it descends. Through a sparse crown you see flecks of what is behind:
+a character, a wall, the sky. The leaf density is the habit's
 `leaf_density`, 0.85 for the evergreen habits and 0.7 for the broadleaf
 ones, and for a species with no habit it is the form's. The shadow mask
-uses the leaf density as the crown's opacity, so a thin tree throws a
-light shadow.
+uses the leaf density as every crown's opacity, grown or not, so a thin
+tree throws a light shadow.

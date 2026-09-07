@@ -26,7 +26,8 @@ terminal shows with the same font.
 | | |
 |---|---|
 | ![island](screenshots/island.png) The island at 1:8 | ![scale-zclose](screenshots/scale-zclose.png) The yardstick at 1:1: a 2 m person, an 18 m oak, a house |
-| ![lsystem-stand-near](screenshots/lsystem-stand-near.png) A boreal stand at 1:2, each spruce grown from its habit | ![village](screenshots/village.png) A village on the steppe at 1:4 |
+| ![lsystem-stand-near](screenshots/lsystem-stand-near.png) A boreal stand at 1:2, each spruce grown from its habit | ![lsystem-stand-mid](screenshots/lsystem-stand-mid.png) The same stand at 1:4: tiered spires, each with its own outline |
+| ![village](screenshots/village.png) A village on the steppe at 1:4 | ![filled](screenshots/filled.png) The filled world at 1:4 |
 | ![night](screenshots/night.png) Night: a campfire and lit windows | ![winter](screenshots/winter.png) Winter after two simulated days of storm |
 | ![clouds](screenshots/clouds.png) Above the cloud layer at the widest zoom | ![worldmap](screenshots/worldmap.png) The world map, four tiles per column |
 | ![editor](screenshots/editor.png) The asset editor on the `oak` species row | ![lsystem-conifer](screenshots/lsystem-conifer.png) A spruce, side on, from the `excurrent` habit |
@@ -39,7 +40,7 @@ terminal shows with the same font.
 | [world.md](world.md) | The height field, relief in metres, rivers, climate, biomes, chunks and the world map |
 | [rendering.md](rendering.md) | The ray walk, block and tree geometry, shadows, lighting, antialiasing, level of detail, cost |
 | [scale.md](scale.md) | Metres, the four zooms and their ratios, movement, the inset view |
-| [trees.md](trees.md) | The growth habits, their parameters, seasons, dead trees, the stand-in rule |
+| [trees.md](trees.md) | The growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |
 | [frames.md](frames.md) | Frames over the scene: the HUD, settings, world map, inset, panes |
 | [weather.md](weather.md) | Wind, clouds, precipitation, accumulation, seasons, day and night |

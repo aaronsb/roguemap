@@ -8,12 +8,16 @@ There is no tile atlas. Every screen cell casts a ray back into the world
 and walks down the continuous height field under it, testing the buildings
 and trees in view on the way, until it meets a surface — so the camera
 sits at any angle and the terrain has no seams. Buildings are block
-geometry that merges with its neighbours under one roof. Trees are grown
-from L-system grammars and tested on the same walk, with porous canopies
-you can see through. A deferred lighting pass adds ambient sky light, a
-sun shadowed by drifting clouds and by everything that casts, and point
-lights. Cells on a boundary are supersampled 2x3 and drawn as a sextant
-glyph in two colours.
+geometry that merges with its neighbours under one roof. Every tree is
+grown from the grammar of one of eight growth habits — a tiered spruce, a
+forked oak, a weeping willow, a palm — into branches and leaf clusters the
+same walk tests at every zoom but the overview, so a stand reads as
+distinct trees with the silhouette of their habit; a crown has holes
+where its grammar left none, a deciduous tree leafs out and goes bare
+with the season, and a few in every stand are snags. A deferred lighting
+pass adds ambient sky light, a sun shadowed by drifting clouds and by
+everything that casts, and point lights. Cells on a boundary are
+supersampled 2x3 and drawn as a sextant glyph in two colours.
 
 The world is a pure function of position and seed: a continuous height
 field, a climate over it, a simplified Köppen classification, and biomes
@@ -28,12 +32,13 @@ Rendered by `make screenshots` through the headless snapshot pipeline.
 | | |
 |---|---|
 | ![scale-zclose](docs/screenshots/scale-zclose.png) The yardstick at 1:1: a 2 m person, an 18 m oak, a house | ![scale-zfar](docs/screenshots/scale-zfar.png) The same ground at 1:8 |
-| ![lsystem-stand-near](docs/screenshots/lsystem-stand-near.png) A boreal stand at 1:2, every spruce grown from its habit | ![lsystem-stand-close](docs/screenshots/lsystem-stand-close.png) The same stand at 1:1: trunks, whorls and porous crowns |
-| ![village](docs/screenshots/village.png) A village on the steppe at 1:4 | ![filled](docs/screenshots/filled.png) The filled world at 1:4 |
-| ![night](docs/screenshots/night.png) Night, a campfire and lit windows | ![winter](docs/screenshots/winter.png) Winter after two days of storm |
-| ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom | ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses |
+| ![lsystem-stand-near](docs/screenshots/lsystem-stand-near.png) A boreal stand at 1:2, every spruce grown from its habit and outlined against the next | ![lsystem-stand-close](docs/screenshots/lsystem-stand-close.png) The same stand at 1:1: trunks, tiers and the gaps between them |
+| ![lsystem-stand-mid](docs/screenshots/lsystem-stand-mid.png) The same stand at 1:4: tiered spires with trunks in the gaps | ![filled](docs/screenshots/filled.png) The filled world at 1:4, its pines and oaks grown |
+| ![village](docs/screenshots/village.png) A village on the steppe at 1:4 | ![winter](docs/screenshots/winter.png) Winter after two days of storm |
+| ![night](docs/screenshots/night.png) Night, a campfire and lit windows | ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom |
+| ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses | ![lsystem-oak-winter](docs/screenshots/lsystem-oak-winter.png) The gnarled oak bare in winter |
 | ![worldmap](docs/screenshots/worldmap.png) The world map | ![ascii](docs/screenshots/ascii.png) The ASCII glyph set |
-| ![lsystem-oak](docs/screenshots/lsystem-oak.png) A gnarled oak in summer | ![lsystem-conifer](docs/screenshots/lsystem-conifer.png) A spruce from the `excurrent` habit |
+| ![lsystem-oak](docs/screenshots/lsystem-oak.png) A gnarled oak in summer, from the `decurrent` habit | ![lsystem-conifer](docs/screenshots/lsystem-conifer.png) A spruce from the `excurrent` habit, its tiers flattened into sprays |
 | ![editor](docs/screenshots/editor.png) The asset editor | ![settings](docs/screenshots/settings.png) The settings frame |
 
 ## Run
@@ -92,7 +97,7 @@ the gallery, the map of the pages and how to run everything.
 | [world.md](docs/world.md) | The height field, relief in metres, rivers, climate, biomes, chunks, the world map |
 | [rendering.md](docs/rendering.md) | The ray walk, block and tree geometry, shadows, lighting, sextant antialiasing, level of detail, cost |
 | [scale.md](docs/scale.md) | Metres, the four zooms and their ratios, movement, the inset view |
-| [trees.md](docs/trees.md) | The eight growth habits, their parameters, seasons, dead trees, the stand-in rule |
+| [trees.md](docs/trees.md) | The eight growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](docs/assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |
 | [frames.md](docs/frames.md) | Frames over the scene: HUD, settings, world map, inset, panes |
 | [weather.md](docs/weather.md) | Wind, clouds, precipitation, accumulation, seasons, day and night |

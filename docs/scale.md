@@ -102,9 +102,9 @@ stands at that zoom, and stands with its feet on the ground.
 
 ![scale-zmid](screenshots/scale-zmid.png)
 
-The same yardstick at 1:4. The person is three rows and the oak's crown
-is a volume rather than a grown model; what changes at each zoom is in
-[rendering.md](rendering.md).
+The same yardstick at 1:4. The person is three rows and the oak is its
+grown model at the coarse level of detail; what changes at each zoom is
+in [rendering.md](rendering.md).
 
 ## The inset view
 

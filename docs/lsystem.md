@@ -15,11 +15,12 @@ axiom and rules.
 Every species in the set names a habit, so every tree in the world is
 grown from one; only the saguaro, which is a column and not a tree, keeps
 a canopy volume of its own. The ray walk tests a tree's branches and leaf
-clusters from three rows per metre up (the near and close zooms) and the
-canopy volume of ADR-002 below that, where a tree is a few cells and the
-volume is the right thing; each style names the volume it reads as
-through `stand_in` (docs/structures.md, "Volumes are stand-ins"). The way
-to look at one tree on its own is a preview:
+clusters from one and a half rows per metre up (the mid, near and close
+zooms), simplified to the zoom; at the overview a tree is a one-glyph
+billboard. Each style still names a canopy volume of ADR-002 through
+`stand_in`: it is what the shadow mask sweeps and what the chunk ceiling
+bounds (docs/structures.md, "Volumes are stand-ins"). The way to look at
+one tree on its own is a preview:
 
 ```
 make build
@@ -67,13 +68,14 @@ species in `[species.lsystem]`.
 | `forks` | 1.. | Branches in a whorl, or ways the trunk forks. |
 | `taper` | 0.1..1 | Factor a segment's length and radius take on entering a branch (`[`) and on every `!`. |
 | `droop` | -1..1 | Extra bend per segment drawn inside a branch, as a fraction of `branch_angle`: positive hangs the branch, negative lifts it. |
-| `leaf_density` | 0..1 | Chance an `L` becomes a cluster; thinning opens a crown without touching the branches. It is also how solid the crown is on the ray walk: the chance a sample inside one meets foliage rather than passing through (docs/structures.md, "Porous canopies"). `excurrent` and `palm` carry 0.85, `shrub` 0.8 and the rest 0.7. |
+| `leaf_density` | 0..1 | Chance an `L` becomes a cluster; thinning opens a crown without touching the branches, and the gaps it leaves are the grown crown's porosity. It is also how solid the habit's stand-in is on the ray walk and in the shadow mask (docs/structures.md, "Porous canopies"). `excurrent` and `palm` carry 0.85, `shrub` 0.8 and the rest 0.7. |
 | `asymmetry` | 0..1 | How one-sided the instance is: a seeded direction the trunk leans in, with limbs on that side longer and the far side shorter. A parkland tree keeps it low, a gnarled or wind-shaped one high. |
 | `jitter` | 0..1 | Small seeded noise on every branch's angle and length and every cluster's position. A healthy tree is symmetric but never exactly, so a live tree always carries some. The habits carry 0.09 to 0.12; a species with no habit falls back to 0.08. |
 | `prune_height` | 0..1 | Fraction of the grown tree's measured height with no live branches, because a tree self-prunes as it grows. The cut is capped at 0.95 of the height, and a cut that would leave a bare pole is discarded. |
 | `depth` | 0..12 inclusive | How many times the rules are applied. |
 | `length` | > 0 metres | Length of a first-level `F`, before the model is scaled to `size`. |
 | `leaf_radius` | >= 0 metres | Radius of one `L` cluster, in final metres: a clump of leaves is about a metre across whatever shape its tree is, so this does not scale with the tree. |
+| `leaf_flat` | 0..1 | How flat a cluster on a level branch is. A cluster keeps `1 - leaf_flat` of its height on a horizontal branch and all of it on an upright one, so the foliage of a whorl is a spray and a conifer's tiers have gaps between them. `excurrent` carries 0.5; a habit that leaves it out keeps every cluster round. |
 
 `asymmetry` and `jitter` are different things and both are wanted.
 Asymmetry is one bias for the whole instance; jitter is independent noise
@@ -230,13 +232,19 @@ metres and at any angle; the walk solves it as a quadratic in the ray's
 height like every other shape.
 
 `TreeModel::simplify(cell, min_radius)` is the level of detail the walk
-asks for: leaf clusters within a lattice of `cell` metres merge into one
-ellipsoid holding them, and branches thinner than `min_radius` are
-dropped, since the foliage that grew on them covers them. A model with no
-foliage — bare, or dead — keeps every twig, because the twigs are all
-there is of it. The renderer keeps the simplified models in a cache keyed
-by species, seed, foliage (quantised to nine steps), state and detail
-level, so a tree in view is grown once and not once a frame.
+asks for: the leaf clusters within each cell of a lattice of `cell`
+metres, centred on the trunk, merge into one ellipsoid at their centroid,
+no wider on any axis than the box they fill and covering no more of the
+screen than they would side by side; branches thinner than `min_radius`
+are dropped, since the foliage that grew on them covers them, except the
+bole (`TreeModel::bole`), the chain of segments from the foot, which is
+kept as far up as it stays `BOLE_KEEP` of its own width and joined into
+capsules of up to two cells of rise. A model with no foliage — bare, or
+dead — keeps its twigs down to `BARE_TWIG` of the cut, because the twigs
+are all there is of it. The renderer keeps the simplified models in a
+cache keyed by species, seed, foliage (quantised to nine steps), state and
+detail level — coarse at 1:4, finer at 1:2, finest at 1:1 — so a tree in
+view is grown once and not once a frame.
 
 ## The preview
 
