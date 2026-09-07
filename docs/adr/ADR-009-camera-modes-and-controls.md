@@ -419,8 +419,9 @@ Stage 3, the tilt in play:
 4. The range and its clamp, `{` and `}` on the isometric camera, the
    mouse's rows, `tilt=` in the snapshot, `relief` zeroed at the top.
 5. Two golden frames: `plan`, the yardstick scene at 1:1 straight down,
-   and `overhead`, the cloud scene at 1:4 straight down, which is the
-   parallax at the plan view.
+   and `overhead`, the cloud scene at 1:8 straight down, which is the
+   parallax at the plan view (the cloud layer draws at the far zoom
+   alone, so the shot is the `clouds` frame's zoom with the tilt added).
 
 Stage 4, coupling:
 

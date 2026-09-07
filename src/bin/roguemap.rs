@@ -152,7 +152,7 @@ impl App {
         match look {
             Look::Turn(yaw, pitch) => {
                 self.cam.rotate_by(yaw.to_radians(), self.sw, self.sh);
-                // An isometric view has no pitch of its own to turn.
+                // The rows tilt the isometric table (ADR-009).
                 self.cam.pitch_by(pitch.to_radians());
             }
             Look::Wheel(dir) if self.cam.is_perspective() => self.settings.step_fov(-dir, self.cam.fov_degrees()),

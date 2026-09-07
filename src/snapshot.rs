@@ -64,7 +64,8 @@ impl SnapArgs {
 /// to time rendering), scene (`scale` for the yardstick of ADR-004: a
 /// person, an oak and a house on flat ground), camera (isometric, chase,
 /// shoulder or first-person: ADR-007), pitch and fov (degrees, for a
-/// perspective camera), fog (metres of visibility, 0 for no fade),
+/// perspective camera), tilt (degrees, 30 to 90, of the isometric table:
+/// ADR-009), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
 /// character stands on; a perspective view's default is cx, cy), walk
 /// (`KEY,SECONDS`: hold a walk key that long in 40 ms ticks, ADR-008)
@@ -132,6 +133,9 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
 
     let mut cv = Canvas::new(w, h);
     let mut renderer = Renderer::new(sw, sh);
+    // tilt=DEGREES tilts the isometric table (ADR-009); the floor is what
+    // every frame drew before it.
+    cam.set_tilt(a.num("tilt", Camera::TILT_RANGE.0.to_degrees()).to_radians());
     cam.set_angle(std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians());
     let (cx, cy) = (a.num("cx", map.w as f32 / 2.0) as i32, a.num("cy", map.h as f32 / 2.0) as i32);
     cam.look_at(cx, cy, &map, sw, sh);

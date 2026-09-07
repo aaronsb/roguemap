@@ -88,7 +88,7 @@ pub const SCENE: &[Binding] = &[
     Binding { shift: false, keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
     Binding { shift: false, keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
     Binding { shift: false, keys: &[(Char('x'), Toggle("inset"))], label: "x", help: "inset" },
-    Binding { shift: false, keys: &[(Char('{'), Pitch(-5.0)), (Char('}'), Pitch(5.0))], label: "{ }", help: "pitch" },
+    Binding { shift: false, keys: &[(Char('{'), Pitch(-5.0)), (Char('}'), Pitch(5.0))], label: "{ }", help: "tilt" },
     Binding { shift: false, keys: &[(Char('<'), Step("fov", -1)), (Char('>'), Step("fov", 1))], label: "< >", help: "fov" },
     // The roguelike diagonals, so one key is a diagonal in a terminal that
     // cannot report two keys held at once (ADR-008); the capitals run.
@@ -498,8 +498,9 @@ mod tests {
         assert_eq!(o.event(at(MouseEventKind::Moved, 41, 20), MouseMode::Free), None, "and it starts afresh when it is turned back on");
     }
 
-    /// Moving the pointer right turns the view right, and a perspective
-    /// pitch stops at the end of its range rather than turning over.
+    /// Moving the pointer right turns the view right; its rows tilt the
+    /// isometric table and pitch a perspective view, each stopping at the
+    /// end of its range rather than turning over.
     #[test]
     fn a_turn_right_is_a_turn_right_and_the_pitch_clamps() {
         use crate::camera::Camera;
@@ -515,11 +516,20 @@ mod tests {
         cam.rotate_by(yaw.to_radians(), 120, 40);
         let (fx, fy) = cam.forward();
         assert!((fx + 1.0).abs() < 1e-4 && fy.abs() < 1e-4, "looking south and turning right looks west: {fx}, {fy}");
-        // The isometric view has no pitch to turn; a chase view has, and it
+        // The rows tilt the table from its floor of 30 degrees to straight
+        // down and no further (ADR-009); a chase view pitches instead, and
         // stops at the end of its range.
-        let flat = cam.pitch_degrees();
-        cam.pitch_by(30f32.to_radians());
-        assert_eq!(cam.pitch_degrees(), flat, "the isometric pitch is the footprint's");
+        assert_eq!(cam.tilt_degrees(), 30);
+        cam.pitch_by((5.0 * Mouse::PITCH_PER_ROW).to_radians());
+        assert_eq!(cam.tilt_degrees(), 45, "fifteen rows down is fifteen degrees steeper");
+        for _ in 0..40 {
+            cam.pitch_by((10.0 * Mouse::PITCH_PER_ROW).to_radians());
+        }
+        assert_eq!(cam.tilt_degrees(), 90, "however far the pointer is dragged down");
+        for _ in 0..80 {
+            cam.pitch_by((-10.0 * Mouse::PITCH_PER_ROW).to_radians());
+        }
+        assert_eq!(cam.tilt_degrees(), 30, "and up");
         let mut chase = Camera::chase(std::f32::consts::FRAC_PI_4);
         for _ in 0..40 {
             chase.pitch_by((10.0 * Mouse::PITCH_PER_ROW).to_radians());
