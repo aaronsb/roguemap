@@ -41,6 +41,25 @@ resolves depth, a walk cycle resolves a figure, drifting cloud resolves the
 plane it sits on. The unit of legibility is the sequence, not the frame, so
 a snapshot may look sparser than the game does.
 
+**Everything descends the same ladder, and it ends in colour.** A thing is
+geometry while it is large on the screen, then a glyph, then a dot, then a
+tint on the cell and nothing more. The owner, on prairie grass: "even the
+tall prarie grass that is an l system at close distance fades to | and then
+. and finally just a color at distance." Trees already do this; so do tall
+grasses, tufts, boulders and roofs.
+
+The rung is chosen by **angular size**, not by distance. A screen column
+subtends 0.0069 radians, so a thing of size `s` at distance `d` spans
+`s / (0.0069 d)` columns, and it drops a rung as that passes a few columns,
+one column, and a third of one. One threshold serves everything: a ten
+metre tree holds its glyph to about 1.4 km where a half metre tuft holds
+its to about 70 m, from the same rule rather than three tables.
+
+The last rung is why the far field needs no renderer of its own. A distant
+hillside's colour is its grass tint over its tree tint over its rock tint,
+summed — every species on rung four at once. The band of flat tone a
+horizon is made of is the ladder's end, not a mechanism beside it.
+
 Two things follow, and they are the constraints this page's passes are
 judged against.
 
