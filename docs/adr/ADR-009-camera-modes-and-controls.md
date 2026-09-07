@@ -179,7 +179,7 @@ about it changes.
 Under `view-only` the body carries a yaw of its own. `w` and `s` walk
 forward and back along it, `a` and `d` turn it, and the mouse turns the
 view alone. The owner: "if one is walking and uses w for forward, then a
-and s to turn the body left and right, the mouse looks around?" Holding
+and d to turn the body left and right, the mouse looks around?" Holding
 `w` with `a` walks a curve, which is the held-key set of ADR-008 summing
 as it already does — `w` and `s` contribute to the pace, `a` and `d` to
 the turn. A frozen heading was the alternative, and it is worse: the only
