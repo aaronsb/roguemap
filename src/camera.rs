@@ -414,7 +414,8 @@ impl Camera {
     /// aimed point, the field-of-view override and the screen carry over,
     /// and an isometric camera keeps its zoom and its tilt, so switching
     /// there and back lands where it was. Aimed on the screen it last
-    /// knew.
+    /// knew. The free camera's aimed point is its eye, so leaving it aims
+    /// at what the eye looks at (`free_target`) instead.
     pub fn in_mode(&self, index: usize) -> Camera {
         let mode = match index % Camera::MODES.len() {
             0 => Mode::Isometric,
@@ -429,17 +430,18 @@ impl Camera {
         if mode == Mode::Free {
             return self.free_from();
         }
+        let point = if self.mode == Mode::Free { self.free_target() } else { self.anchor };
         let mut cam = if mode == Mode::Isometric { Camera::isometric(self.zoom) } else { Camera::in_placement(mode, Camera::placement_of(mode), self.angle) };
         cam.tilt = self.tilt;
         cam.set_angle(self.angle);
         cam.fov_override = self.fov_override;
         cam.apply_fov();
         cam.screen = self.screen;
-        cam.anchor = self.anchor;
+        cam.anchor = point;
         if mode == Mode::Isometric {
             cam.preset(self.zoom);
             if self.screen != (0, 0) {
-                cam.look_at_point(self.anchor.0, self.anchor.1, self.anchor.2, self.screen.0, self.screen.1);
+                cam.look_at_point(point.0, point.1, point.2, self.screen.0, self.screen.1);
             }
         } else {
             cam.aim();
@@ -473,6 +475,18 @@ impl Camera {
         }
         cam.apply_fov();
         cam
+    }
+
+    /// What the free eye looks at: the point `Placement::SHOULDER`'s
+    /// thirty metres down its own view, which is `free_from`'s push
+    /// undone. Entered and left with no key between, the table comes back
+    /// to the point it was aimed at; flown, the eye leaves the table
+    /// aimed at the ground ahead of it.
+    fn free_target(&self) -> (f32, f32, f32) {
+        let (d, _, _) = self.view_axes();
+        let (ex, ey, ez) = self.eye;
+        let ahead = Placement::SHOULDER.distance;
+        (ex + d.0 * ahead / TILE_METRES, ey + d.1 * ahead / TILE_METRES, ez + d.2 * ahead)
     }
 
     /// Fly the eye (ADR-009): `forward` metres along the view direction,
@@ -2301,6 +2315,33 @@ mod tests {
         let landed = flown.in_mode(0);
         assert!(!landed.is_perspective() && landed.mode() == Mode::Isometric);
         assert_eq!(landed.tilt_degrees(), table.tilt_degrees());
+    }
+
+    /// Leaving the free camera undoes the push that entered it: the table
+    /// comes back where it was, and a flown eye lands on the ground it
+    /// was looking at rather than on the eye itself.
+    #[test]
+    fn leaving_the_free_eye_undoes_the_push_that_entered_it() {
+        let (sw, sh) = (120, 40);
+        let free = Camera::MODES.len() - 1;
+        let mut table = Camera::isometric(3);
+        table.set_tilt(50.0 * DEG);
+        table.look_at_point(8.5, 8.5, 5.0, sw, sh);
+        let back = table.in_mode(free).in_mode(0);
+        assert_eq!((back.ox, back.oy), (table.ox, table.oy), "there and back is where it was");
+        assert!((back.focus_z - table.focus_z).abs() < 1e-3, "aimed at the same height, not at the eye's");
+        let (fx, fy) = table.focus(sw, sh);
+        let (bx, by) = back.focus(sw, sh);
+        assert!((bx - fx).abs() < 0.05 && (by - fy).abs() < 0.05, "{bx}, {by} is not {fx}, {fy}");
+        // Pitch up and fly, and the return aims at the ground the eye is
+        // looking at: thirty metres down the view, well below the eye.
+        let mut flown = table.in_mode(free);
+        flown.pitch_by(-20.0 * DEG);
+        flown.fly(60.0, 0.0);
+        let landed = flown.in_mode(0);
+        let expected = flown.eye().2 - Placement::SHOULDER.distance * flown.pitch.sin();
+        assert!((landed.focus_z - expected).abs() < 1e-3, "{} is not the ground under the view", landed.focus_z);
+        assert!(landed.focus_z < flown.eye().2, "on the ground, not in the air");
     }
 
     #[test]
