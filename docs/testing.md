@@ -386,3 +386,17 @@ is one command.
   preferred to restructuring modules.
 - A change that alters pixels re-records the golden frames in the same
   commit and says which frames changed and why.
+
+## The tick-by-tick session
+
+`tests/chase_fuzz.rs` runs a random session the way the game loop does —
+held keys with a variable tick, mouse turns and pitches, the wheel, mode
+and coupling switches — and renders every tick rather than one frame after
+a walk. Four seeds of three hundred ticks, across screen sizes; widen it
+with `FUZZ_SEEDS=1,2,3 FUZZ_TICKS=1500`.
+
+It exists because the snapshot cannot reach what it reaches. A snapshot
+renders one frame at a fixed hour, so a fault that needs the clock to
+arrive somewhere — the crown sweep at a low sun, which `crown_shadow.rs`
+now pins — sits between the frames it takes. The session lets the world
+tick, so it lands in those windows.
