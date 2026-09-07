@@ -28,7 +28,11 @@ species.
 | close | 16x4 | 1:1 | 11.3 | 6.0 |
 | near | 8x2 | 1:2 | 5.7 | 3.0 |
 | mid | 4x1 | 1:4 | 2.8 | 1.5 |
-| far | 2x1 | 1:8 | 1.4 | 0.75 |
+| far | 2x0.5 | 1:8 | 1.4 | 0.75 |
+
+The far footprint was recorded here as 2x1, the whole cells it was drawn
+in; [ADR-009](ADR-009-camera-modes-and-controls.md) made it the halving
+this table claims, and corrected the cell.
 
 Rows per metre is derived from the footprint so vertical and horizontal
 scale agree; projection uses it for heights instead of one row per unit.

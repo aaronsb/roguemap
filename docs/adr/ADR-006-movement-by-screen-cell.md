@@ -56,7 +56,12 @@ does (far and mid share a half height of one, so they share a row step):
 | close | 16x4 | 8.8 cm | 35.4 cm | 71 cm | 9 cm | 35 cm |
 | near | 8x2 | 17.7 cm | 70.7 cm | 1.4 m | 18 cm | 71 cm |
 | mid | 4x1 | 35.4 cm | 141.4 cm | 2.8 m | 35 cm | 141 cm |
-| far | 2x1 | 70.7 cm | 141.4 cm | 5.7 m | 71 cm | 141 cm |
+| far | 2x0.5 | 70.7 cm | 282.8 cm | 5.7 m | 71 cm | 283 cm |
+
+The far row was recorded as a 2x1 footprint with a 141.4 cm row, the
+whole cells it was drawn in; [ADR-009](ADR-009-camera-modes-and-controls.md)
+made the far zoom a true halving of the mid zoom and corrected the row,
+so rows halve exactly with every zoom in as columns do.
 
 At the compass view a column is a map diagonal, (6.25, -6.25) cm at 1:1,
 and a row is (25, 25) cm; at other angles the vector turns with the

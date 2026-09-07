@@ -316,10 +316,16 @@ rebinds a key.
   which is tilt-independent and so still names the right preset for a
   camera built by `orthographic` at a steep tilt.
 - The far zoom changes at stage 2, and that is the cycle's intended
-  visual change. `island`, `rotated`, `clouds`, `settings` and `worldmap`
-  are drawn at 1:8 (the last through `fitting_zoom`, which cannot fit a
-  32-tile map on 120 columns at any preset and falls back to the far
-  one). Those five are re-recorded; the other twelve stay bit-identical.
+  visual change. It reaches nine frames by two paths. `island`,
+  `rotated`, `clouds` and `settings` draw the far zoom directly.
+  `closeup`, `scale`, `stride`, `props` and `firstperson` draw it in
+  their inset: on the golden frames' 120 columns the inset is shown, a
+  1:1 view's inset is 1:8, and the first-person view carries the close
+  preset so its inset is 1:8 too; their differing cells are the inset's
+  columns and nowhere else. Those nine are re-recorded; the other eight
+  stay bit-identical. `worldmap` is among the eight: `fitting_zoom`
+  falls back to the far preset there, and the world-map frame covers
+  the scene, so the far zoom never draws under it.
 - `hw` and `hh` retire. `footprint()` becomes the cells a tile spans at
   the compass view, `(cols * sqrt 2, rows * sqrt 2)` rounded to at least
   one cell — (4, 1) far, (8, 2) mid, (16, 4) near, (32, 8) close at the

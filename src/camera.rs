@@ -174,12 +174,10 @@ pub struct Camera {
     pub fov: f32,
     pub ox: f32,
     pub oy: f32,
-    /// The zoom preset: its index in `ZOOMS` and its footprint. A camera
-    /// built from a scale rather than a preset carries the preset nearest
-    /// its rows per metre, for what is keyed by zoom.
+    /// The zoom preset, an index into `ZOOMS`. A camera built from a
+    /// scale rather than a preset carries the preset nearest its detail
+    /// scale, for what is keyed by zoom.
     pub zoom: usize,
-    pub hw: i32,
-    pub hh: i32,
     /// Height of the point the screen centre was last aimed at, so zoom and
     /// rotation pivot about it.
     pub focus_z: f32,
@@ -314,8 +312,6 @@ impl Camera {
             ox: 0.0,
             oy: 0.0,
             zoom: 0,
-            hw: 0,
-            hh: 0,
             focus_z: SEA as f32,
             basis: Basis { cols: 1.0, rows: 1.0, rise: 1.0 },
             mode: Mode::Isometric,
@@ -494,23 +490,12 @@ impl Camera {
         nearest.unwrap_or(0)
     }
 
-    /// A zoom preset's columns per metre: `hw sqrt 2` columns a tile.
-    fn zoom_columns(zoom: usize) -> f32 {
-        ZOOMS[zoom % ZOOMS.len()].0 as f32 * SQRT_2 / TILE_METRES
-    }
-
-    /// Switch to a zoom preset in place: its index, footprint, basis and
-    /// detail scale. The offset is left to the caller.
+    /// Switch to a zoom preset in place: its index, basis and detail
+    /// scale. The offset is left to the caller.
     fn preset(&mut self, zoom: usize) {
         self.zoom = zoom % ZOOMS.len();
-        (self.hw, self.hh) = ZOOMS[self.zoom];
-        let columns = Camera::zoom_columns(self.zoom);
+        let columns = ZOOMS[self.zoom];
         self.basis = Camera::table_basis(columns, self.tilt, self.relief);
-        // The far preset keeps its 2x1 footprint's rows until stage 2 of
-        // ADR-009.
-        if self.zoom == 0 {
-            self.basis.rows = self.hh as f32 * SQRT_2;
-        }
         self.detail = Camera::table_basis(columns, Camera::TILT_RANGE.0, self.relief).rise;
         self.pitch = self.tilt;
     }
@@ -581,7 +566,6 @@ impl Camera {
         self.basis = Basis { cols: self.focal / depth * TILE_METRES, rows: rows * sp * TILE_METRES, rise: rows * cp };
         self.detail = self.basis.rise;
         self.zoom = Camera::nearest_zoom(self.detail);
-        (self.hw, self.hh) = ZOOMS[self.zoom];
     }
 
     /// The view axes in metres: the direction the eye looks along, screen
@@ -750,11 +734,19 @@ impl Camera {
         v.0 * d.0 + v.1 * d.1 + v.2 * d.2
     }
 
-    /// The columns and rows a tile's footprint spans at the compass view:
-    /// the cells the view slides by on a pan, and the lattice the ground
-    /// texture hashes on.
+    /// The columns and rows a tile spans at the compass view, at least
+    /// one cell each: the cells the view slides by on a pan, and the
+    /// lattice the ground texture hashes on. Under an eye a tile spans a
+    /// different count at every depth, so the footprint there is the
+    /// scale the view is stated at, the carried preset's: one answer per
+    /// frame, quantised, so the ground texture stays put as the character
+    /// moves.
     pub fn footprint(&self) -> (i32, i32) {
-        (2 * self.hw, 2 * self.hh)
+        if self.is_perspective() {
+            return Camera::isometric(self.zoom).footprint();
+        }
+        let cells = |n: f32| (n * SQRT_2).round().max(1.0) as i32;
+        (cells(self.basis.cols), cells(self.basis.rows))
     }
 
     /// The zoom's name and the scale it draws at, for the HUD.
@@ -1321,6 +1313,11 @@ const LEVEL: f32 = 1e-3;
 mod tests {
     use super::*;
 
+    /// The footprint presets of ADR-004, half width and half height in
+    /// cells, which the table reproduces at the floor tilt: the far one's
+    /// rows are the whole cell it was drawn in, and the table halves them.
+    const FOOTPRINTS: [(i32, i32); 4] = [(2, 1), (4, 1), (8, 2), (16, 4)];
+
     /// The projection as it was before ADR-007: the footprint's numbers
     /// worked out on every call. The general path must give these bits.
     struct Old {
@@ -1333,7 +1330,8 @@ mod tests {
 
     impl Old {
         fn of(cam: &Camera) -> Old {
-            Old { angle: cam.angle(), ox: cam.ox, oy: cam.oy, hw: cam.hw, hh: cam.hh }
+            let (hw, hh) = FOOTPRINTS[cam.zoom];
+            Old { angle: cam.angle(), ox: cam.ox, oy: cam.oy, hw, hh }
         }
 
         fn scales(&self) -> (f32, f32, f32) {
@@ -1365,12 +1363,19 @@ mod tests {
         let mut cam = Camera::new();
         for angle in ANGLES {
             cam.set_angle(angle);
-            for (zoom, &(hw, hh)) in ZOOMS.iter().enumerate() {
+            for zoom in 0..ZOOMS.len() {
                 cam.set_zoom(zoom, 168, 71);
                 cam.look_at_point(10.5, 7.5, 5.0, 168, 71);
                 let old = Old::of(&cam);
-                assert_eq!((cam.a(), cam.b(), cam.rows_per_metre()), old.scales());
-                assert_eq!((old.hw, old.hh), (hw, hh));
+                let (a, b, rpm) = old.scales();
+                assert_eq!((cam.a(), cam.rows_per_metre()), (a, rpm));
+                if zoom == 0 {
+                    // The far zoom's rows are half the mid zoom's (ADR-009),
+                    // not the whole cell the footprint drew.
+                    assert_eq!(cam.b(), Camera::isometric(1).b() / 2.0);
+                    continue;
+                }
+                assert_eq!(cam.b(), b);
                 for i in -10..=10 {
                     for j in -10..=10 {
                         for z in [-12.0, 0.0, 0.37, 5.0, 17.5, 120.0] {
@@ -1418,32 +1423,33 @@ mod tests {
         // relief is sqrt 1.5. The detail scale is that rise.
         assert_eq!(Camera::RELIEF, 1.5f32.sqrt());
         assert_eq!(Camera::TILT_RANGE.0.sin(), 0.5);
-        for (zoom, &(hw, hh)) in ZOOMS.iter().enumerate() {
+        for (zoom, &(hw, hh)) in FOOTPRINTS.iter().enumerate() {
             let cam = Camera::isometric(zoom);
             let old = Old { angle: 0.0, ox: 0.0, oy: 0.0, hw, hh };
             let (a, b, rpm) = old.scales();
-            let got = Camera::table_basis(cam.columns_per_metre(), Camera::TILT_RANGE.0, Camera::RELIEF);
-            assert_eq!((got.cols, got.rise), (a, rpm), "zoom {zoom}");
-            assert_eq!(cam.detail_rows(), rpm, "zoom {zoom}");
-            assert_eq!((cam.a(), cam.b(), cam.rows_per_metre()), (a, b, rpm), "zoom {zoom}");
+            assert_eq!((cam.a(), cam.rows_per_metre(), cam.detail_rows()), (a, rpm, rpm), "zoom {zoom}");
             if zoom > 0 {
-                assert_eq!(got.rows, b, "zoom {zoom}");
+                assert_eq!(cam.b(), b, "zoom {zoom}");
             }
             assert_eq!((cam.tilt(), cam.pitch, cam.relief()), (Camera::TILT_RANGE.0, Camera::TILT_RANGE.0, Camera::RELIEF));
             assert_eq!(cam.fov, 0.0, "every preset is orthographic");
             // The general form built from the preset's own numbers is the
             // preset again and carries it.
             let general = Camera::orthographic(cam.angle(), cam.tilt(), cam.relief(), cam.columns_per_metre());
-            assert_eq!((general.basis().cols, general.basis().rise, general.detail_rows()), (a, rpm, rpm), "zoom {zoom}");
-            assert_eq!((general.zoom, general.hw, general.hh), (zoom, hw, hh), "the general camera carries the nearest preset");
+            assert_eq!((general.basis(), general.detail_rows(), general.zoom), (cam.basis(), rpm, zoom), "zoom {zoom}");
         }
+        // The far zoom is a true half of the mid zoom: its rows halve and
+        // its rise is unchanged.
+        let (far, mid) = (Camera::isometric(0), Camera::isometric(1));
+        assert_eq!(far.b(), mid.b() / 2.0);
+        assert_eq!(far.rows_per_metre(), 0.75);
         // The apparent pitch is the number ADR-007 pinned, the tilt taken
-        // for foreshortening with the relief: 25.24 degrees at the floor,
-        // and 43.31 for the far zoom's 2x1 rows while it keeps them.
-        let close = Camera::isometric(3);
-        assert!((close.basis().apparent_pitch().to_degrees() - 25.24).abs() < 0.01);
-        assert!((close.basis().apparent_pitch() - (Camera::TILT_RANGE.0.tan() / Camera::RELIEF).atan()).abs() < 1e-6);
-        assert!((Camera::isometric(0).basis().apparent_pitch().to_degrees() - 43.31).abs() < 0.01);
+        // for foreshortening with the relief: 25.24 degrees at every zoom.
+        for zoom in 0..ZOOMS.len() {
+            let cam = Camera::isometric(zoom);
+            assert!((cam.basis().apparent_pitch().to_degrees() - 25.24).abs() < 0.01, "zoom {zoom}");
+            assert!((cam.basis().apparent_pitch() - (Camera::TILT_RANGE.0.tan() / Camera::RELIEF).atan()).abs() < 1e-6);
+        }
         // A top-down view has all its rows in ground depth and none in
         // height; a view along the ground the reverse, with no relief.
         let down = Camera::orthographic(0.0, FRAC_PI_2, Camera::RELIEF, 4.0);
@@ -1492,13 +1498,15 @@ mod tests {
 
     #[test]
     fn the_footprint_is_the_cells_a_pan_slides_by() {
+        // A tile at the compass view: (4, 1) far, (8, 2) mid, (16, 4)
+        // near, (32, 8) close.
         let mut cam = Camera::new();
-        for (zoom, &(hw, hh)) in ZOOMS.iter().enumerate() {
+        for (zoom, (fw, fh)) in [(4, 1), (8, 2), (16, 4), (32, 8)].into_iter().enumerate() {
             cam.set_zoom(zoom, 120, 40);
-            assert_eq!(cam.footprint(), (2 * hw, 2 * hh));
+            assert_eq!(cam.footprint(), (fw, fh), "zoom {zoom}");
             let (ox, oy) = (cam.ox, cam.oy);
             cam.pan(1, -2);
-            assert_eq!((cam.ox - ox, cam.oy - oy), ((2 * hw) as f32, (-4 * hh) as f32));
+            assert_eq!((cam.ox - ox, cam.oy - oy), (fw as f32, (-2 * fh) as f32));
         }
     }
 
@@ -1545,21 +1553,18 @@ mod tests {
     }
 
     #[test]
-    fn screen_directions_give_the_eight_compass_steps() {
-        // At the compass view with 2:1 tiles the eight screen directions
-        // land on the eight distinct unit steps of the map.
+    fn screen_axes_give_the_four_diagonal_compass_steps_at_every_zoom() {
+        // At the compass view the four screen axes land on the four
+        // diagonal unit steps of the map, whatever the zoom: the tilt is
+        // one angle at every zoom (ADR-009), so the far zoom no longer has
+        // the 45-degree diamond that once told the screen diagonals apart.
         let mut cam = Camera::new();
-        cam.set_zoom(0, 120, 40);
-        let dirs = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)];
-        let steps: Vec<(i32, i32)> = dirs.iter().map(|&(dx, dy)| cam.screen_dir_to_map(dx, dy)).collect();
-        for (i, s) in steps.iter().enumerate() {
-            assert!(s.0.abs() <= 1 && s.1.abs() <= 1 && *s != (0, 0), "{:?} -> {s:?}", dirs[i]);
-            assert!(!steps[..i].contains(s), "{:?} repeats step {s:?}", dirs[i]);
+        for zoom in 0..ZOOMS.len() {
+            cam.set_zoom(zoom, 120, 40);
+            let dirs = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+            let steps: Vec<(i32, i32)> = dirs.iter().map(|&(dx, dy)| cam.screen_dir_to_map(dx, dy)).collect();
+            assert_eq!(steps, [(-1, -1), (1, -1), (1, 1), (-1, 1)], "zoom {zoom}: up is north-west, right north-east");
         }
-        assert_eq!(steps[0], (-1, -1), "screen up is map north-west");
-        assert_eq!(steps[2], (1, -1), "screen right is map north-east");
-        assert_eq!(steps[4], (1, 1));
-        assert_eq!(steps[6], (-1, 1));
     }
 
     #[test]
@@ -1608,7 +1613,7 @@ mod tests {
 
     #[test]
     fn each_zoom_is_an_exact_halving_of_the_next_in_rows_and_columns_per_metre() {
-        // far 2x1 (1:8), mid 4x1 (1:4), near 8x2 (1:2), close 16x4 (1:1).
+        // far 1:8, mid 1:4, near 1:2, close 1:1.
         let expected = [(0.75, 1.414), (1.5, 2.828), (3.0, 5.657), (6.0, 11.314)];
         assert_eq!(ZOOMS.len(), expected.len());
         let mut cam = Camera::new();
@@ -1716,11 +1721,10 @@ mod tests {
 
     #[test]
     fn the_cell_step_halves_with_every_zoom_in_and_is_the_stated_table() {
-        // The ground under one column is TILE_CM / (hw * sqrt 2) and under
-        // one row TILE_CM / (hh * sqrt 2): 8.8, 17.7, 35.4, 70.7 cm and
-        // 35.4, 70.7, 141, 141 cm from close to far. Columns halve exactly
-        // between zooms; rows halve wherever the half height does, and far
-        // and mid share a half height of one.
+        // The ground under one column is TILE_CM / cols and under one row
+        // TILE_CM / rows: 8.8, 17.7, 35.4, 70.7 cm and 35.4, 70.7, 141,
+        // 283 cm from close to far, each an exact halving of the zoom
+        // below (ADR-006 as corrected by ADR-009).
         let mut cam = Camera::new();
         let mut steps = Vec::new();
         let from = (1300, 1300);
@@ -1743,12 +1747,11 @@ mod tests {
             }
         }
         let rounded: Vec<(i32, i32)> = steps.iter().map(|(c, r)| (c.round() as i32, r.round() as i32)).collect();
-        assert_eq!(rounded, [(71, 141), (35, 141), (18, 71), (9, 35)], "far, mid, near, close");
+        assert_eq!(rounded, [(71, 283), (35, 141), (18, 71), (9, 35)], "far, mid, near, close");
         for zoom in 1..ZOOMS.len() {
             let ((c, r), (c0, r0)) = (steps[zoom], steps[zoom - 1]);
             assert!((c * 2.0 - c0).abs() < 1e-3, "zoom {zoom}: a column is half the zoom below");
-            let (hh, hh0) = (ZOOMS[zoom].1, ZOOMS[zoom - 1].1);
-            assert!((r * hh as f32 / hh0 as f32 - r0).abs() < 1e-3, "zoom {zoom}: a row follows the half height");
+            assert!((r * 2.0 - r0).abs() < 1e-3, "zoom {zoom}: and so is a row");
         }
         // From a tile centre the figure sits on a cell boundary in both
         // axes, so the first press lands it at the centre of the next cell,
