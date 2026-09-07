@@ -327,6 +327,12 @@ impl Held {
         self.keys.retain(|d| d.code != code);
     }
 
+    /// Every key is up: a focused frame owns the keyboard, so the figure
+    /// stands still under one however the keys were left.
+    pub fn clear(&mut self) {
+        self.keys.clear();
+    }
+
     /// Spend `dt` seconds of every lease and drop the keys whose lease has
     /// run out. Where releases are reported the leases are not spent — the
     /// release is what lifts a key.
@@ -434,6 +440,9 @@ mod tests {
         assert_eq!(h.dirs().collect::<Vec<_>>(), vec![(1, 0)], "releasing one leaves the other");
         h.release(Char('d'));
         assert!(h.is_empty());
+        h.press(Char('w'), (0, -1), false);
+        h.clear();
+        assert!(h.is_empty(), "a frame taking focus lifts them all");
     }
 
     #[test]

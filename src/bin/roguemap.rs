@@ -118,6 +118,11 @@ impl App {
     /// nothing for two opposite ones, held for as long as their leases
     /// have left. With no key down the figure stops on this tick.
     fn walk_held(&mut self) {
+        // A focused frame owns the keyboard, so the figure stands still
+        // under one; the keys count again when it closes.
+        if self.frames.focus().is_some() {
+            self.held.clear();
+        }
         let Some(dir) = self.cam.held_heading(self.settings.screen_space(), self.held.dirs()) else {
             self.world.stop_walk();
             return;

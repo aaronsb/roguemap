@@ -128,7 +128,8 @@ axis it names. So `w` and `d` together walk the diagonal half way between
 them, `w` and `s` cancel to no walk at all, and a diagonal key is exactly
 the two keys it stands for. Any key down pressed with shift makes the
 whole walk a run. Letting the last one up stops the figure on that tick,
-`World::stop_walk`, rather than after the grace.
+`World::stop_walk`, rather than after the grace, and a frame taking focus
+lifts them all, so the figure stands still under a popover.
 
 Whether two keys can be down at once is the terminal's to say, and the
 status bar names which of the two modes the session is in.
