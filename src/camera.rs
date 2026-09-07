@@ -784,11 +784,13 @@ impl Camera {
     }
 
     /// What the status line says of the view: the zoom's ratio and name,
-    /// or the perspective mode with its distance, field of view and pitch.
+    /// with the tilt when it is off the floor, or the perspective mode
+    /// with its distance, field of view and pitch.
     pub fn view_label(&self) -> String {
         if !self.is_perspective() {
             let (name, ratio) = self.zoom_name();
-            return format!("{ratio} {name}");
+            let tilt = if self.tilt > Camera::TILT_RANGE.0 { format!(" {}deg", self.tilt_degrees()) } else { String::new() };
+            return format!("{ratio} {name}{tilt}");
         }
         let distance = if self.placement.distance > 0.0 { format!(" {:.0}m", self.placement.distance) } else { String::new() };
         format!("{}{distance} fov {:.0} pitch {}", self.mode_name(), self.fov_degrees(), self.pitch_degrees())
@@ -1633,6 +1635,9 @@ mod tests {
         assert!((x - x2).abs() < 1.0 / cam.b() && (y - y2).abs() < 1.0 / cam.b(), "({x}, {y}) then ({x2}, {y2})");
         cam.zoom_by(1, 120, 40);
         assert_eq!(cam.tilt_degrees(), 60);
+        // The label announces the tilt only off the floor.
+        assert_eq!(cam.view_label(), "1:2 near 60deg");
+        assert_eq!(Camera::isometric(0).view_label(), "1:8 far");
         let chase = cam.in_mode(1);
         assert!(chase.is_perspective());
         let back = chase.in_mode(0);
