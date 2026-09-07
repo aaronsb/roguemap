@@ -35,7 +35,7 @@ test-golden: ## Compare the golden frame set with tests/golden/*.frame (see gold
 	cargo test --release --test golden
 
 lint: ## Run clippy
-	cargo clippy --release -- -D warnings
+	cargo clippy --release --all-targets -- -D warnings
 
 format: ## Format sources
 	cargo fmt

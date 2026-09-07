@@ -1448,7 +1448,7 @@ mod tests {
         let (kept_leafy, kept_bare) = (leafy.simplify(1.0, 0.3).segments.len(), bare.simplify(1.0, 0.3).segments.len());
         assert!(kept_bare > kept_leafy, "bare {kept_bare} vs leafy {kept_leafy}");
         let thinnest = bare.simplify(1.0, 0.3).segments.iter().map(|s| s.radius).fold(f32::MAX, f32::min);
-        assert!(thinnest < 0.3 && thinnest >= 0.3 * BARE_TWIG - 1e-5, "down to a fraction of the cut: {thinnest}");
+        assert!((0.3 * BARE_TWIG - 1e-5..0.3).contains(&thinnest), "down to a fraction of the cut: {thinnest}");
     }
 
     #[test]
