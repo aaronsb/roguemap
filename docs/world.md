@@ -168,6 +168,14 @@ Ground terrain then falls out of height and temperature: water below sea
 level, sand at the shoreline, snow below −16 °C, rock above `ROCK_Z`, a
 patch of dirt where a third noise field is high, and grass otherwise.
 
+Sand is a shore terrain, so both of its bands ask how far the water is as
+well as how low the ground: a tile at sea level is beach where water lies
+within `SHORE_TILES` (three), a tile a metre up only where the water is
+its neighbour. A basin that happens to sit at sea level inland is grass
+like the plain around it. The continuous surface follows the tiles: below
+0.45 m it is sand where the tile it stands on or one beside it is sand or
+water, and below 1.3 m where the water is within a step.
+
 ![steppe](screenshots/steppe.png)
 
 The steppe biome, `BS`, with adobe houses and wide-spaced acacias.

@@ -51,6 +51,9 @@ const LAPSE: f32 = 26.4;
 /// Side of a tile in metres. Every size in the tables is in metres, and a
 /// metre draws as `Camera::rows_per_metre` rows (ADR-004).
 pub const TILE_METRES: f32 = 2.0;
+/// How far inland a beach reaches: sand at sea level needs water within
+/// this many tiles, so a low plain away from any water is grass.
+const SHORE_TILES: i32 = 3;
 
 /// Metres of height for a value of the generator's field: linear down to
 /// the sea bed, and a rising curve above the shoreline so lowlands are
@@ -260,11 +263,14 @@ struct Chunk {
     max_z: i32,
 }
 
-/// Terrain kind from the height in metres and the climate at a tile.
-fn terrain_for(z: i32, temp: f32, near_water: bool, patch: f32) -> Terrain {
+/// Terrain kind from the height in metres and the climate at a tile. Sand
+/// is a shore terrain, so both of its bands ask how far the water is: the
+/// lowest one is beach out to `SHORE_TILES`, a metre up only next to the
+/// water. A basin that happens to sit at sea level inland is not sand.
+fn terrain_for(z: i32, temp: f32, near_water: bool, shore: bool, patch: f32) -> Terrain {
     if z < SEA {
         Terrain::Water
-    } else if z == SEA || (z == SEA + 1 && near_water) {
+    } else if (z == SEA && shore) || (z == SEA + 1 && near_water) {
         Terrain::Sand
     } else if temp <= -16.0 {
         Terrain::Snow
@@ -520,6 +526,17 @@ impl Map {
         fbm(xf * 0.13, yf * 0.13, self.seed ^ 0x51, 3)
     }
 
+    /// Whether a position lies on or beside a beach: a tile of sand or of
+    /// water within a step. The tiles already carry the shore test
+    /// (`terrain_for`), so the continuous surface asks them rather than
+    /// walking the field again, and the sand at sea level stops where the
+    /// beach does instead of pooling in an inland basin.
+    fn beach(&self, xf: f32, yf: f32) -> bool {
+        let (x, y) = (xf.floor() as i32, yf.floor() as i32);
+        let sandy = |x: i32, y: i32| self.get(x, y).map(|t| matches!(t.terrain, Terrain::Sand | Terrain::Water)).unwrap_or(false);
+        sandy(x, y) || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| sandy(x + dx, y + dy))
+    }
+
     /// Whether a position lies within a tile of water, for beaches.
     fn shore(&self, xf: f32, yf: f32) -> bool {
         let (x, y) = (xf.floor() as i32, yf.floor() as i32);
@@ -534,7 +551,7 @@ impl Map {
         }
         if h < SEA as f32 {
             Terrain::Water
-        } else if h < SEA as f32 + 0.45 || (h < SEA as f32 + 1.3 && self.shore(xf, yf)) {
+        } else if (h < SEA as f32 + 0.45 && self.beach(xf, yf)) || (h < SEA as f32 + 1.3 && self.shore(xf, yf)) {
             Terrain::Sand
         } else if temp <= -16.0 {
             Terrain::Snow
@@ -549,6 +566,14 @@ impl Map {
 
     fn is_water(&self, x: i32, y: i32) -> bool {
         self.height(x, y) < SEA
+    }
+
+    /// Whether water lies within `SHORE_TILES` of a tile, the width of a
+    /// beach. Heights come from the field rather than from tiles, so this
+    /// stays a pure function of position and seed and generates no chunk.
+    fn near_shore(&self, x: i32, y: i32) -> bool {
+        let r = SHORE_TILES;
+        (-r..=r).any(|dy| (-r..=r).any(|dx| dx * dx + dy * dy <= r * r && self.is_water(x + dx, y + dy)))
     }
 
     /// Annual mean temperature: a slow latitude-like field, minus the lapse
@@ -640,7 +665,8 @@ impl Map {
     fn terrain_at(&self, x: i32, y: i32) -> Terrain {
         let c = self.climate(x, y);
         let near_water = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.is_water(x + dx, y + dy));
-        terrain_for(c.z, c.temp, near_water, self.patch(x as f32 + 0.5, y as f32 + 0.5))
+        let shore = c.z == SEA && self.near_shore(x, y);
+        terrain_for(c.z, c.temp, near_water, shore, self.patch(x as f32 + 0.5, y as f32 + 0.5))
     }
 
     /// Paint the buildings of every plot the chunk touches onto its tiles.
@@ -702,7 +728,8 @@ impl Map {
         let biome = &self.assets.biomes[climate.biome];
         let near_water = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.is_water(x + dx, y + dy));
         let patch = self.patch(x as f32 + 0.5, y as f32 + 0.5);
-        let terrain = terrain_for(z, temp, near_water, patch);
+        let shore = z == SEA && self.near_shore(x, y);
+        let terrain = terrain_for(z, temp, near_water, shore, patch);
 
         let hv = hash(x as i64, y as i64, self.seed);
         let forest = fbm(x as f32 * 0.08, y as f32 * 0.08, self.seed ^ 0xF0, 3);
@@ -1074,5 +1101,28 @@ mod tests {
         let m = Map::new(32, 32, 7, test_assets());
         let (x, y) = m.nearest_land(0, 0);
         assert_ne!(m.get(x, y).unwrap().terrain, Terrain::Water);
+    }
+
+    #[test]
+    fn sand_is_a_shore_terrain_and_an_inland_basin_at_sea_level_is_not_a_beach() {
+        let mut m = Map::new(32, 32, 7, test_assets());
+        m.bounded = false;
+        let water_within = |m: &Map, x: i32, y: i32, r: i32| (-r..=r).any(|dy| (-r..=r).any(|dx| m.get(x + dx, y + dy).map(|t| t.terrain == Terrain::Water).unwrap_or(false)));
+        // A plain of seed 7 that sits exactly at sea level with no water for
+        // twice the beach band around it: grass, not sand, at the tile and
+        // at any point on it.
+        let (x, y) = (208, -488);
+        let t = m.get(x, y).unwrap();
+        assert_eq!(t.z, SEA, "the basin is at sea level");
+        assert!(!water_within(&m, x, y, 2 * SHORE_TILES), "and has no water anywhere near it");
+        assert_ne!(t.terrain, Terrain::Sand, "so it is not a beach");
+        assert_ne!(m.surface_at(x as f32 + 0.5, y as f32 + 0.5, t.hf.max(SEA as f32), t.temp as f32), Terrain::Sand, "and the continuous surface agrees");
+        // The shore of a lake, at the same height, still is.
+        let (bx, by) = (-205, 284);
+        let b = m.get(bx, by).unwrap();
+        assert_eq!(b.z, SEA);
+        assert!(water_within(&m, bx, by, SHORE_TILES), "this one has water within the band");
+        assert_eq!(b.terrain, Terrain::Sand, "so it is a beach");
+        assert_eq!(m.surface_at(bx as f32 + 0.5, by as f32 + 0.5, b.hf.max(SEA as f32), b.temp as f32), Terrain::Sand);
     }
 }

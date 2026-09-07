@@ -180,8 +180,10 @@ is one command.
 - Sprite invariants over every zoom, form and art: four variants, rows one
   width, centre inside the width, base rows within the row count.
 - Map: a tile is the same whether generated bounded or unbounded and
-  regardless of chunk order; the chunk ceiling bounds every tile with its
-  stack and crown; a placed stack overrides the generator, lifts the
+  regardless of chunk order; sand is a shore terrain, so a tile at sea
+  level with no water within the beach band is not sand and neither is the
+  continuous surface over it, while a lake shore at the same height is;
+  the chunk ceiling bounds every tile with its stack and crown; a placed stack overrides the generator, lifts the
   ceiling and is applied when its chunk is generated later; climate
   classification covers each Köppen class at a known temperature and
   precipitation.
