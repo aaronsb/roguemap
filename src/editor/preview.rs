@@ -5,11 +5,11 @@
 use super::fixture::Fixture;
 use crate::assets::schema::TIERS;
 use crate::assets::Tier;
-use crate::camera::{rows_per_metre_of, Camera};
+use crate::camera::Camera;
 use crate::canvas::Canvas;
 use crate::frame::Rect;
 use crate::render::{RenderOptions, Renderer, Scene};
-use crate::tileset::{Tileset, ZOOMS};
+use crate::tileset::Tileset;
 
 /// Full-size pane interiors per tier, columns by rows.
 pub const PANE_SIZES: [(Tier, i32, i32); 4] = [(Tier::Tiny, 14, 9), (Tier::Small, 22, 13), (Tier::Medium, 36, 22), (Tier::Large, 56, 34)];
@@ -46,15 +46,15 @@ pub fn tiles(strip: Rect, tier: Tier, one: bool) -> Vec<(Tier, Rect)> {
 /// The pane title: the tier and the tile size it is drawn at, named as
 /// the game names zooms (2x1 to 16x4).
 pub fn pane_title(tier: Tier) -> String {
-    let (hw, hh) = ZOOMS[tier.min_zoom()];
-    format!("{} {}x{}", tier.name(), hw, hh)
+    let cam = Camera::isometric(tier.min_zoom());
+    format!("{} {}x{}", tier.name(), cam.hw, cam.hh)
 }
 
 /// Rows a pane needs to show a subject `top` metres tall at a tier: its
 /// height in rows per metre at that tile size, and the row the pane's
 /// own label sits on.
 pub fn rows_for(tier: Tier, top: f32) -> i32 {
-    (top * rows_per_metre_of(ZOOMS[tier.min_zoom()].0)).ceil() as i32 + 1
+    (top * Camera::isometric(tier.min_zoom()).rows_per_metre()).ceil() as i32 + 1
 }
 
 /// The tier a pane `w` by `h` can show a subject `top` metres tall at:
@@ -67,7 +67,7 @@ pub fn rows_for(tier: Tier, top: f32) -> i32 {
 /// would show ground rather than the thing being edited. `tiny` is shown
 /// only when it is the tier asked for.
 pub fn fitting_tier(want: Tier, top: f32, w: i32, h: i32) -> Tier {
-    let fits = |t: Tier| rows_for(t, top) <= h && 2 * ZOOMS[t.min_zoom()].0 <= w;
+    let fits = |t: Tier| rows_for(t, top) <= h && Camera::isometric(t.min_zoom()).footprint().0 <= w;
     let floor = want.min_zoom().min(Tier::Small.min_zoom());
     TIERS[floor..=want.min_zoom()].iter().copied().rev().find(|&t| fits(t)).unwrap_or(TIERS[floor])
 }
@@ -123,8 +123,8 @@ impl Preview {
         for p in &mut self.panes {
             p.want_rows = rows_for(p.tier, fx.top);
             p.shown = if fit { fitting_tier(p.tier, fx.top, p.w, p.h) } else { p.tier };
-            p.cam.angle = angle;
-            p.cam.set_zoom(p.shown.min_zoom(), p.w, p.h);
+            p.cam = Camera::isometric(p.shown.min_zoom());
+            p.cam.set_angle(angle);
             // What is shown grows upward from the tile, so the tile sits in
             // the lower part of the pane: aim half way up the subject, and
             // at least a quarter of the pane's rows above the ground

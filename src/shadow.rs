@@ -23,10 +23,6 @@ const CLOSE_RES: f32 = 4.0;
 const MAX_SWEEP: f32 = 12.0;
 /// Occluders below this height above their surroundings cast nothing.
 const CLEAR: f32 = -1.0e9;
-/// Rows per metre from which props cast: the close zooms, 1:2 and 1:1
-/// (ADR-004). At the overview a prop is one glyph and its shadow would be
-/// shorter than the cell it stands in.
-const PROP_ROWS: f32 = 3.0;
 /// Shortest prop that casts, in metres: below this it is ground cover and
 /// has no shadow to speak of.
 const PROP_MIN_H: f32 = 0.25;
@@ -62,8 +58,8 @@ impl ShadowMask {
             return None; // the sun is overhead: nothing reaches past its own footprint
         }
         let (x0, y0, x1, y1) = grid.bounds();
-        let volumes = crate::raster::lod_of(sc.cam.rows_per_metre()).volumes;
-        let props = sc.cam.rows_per_metre() >= PROP_ROWS;
+        let lod = crate::raster::lod_of(sc.cam.rows_per_metre());
+        let (volumes, props) = (lod.volumes, lod.prop_shadows);
         let res = if props { CLOSE_RES } else { RES };
         let (w, h) = (((x1 - x0 + 1) as f32 * res) as i32, ((y1 - y0 + 1) as f32 * res) as i32);
         let u = world.shadow_dir();

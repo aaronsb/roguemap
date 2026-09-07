@@ -1,48 +1,17 @@
 //! Screen-space overlays drawn after lighting: precipitation and the cloud
 //! layer seen from above at the smallest zooms.
 
-use crate::camera::Camera;
 use crate::canvas::{Canvas, Rgb};
 use crate::noise::{hash, smoothstep};
+use crate::raster::lod_of;
 use crate::render::{Renderer, Scene};
-use crate::world::World;
-
-/// Where screen cells meet the cloud plane for one frame: a ray from a
-/// virtual camera of height C metres through the ground point under a cell,
-/// raised by the rows the cloud altitude H is worth, meets the plane at
-/// altitude H at that point pulled toward the screen centre by 1 - H/C.
-/// Panning therefore moves clouds by C/(C - H) relative to the ground.
-pub(crate) struct CloudView {
-    cx: f32,
-    cy: f32,
-    k: f32,
-    rows: f32,
-}
-
-impl CloudView {
-    pub(crate) fn new(cam: &Camera, w: i32, h: i32) -> CloudView {
-        let altitude = World::CLOUD_ALTITUDE;
-        let c = cam.altitude();
-        let k = 1.0 - altitude / c;
-        let (cx, cy) = cam.unproject(w as f32 / 2.0, h as f32 / 2.0, 0.0);
-        let rows = altitude * cam.rows_per_metre();
-        CloudView { cx, cy, k, rows }
-    }
-
-    /// Cloud-plane point sampled at screen column `sx` (a cell's centre)
-    /// and row `sy` (a cell's top edge).
-    pub(crate) fn sample(&self, cam: &Camera, sx: f32, sy: f32) -> (f32, f32) {
-        let (gx, gy) = cam.unproject(sx, sy + self.rows, 0.0);
-        (self.cx + (gx - self.cx) * self.k, self.cy + (gy - self.cy) * self.k)
-    }
-}
 
 impl Renderer {
-    /// Cloud layer seen from above at the two smallest zooms; see
-    /// `CloudView` for where each cell samples the field.
+    /// Cloud layer seen from above at the overview; see `Camera::cloud_view`
+    /// for where each cell samples the field.
     pub(crate) fn cloud_pass(&self, cv: &mut Canvas, sc: &Scene) {
         let (ts, world, cam) = (sc.ts, sc.world, sc.cam);
-        if cam.hw > 3 {
+        if !lod_of(cam.rows_per_metre()).cloud_layer {
             return;
         }
         let cover = world.weather.cover;
@@ -52,7 +21,7 @@ impl Renderer {
         if strength <= 0.0 {
             return;
         }
-        let view = CloudView::new(cam, self.w, self.h);
+        let view = cam.cloud_view(self.w, self.h);
         let th = world.cloud_threshold();
         let light = 0.3 + 0.7 * world.skylight();
         let sunlit = Rgb(238, 240, 246).scale(light);
@@ -124,33 +93,10 @@ impl Renderer {
 mod tests {
     use super::*;
     use crate::assets::test_assets;
+    use crate::camera::Camera;
     use crate::map::{Map, Tile};
     use crate::tileset::Tileset;
-
-    #[test]
-    fn cloud_sample_moves_by_c_over_c_minus_h_per_tile_of_pan() {
-        let (w, h) = (120, 40);
-        for zoom in 0..2 {
-            let mut cam = Camera::new();
-            cam.set_zoom(zoom, w, h);
-            cam.look_at_point(0.0, 0.0, 0.0, w, h);
-            let ratio = cam.altitude() / (cam.altitude() - World::CLOUD_ALTITUDE);
-            let (sx, sy) = (33.5, 12.0);
-            let before = CloudView::new(&cam, w, h).sample(&cam, sx, sy);
-            let ground_before = cam.unproject(sx, sy, 0.0);
-            cam.pan(1, 0);
-            let view = CloudView::new(&cam, w, h);
-            // The ground under a cell has moved by one tile footprint, 2hw cells.
-            let cells = (2 * cam.hw) as f32;
-            let ground_after = cam.unproject(sx + cells, sy, 0.0);
-            assert!((ground_after.0 - ground_before.0).abs() < 1e-3 && (ground_after.1 - ground_before.1).abs() < 1e-3);
-            // The cloud point that was under the cell is now C/(C - H) times as far along.
-            let after = view.sample(&cam, sx + cells * ratio, sy);
-            assert!((after.0 - before.0).abs() < 1e-3 && (after.1 - before.1).abs() < 1e-3, "zoom {zoom}: {before:?} vs {after:?}");
-            let ground_speed = view.sample(&cam, sx + cells, sy);
-            assert!((ground_speed.0 - before.0).abs() > 0.05, "zoom {zoom}: clouds move faster than the ground (ratio {ratio})");
-        }
-    }
+    use crate::world::World;
 
     /// Count the precipitation glyphs of each kind on a canvas.
     fn count(cv: &Canvas, ts: &Tileset) -> (usize, usize) {

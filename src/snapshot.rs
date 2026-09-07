@@ -98,10 +98,9 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
 
     let mut cv = Canvas::new(w, h);
     let mut renderer = Renderer::new(sw, sh);
-    let mut cam = Camera::new();
-    cam.angle = std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians();
     let zoom = a.kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| Camera::fitting_zoom(&map, sw, sh));
-    cam.set_zoom(zoom, sw, sh);
+    let mut cam = Camera::isometric(zoom);
+    cam.set_angle(std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians());
     let (cx, cy) = (a.num("cx", map.w as f32 / 2.0) as i32, a.num("cy", map.h as f32 / 2.0) as i32);
     cam.look_at(cx, cy, &map, sw, sh);
 

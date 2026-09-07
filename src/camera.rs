@@ -1,12 +1,19 @@
-//! The isometric camera: a view angle, a screen offset and a tile footprint.
-//! Projection maps a world point to a screen cell; unprojection walks back
-//! to the ground at a chosen height.
+//! The camera (ADR-007): a yaw and a pitch, a field of view, a scale and a
+//! screen offset. It is the one place that maps the world to the screen:
+//! projection takes a world point to a screen cell, unprojection walks back
+//! to the ground at a chosen height, and the walk asks it for the ray
+//! through a cell.
 //!
-//! World positions are metres (ADR-004). A tile is `TILE_METRES` square and
-//! each zoom is an exact halving of the next, so the scale of a zoom is two
-//! numbers derived from its footprint: `columns_per_metre` across the
-//! ground and `rows_per_metre` up the screen. Heights project through the
-//! second, so a 2 m person is 12 rows at 1:1 and 1.5 at 1:8.
+//! A field of view of zero is an orthographic view, which projects through
+//! a basis of three numbers: columns per tile across the screen, rows per
+//! tile of ground depth toward the camera and rows per metre of height.
+//! The isometric mode builds that basis from a footprint preset
+//! (`Camera::isometric`), so its pitch is whatever the footprint implies —
+//! 25.24 degrees above the horizon for the 4:1 footprints and 43.31 for
+//! the far zoom's 2x1 — and its scales are ADR-004's, each zoom an exact
+//! halving of the next: `columns_per_metre` across the ground and
+//! `rows_per_metre` up the screen. Heights project through the second, so
+//! a 2 m person is 12 rows at 1:1 and 1.5 at 1:8.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, SQRT_2};
 
@@ -14,23 +21,75 @@ use crate::map::{Map, SEA, TILE_CM, TILE_METRES};
 use crate::tileset::{ZOOMS, ZOOM_NAMES, ZOOM_RATIOS};
 use crate::world::{Entity, World};
 
-/// Rows a metre of height draws as at a footprint half width; see
-/// `Camera::rows_per_metre`.
-pub fn rows_per_metre_of(hw: i32) -> f32 {
-    hw as f32 * 3.0 / 8.0
+/// The three numbers an orthographic projection multiplies by: the scale
+/// and the pitch in the form the formulas use.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Basis {
+    /// Columns a tile spans across the screen: `columns * TILE_METRES`.
+    pub cols: f32,
+    /// Rows a tile of ground depth toward the camera spans:
+    /// `rows * sin(pitch) * TILE_METRES`.
+    pub rows: f32,
+    /// Rows a metre of height spans: `rows * cos(pitch)`.
+    pub rise: f32,
+}
+
+impl Basis {
+    /// The pitch above the horizon this basis implies: a metre of ground
+    /// depth is `rows / TILE_METRES` rows and a metre of height `rise`.
+    pub fn pitch(&self) -> f32 {
+        (self.rows / TILE_METRES).atan2(self.rise)
+    }
+
+    /// The scale this basis implies, per metre.
+    pub fn scale(&self) -> Scale {
+        Scale { columns: self.cols / TILE_METRES, rows: (self.rows / TILE_METRES).hypot(self.rise) }
+    }
+}
+
+/// A camera's scale: columns per metre across the screen and rows per
+/// metre along its vertical. `Camera::rows_per_metre` is the height
+/// component of the second, `cos(pitch)` of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scale {
+    pub columns: f32,
+    pub rows: f32,
+}
+
+/// The ray through a screen cell, as the walk marches it: the ground
+/// point at height zero and the tiles that point moves per metre of
+/// height, `p(z) = p0 + d * z`. Every orthographic ray has the same drift;
+/// a perspective ray (ADR-007 stage 2) has its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ray {
+    pub p0: (f32, f32),
+    pub d: (f32, f32),
 }
 
 pub struct Camera {
-    /// View angle in radians; pi/4 is the classic compass view.
-    pub angle: f32,
+    /// Yaw in radians; pi/4 is the classic compass view. Its sine and
+    /// cosine are cached in `yaw`, so it is set through `set_angle`.
+    angle: f32,
+    yaw: (f32, f32),
+    /// Pitch in radians above the horizon. The isometric constructor
+    /// derives it from the basis; a camera built from a pitch
+    /// (`Camera::orthographic`) derives the basis from it.
+    pub pitch: f32,
+    /// Field of view in radians across the screen; zero is an orthographic
+    /// view, which is every camera until ADR-007 stage 2.
+    pub fov: f32,
     pub ox: f32,
     pub oy: f32,
+    /// The zoom preset: its index in `ZOOMS` and its footprint. A camera
+    /// built from a scale rather than a preset carries the preset nearest
+    /// its rows per metre, for what is keyed by zoom.
     pub zoom: usize,
     pub hw: i32,
     pub hh: i32,
     /// Height of the point the screen centre was last aimed at, so zoom and
     /// rotation pivot about it.
     pub focus_z: f32,
+    basis: Basis,
 }
 
 /// Where a tile sits on screen: its map position and drawn height, the
@@ -46,6 +105,28 @@ pub struct Anchor {
     pub depth: f32,
 }
 
+/// Where screen cells meet the cloud plane for one frame: a ray from a
+/// virtual camera of height C metres through the ground point under a cell,
+/// raised by the rows the cloud altitude H is worth, meets the plane at
+/// altitude H at that point pulled toward the screen centre by 1 - H/C.
+/// Panning therefore moves clouds by C/(C - H) relative to the ground.
+/// The virtual camera becomes the real eye in ADR-007 stage 2.
+pub struct CloudView {
+    cx: f32,
+    cy: f32,
+    k: f32,
+    rows: f32,
+}
+
+impl CloudView {
+    /// Cloud-plane point sampled at screen column `sx` (a cell's centre)
+    /// and row `sy` (a cell's top edge).
+    pub fn sample(&self, cam: &Camera, sx: f32, sy: f32) -> (f32, f32) {
+        let (gx, gy) = cam.unproject(sx, sy + self.rows, 0.0);
+        (self.cx + (gx - self.cx) * self.k, self.cy + (gy - self.cy) * self.k)
+    }
+}
+
 impl Default for Camera {
     fn default() -> Camera {
         Camera::new()
@@ -53,8 +134,52 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// The camera modes the `camera` settings row offers, in its order.
+    /// `perspective` joins in ADR-007 stage 2.
+    pub const MODES: [&'static str; 1] = ["isometric"];
+
+    /// The far preset at the compass view.
     pub fn new() -> Camera {
-        Camera { angle: FRAC_PI_4, ox: 0.0, oy: 0.0, zoom: 0, hw: ZOOMS[0].0, hh: ZOOMS[0].1, focus_z: SEA as f32 }
+        Camera::isometric(0)
+    }
+
+    /// The isometric mode: the orthographic camera a footprint preset
+    /// implies, at the compass view, with no offset. The basis is the
+    /// preset's own numbers — `hw * sqrt 2` columns and `hh * sqrt 2` rows
+    /// per tile, `3 hw / 8` rows per metre — and the pitch is what they
+    /// imply.
+    pub fn isometric(zoom: usize) -> Camera {
+        let mut cam = Camera { angle: 0.0, yaw: (0.0, 1.0), pitch: 0.0, fov: 0.0, ox: 0.0, oy: 0.0, zoom: 0, hw: 0, hh: 0, focus_z: SEA as f32, basis: Basis { cols: 1.0, rows: 1.0, rise: 1.0 } };
+        cam.set_angle(FRAC_PI_4);
+        cam.preset(zoom);
+        cam
+    }
+
+    /// An orthographic camera from a yaw, a pitch and a scale, at no
+    /// offset: the general form the isometric presets are instances of.
+    /// It carries the preset nearest its rows per metre for what is keyed
+    /// by zoom.
+    pub fn orthographic(yaw: f32, pitch: f32, scale: Scale) -> Camera {
+        let (s, c) = pitch.sin_cos();
+        let basis = Basis { cols: scale.columns * TILE_METRES, rows: scale.rows * s * TILE_METRES, rise: scale.rows * c };
+        let nearest = (0..ZOOMS.len()).min_by(|&i, &j| {
+            let d = |z: usize| (Camera::isometric(z).rows_per_metre() - basis.rise).abs();
+            d(i).total_cmp(&d(j))
+        });
+        let mut cam = Camera::isometric(nearest.unwrap_or(0));
+        cam.set_angle(yaw);
+        cam.pitch = pitch;
+        cam.basis = basis;
+        cam
+    }
+
+    /// Switch to a footprint preset in place: its index, footprint, basis
+    /// and pitch. The offset is left to the caller.
+    fn preset(&mut self, zoom: usize) {
+        self.zoom = zoom % ZOOMS.len();
+        (self.hw, self.hh) = ZOOMS[self.zoom];
+        self.basis = Basis { cols: self.hw as f32 * SQRT_2, rows: self.hh as f32 * SQRT_2, rise: self.hw as f32 * 3.0 / 8.0 };
+        self.pitch = self.basis.pitch();
     }
 
     /// Largest zoom at which the whole map fits the screen, else the
@@ -63,15 +188,44 @@ impl Camera {
     pub fn fitting_zoom(map: &Map, sw: i32, sh: i32) -> usize {
         let n = map.w.max(map.h) as i32;
         let relief = map.relief_ceiling() as f32;
-        ZOOMS.iter().rposition(|&(hw, hh)| 2 * n * hw <= sw && 2 * n * hh + (relief * rows_per_metre_of(hw)).ceil() as i32 + 4 <= sh).unwrap_or(0)
+        (0..ZOOMS.len())
+            .rev()
+            .find(|&z| {
+                let cam = Camera::isometric(z);
+                let (fw, fh) = cam.footprint();
+                n * fw <= sw && n * fh + (relief * cam.rows_per_metre()).ceil() as i32 + 4 <= sh
+            })
+            .unwrap_or(0)
     }
 
+    pub fn angle(&self) -> f32 {
+        self.angle
+    }
+
+    /// Set the yaw, caching its sine and cosine for every projection.
+    pub fn set_angle(&mut self, radians: f32) {
+        self.angle = radians;
+        self.yaw = radians.sin_cos();
+    }
+
+    /// The orthographic basis: the numbers the projection multiplies by.
+    pub fn basis(&self) -> Basis {
+        self.basis
+    }
+
+    /// The scale per metre, across the screen and along its vertical.
+    pub fn scale(&self) -> Scale {
+        self.basis.scale()
+    }
+
+    /// Columns a tile spans across the screen.
     pub fn a(&self) -> f32 {
-        self.hw as f32 * SQRT_2
+        self.basis.cols
     }
 
+    /// Rows a tile of ground depth toward the camera spans.
     pub fn b(&self) -> f32 {
-        self.hh as f32 * SQRT_2
+        self.basis.rows
     }
 
     /// Screen columns a metre of ground spans: the tile's own scale, since
@@ -80,13 +234,21 @@ impl Camera {
         self.a() / TILE_METRES
     }
 
-    /// Screen rows a metre of height draws as, from the same footprint:
-    /// three rows per eight columns of half width, so a 2 m person is 12
-    /// rows at 1:1 and halves with every zoom out. On 1:2 cells that is 96
-    /// pixels of height against 90 pixels of ground per metre, so vertical
-    /// and horizontal scale agree.
+    /// Screen rows a metre of height draws as. In the isometric mode that
+    /// is three rows per eight columns of half width, so a 2 m person is
+    /// 12 rows at 1:1 and halves with every zoom out. On 1:2 cells that is
+    /// 96 pixels of height against 90 pixels of ground per metre, so
+    /// vertical and horizontal scale agree. Level of detail and the sprite
+    /// tiers key off it.
     pub fn rows_per_metre(&self) -> f32 {
-        rows_per_metre_of(self.hw)
+        self.basis.rise
+    }
+
+    /// The columns and rows a tile's footprint spans at the compass view:
+    /// the cells the view slides by on a pan, and the lattice the ground
+    /// texture hashes on.
+    pub fn footprint(&self) -> (i32, i32) {
+        (2 * self.hw, 2 * self.hh)
     }
 
     /// The zoom's name and the scale it draws at, for the HUD.
@@ -113,10 +275,25 @@ impl Camera {
         ZOOM_RATIOS[Camera::inset_zoom(main)]
     }
 
+    /// The inset's camera: this view's heading at the other end of the
+    /// zoom scale, for the caller to aim at the player.
+    pub fn inset(&self) -> Camera {
+        let mut cam = Camera::isometric(Camera::inset_zoom(self.zoom));
+        cam.set_angle(self.angle);
+        cam
+    }
+
     /// Screen position of a world point; `z` is metres.
     pub fn project(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
-        let (s, c) = self.angle.sin_cos();
+        let (s, c) = self.yaw;
         (self.a() * (x * c - y * s) + self.ox, self.b() * (x * s + y * c) - z * self.rows_per_metre() + self.oy)
+    }
+
+    /// Screen displacement, in columns and rows, of a world displacement
+    /// of `run` tiles of ground and `rise` metres of height.
+    pub fn project_vector(&self, run: (f32, f32), rise: f32) -> (f32, f32) {
+        let (s, c) = self.yaw;
+        (self.a() * (run.0 * c - run.1 * s), self.b() * (run.0 * s + run.1 * c) - rise * self.rows_per_metre())
     }
 
     /// Screen cell anchoring a tile: its centre projected and floored.
@@ -127,16 +304,40 @@ impl Camera {
 
     /// World point at height `z` metres under a screen position.
     pub fn unproject(&self, sx: f32, sy: f32, z: f32) -> (f32, f32) {
-        let (s, c) = self.angle.sin_cos();
+        let (s, c) = self.yaw;
         let u = (sx - self.ox) / self.a();
         let v = (sy - self.oy + z * self.rows_per_metre()) / self.b();
         (u * c + v * s, -u * s + v * c)
     }
 
+    /// The ray through a screen position: the ground point under it at
+    /// height zero and the drift of that point per metre of height, which
+    /// is exactly what keeps the screen position fixed as the walk
+    /// descends. An orthographic view's rays are parallel, so the drift
+    /// is the camera's; a perspective view's come from the eye.
+    pub fn ray(&self, sx: f32, sy: f32) -> Ray {
+        let p0 = self.unproject(sx, sy, 0.0);
+        let (s, c) = self.yaw;
+        let b = self.b();
+        let rpm = self.rows_per_metre();
+        Ray { p0, d: (s * rpm / b, c * rpm / b) }
+    }
+
     /// Unit vector pointing toward the camera in map space.
     pub fn forward(&self) -> (f32, f32) {
-        let (s, c) = self.angle.sin_cos();
-        (s, c)
+        self.yaw
+    }
+
+    /// Unit vector pointing screen-right in map space.
+    pub fn right(&self) -> (f32, f32) {
+        let (s, c) = self.yaw;
+        (c, -s)
+    }
+
+    /// Depth of a map point toward the camera, for the sprite sort.
+    pub fn depth(&self, x: f32, y: f32) -> f32 {
+        let (fx, fy) = self.yaw;
+        x * fx + y * fy
     }
 
     /// Depth of a tile's centre toward the camera, pushed to its near edge
@@ -175,16 +376,34 @@ impl Camera {
         }
     }
 
+    /// Where the screen cells of a `w` by `h` view meet the cloud plane
+    /// this frame; see `CloudView`.
+    pub fn cloud_view(&self, w: i32, h: i32) -> CloudView {
+        let altitude = World::CLOUD_ALTITUDE;
+        let c = self.altitude();
+        let k = 1.0 - altitude / c;
+        let (cx, cy) = self.unproject(w as f32 / 2.0, h as f32 / 2.0, 0.0);
+        let rows = altitude * self.rows_per_metre();
+        CloudView { cx, cy, k, rows }
+    }
+
     /// Map tile nearest the centre of the screen at sea level.
     pub fn center_tile(&self, map: &Map, sw: i32, sh: i32) -> (i32, i32) {
         let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, SEA as f32);
         map.clamp(x.floor() as i32, y.floor() as i32)
     }
 
+    /// The target: the map point under the centre of a `sw` by `sh` screen
+    /// at the height the view was last aimed at, which zoom and rotation
+    /// pivot about.
+    pub fn focus(&self, sw: i32, sh: i32) -> (f32, f32) {
+        self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, self.focus_z)
+    }
+
     /// The ground under a screen displacement, in tiles: the inverse
     /// projection of `dx` columns and `dy` rows at a fixed height.
     pub fn ground_vector(&self, dx: f32, dy: f32) -> (f32, f32) {
-        let (s, c) = self.angle.sin_cos();
+        let (s, c) = self.yaw;
         let u = dx / self.a();
         let v = dy / self.b();
         (u * c + v * s, -u * s + v * c)
@@ -239,8 +458,9 @@ impl Camera {
     /// Slide the view by whole tile footprints: positive `dx` shows more of
     /// the map to the left, positive `dy` more above.
     pub fn pan(&mut self, dx: i32, dy: i32) {
-        self.ox += (dx * 2 * self.hw) as f32;
-        self.oy += (dy * 2 * self.hh) as f32;
+        let (fw, fh) = self.footprint();
+        self.ox += (dx * fw) as f32;
+        self.oy += (dy * fh) as f32;
     }
 
     /// Place an entity's point at the centre of the screen, at the drawn
@@ -266,10 +486,8 @@ impl Camera {
     /// Switch tile size, keeping whatever is at the screen centre there.
     pub fn set_zoom(&mut self, zoom: usize, sw: i32, sh: i32) {
         let z = self.focus_z;
-        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, z);
-        self.zoom = zoom % ZOOMS.len();
-        self.hw = ZOOMS[self.zoom].0;
-        self.hh = ZOOMS[self.zoom].1;
+        let (x, y) = self.focus(sw, sh);
+        self.preset(zoom);
         self.look_at_point(x, y, z, sw, sh);
     }
 
@@ -282,8 +500,8 @@ impl Camera {
     /// Turn by an angle about whatever is at the screen centre.
     pub fn rotate_by(&mut self, radians: f32, sw: i32, sh: i32) {
         let z = self.focus_z;
-        let (x, y) = self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, z);
-        self.angle = (self.angle + radians).rem_euclid(2.0 * std::f32::consts::PI);
+        let (x, y) = self.focus(sw, sh);
+        self.set_angle((self.angle + radians).rem_euclid(2.0 * std::f32::consts::PI));
         self.look_at_point(x, y, z, sw, sh);
     }
 
@@ -301,12 +519,204 @@ impl Camera {
 mod tests {
     use super::*;
 
+    /// The projection as it was before ADR-007: the footprint's numbers
+    /// worked out on every call. The general path must give these bits.
+    struct Old {
+        angle: f32,
+        ox: f32,
+        oy: f32,
+        hw: i32,
+        hh: i32,
+    }
+
+    impl Old {
+        fn of(cam: &Camera) -> Old {
+            Old { angle: cam.angle(), ox: cam.ox, oy: cam.oy, hw: cam.hw, hh: cam.hh }
+        }
+
+        fn scales(&self) -> (f32, f32, f32) {
+            (self.hw as f32 * SQRT_2, self.hh as f32 * SQRT_2, self.hw as f32 * 3.0 / 8.0)
+        }
+
+        fn project(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
+            let (s, c) = self.angle.sin_cos();
+            let (a, b, rpm) = self.scales();
+            (a * (x * c - y * s) + self.ox, b * (x * s + y * c) - z * rpm + self.oy)
+        }
+
+        fn unproject(&self, sx: f32, sy: f32, z: f32) -> (f32, f32) {
+            let (s, c) = self.angle.sin_cos();
+            let (a, b, rpm) = self.scales();
+            let u = (sx - self.ox) / a;
+            let v = (sy - self.oy + z * rpm) / b;
+            (u * c + v * s, -u * s + v * c)
+        }
+    }
+
+    const ANGLES: [f32; 7] = [0.0, 0.3, FRAC_PI_4, 1.2, 2.5, 4.0, 5.9];
+
+    #[test]
+    fn the_general_projection_gives_the_old_formulas_bits_at_every_zoom_and_angle() {
+        // A lattice of points in a box a hundred tiles across and the
+        // world's whole vertical band, projected and unprojected through
+        // the basis, is the old arithmetic to the bit.
+        let mut cam = Camera::new();
+        for angle in ANGLES {
+            cam.set_angle(angle);
+            for (zoom, &(hw, hh)) in ZOOMS.iter().enumerate() {
+                cam.set_zoom(zoom, 168, 71);
+                cam.look_at_point(10.5, 7.5, 5.0, 168, 71);
+                let old = Old::of(&cam);
+                assert_eq!((cam.a(), cam.b(), cam.rows_per_metre()), old.scales());
+                assert_eq!((old.hw, old.hh), (hw, hh));
+                for i in -10..=10 {
+                    for j in -10..=10 {
+                        for z in [-12.0, 0.0, 0.37, 5.0, 17.5, 120.0] {
+                            let (x, y) = (i as f32 * 5.25, j as f32 * 4.75);
+                            assert_eq!(cam.project(x, y, z), old.project(x, y, z), "project at angle {angle} zoom {zoom}: ({x}, {y}, {z})");
+                            let (sx, sy) = (i as f32 * 8.5 + 0.5, j as f32 * 3.5 + 0.5);
+                            assert_eq!(cam.unproject(sx, sy, z), old.unproject(sx, sy, z), "unproject at angle {angle} zoom {zoom}: ({sx}, {sy}, {z})");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_ray_is_the_old_walks_ray_to_the_bit() {
+        let mut cam = Camera::new();
+        for angle in ANGLES {
+            cam.set_angle(angle);
+            for zoom in 0..ZOOMS.len() {
+                cam.set_zoom(zoom, 120, 40);
+                cam.look_at_point(3.5, 9.5, 2.0, 120, 40);
+                let (s, c) = angle.sin_cos();
+                let (b, rpm) = (cam.b(), cam.rows_per_metre());
+                for (sx, sy) in [(0.5, 0.5), (60.5, 20.5), (119.5, 39.5), (17.5, 2.5)] {
+                    let ray = cam.ray(sx, sy);
+                    assert_eq!(ray.p0, cam.unproject(sx, sy, 0.0));
+                    assert_eq!(ray.d, (s * rpm / b, c * rpm / b), "angle {angle} zoom {zoom}");
+                    // Every point of the ray projects back to the cell.
+                    for z in [0.0, 7.0, 40.0] {
+                        let (px, py) = cam.project(ray.p0.0 + ray.d.0 * z, ray.p0.1 + ray.d.1 * z, z);
+                        assert!((px - sx).abs() < 1e-3 && (py - sy).abs() < 1e-3, "angle {angle} zoom {zoom} at {z} m: ({px}, {py}) for ({sx}, {sy})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_isometric_pitch_is_what_the_footprint_implies() {
+        // tan(pitch) = 4 sqrt 2 hh / (3 hw): 25.24 degrees for the three
+        // 4:1 footprints and 43.31 for the far zoom's 2x1, which has always
+        // been the steeper view. Building the general orthographic camera
+        // from that pitch and the preset's scale gives the preset's basis
+        // back, within a few ulps.
+        let four_to_one = (SQRT_2 / 3.0).atan();
+        let two_to_one = (2.0 * SQRT_2 / 3.0).atan();
+        assert!((four_to_one.to_degrees() - 25.24).abs() < 0.01 && (two_to_one.to_degrees() - 43.31).abs() < 0.01);
+        for (zoom, &(hw, hh)) in ZOOMS.iter().enumerate() {
+            let cam = Camera::isometric(zoom);
+            let want = (4.0 * SQRT_2 * hh as f32 / (3.0 * hw as f32)).atan();
+            assert!((cam.pitch - want).abs() < 1e-6, "zoom {zoom}: pitch {} for {hw}x{hh}", cam.pitch.to_degrees());
+            assert!((cam.pitch - if hw == 2 * hh { two_to_one } else { four_to_one }).abs() < 1e-6, "zoom {zoom}");
+            assert_eq!(cam.fov, 0.0, "every preset is orthographic");
+            let general = Camera::orthographic(cam.angle(), cam.pitch, cam.scale());
+            let (got, want) = (general.basis(), cam.basis());
+            assert!((got.cols - want.cols).abs() < 1e-5 && (got.rows - want.rows).abs() < 1e-5 && (got.rise - want.rise).abs() < 1e-5, "zoom {zoom}: {got:?} vs {want:?}");
+            assert_eq!((general.zoom, general.hw, general.hh), (zoom, hw, hh), "the general camera carries the nearest preset");
+            assert!((general.pitch - cam.pitch).abs() < 1e-6 && (general.scale().rows - cam.scale().rows).abs() < 1e-5);
+        }
+        // A top-down view has all its rows in ground depth and none in
+        // height; a view along the ground the reverse.
+        let down = Camera::orthographic(0.0, FRAC_PI_2, Scale { columns: 4.0, rows: 2.0 });
+        assert!((down.b() - 2.0 * TILE_METRES).abs() < 1e-6 && down.rows_per_metre().abs() < 1e-6);
+        let along = Camera::orthographic(0.0, 0.0, Scale { columns: 4.0, rows: 2.0 });
+        assert!(along.b().abs() < 1e-6 && (along.rows_per_metre() - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_inset_camera_keeps_the_heading_at_the_other_end_of_the_scale() {
+        let mut main = Camera::new();
+        main.set_angle(1.2);
+        for zoom in 0..ZOOMS.len() {
+            main.set_zoom(zoom, 120, 40);
+            let inset = main.inset();
+            assert_eq!(inset.zoom, Camera::inset_zoom(zoom));
+            assert_eq!(inset.angle(), 1.2);
+            assert_eq!(inset.forward(), main.forward());
+        }
+    }
+
+    #[test]
+    fn screen_vectors_and_depth_come_from_the_yaw() {
+        let mut cam = Camera::new();
+        for angle in ANGLES {
+            cam.set_angle(angle);
+            cam.set_zoom(2, 120, 40);
+            let (s, c) = angle.sin_cos();
+            assert_eq!(cam.forward(), (s, c));
+            assert_eq!(cam.right(), (c, -s));
+            assert_eq!(cam.depth(3.5, -2.25), 3.5 * s + -2.25 * c);
+            // A world displacement projects as the difference of two
+            // projections, and a unit of ground toward the camera is b
+            // rows down the screen.
+            let (dx, dy) = cam.project_vector((1.5, -0.5), 2.0);
+            let (ax, ay) = cam.project(1.5, -0.5, 2.0);
+            let (ox, oy) = cam.project(0.0, 0.0, 0.0);
+            assert!((dx - (ax - ox)).abs() < 1e-4 && (dy - (ay - oy)).abs() < 1e-4, "angle {angle}");
+            let toward = cam.project_vector(cam.forward(), 0.0);
+            assert!(toward.0.abs() < 1e-4 && (toward.1 - cam.b()).abs() < 1e-4, "angle {angle}: {toward:?}");
+            let across = cam.project_vector(cam.right(), 0.0);
+            assert!((across.0 - cam.a()).abs() < 1e-4 && across.1.abs() < 1e-4, "angle {angle}: {across:?}");
+        }
+    }
+
+    #[test]
+    fn the_footprint_is_the_cells_a_pan_slides_by() {
+        let mut cam = Camera::new();
+        for (zoom, &(hw, hh)) in ZOOMS.iter().enumerate() {
+            cam.set_zoom(zoom, 120, 40);
+            assert_eq!(cam.footprint(), (2 * hw, 2 * hh));
+            let (ox, oy) = (cam.ox, cam.oy);
+            cam.pan(1, -2);
+            assert_eq!((cam.ox - ox, cam.oy - oy), ((2 * hw) as f32, (-4 * hh) as f32));
+        }
+    }
+
+    #[test]
+    fn cloud_sample_moves_by_c_over_c_minus_h_per_tile_of_pan() {
+        let (w, h) = (120, 40);
+        for zoom in 0..2 {
+            let mut cam = Camera::new();
+            cam.set_zoom(zoom, w, h);
+            cam.look_at_point(0.0, 0.0, 0.0, w, h);
+            let ratio = cam.altitude() / (cam.altitude() - World::CLOUD_ALTITUDE);
+            let (sx, sy) = (33.5, 12.0);
+            let before = cam.cloud_view(w, h).sample(&cam, sx, sy);
+            let ground_before = cam.unproject(sx, sy, 0.0);
+            cam.pan(1, 0);
+            let view = cam.cloud_view(w, h);
+            // The ground under a cell has moved by one tile footprint.
+            let cells = cam.footprint().0 as f32;
+            let ground_after = cam.unproject(sx + cells, sy, 0.0);
+            assert!((ground_after.0 - ground_before.0).abs() < 1e-3 && (ground_after.1 - ground_before.1).abs() < 1e-3);
+            // The cloud point that was under the cell is now C/(C - H) times as far along.
+            let after = view.sample(&cam, sx + cells * ratio, sy);
+            assert!((after.0 - before.0).abs() < 1e-3 && (after.1 - before.1).abs() < 1e-3, "zoom {zoom}: {before:?} vs {after:?}");
+            let ground_speed = view.sample(&cam, sx + cells, sy);
+            assert!((ground_speed.0 - before.0).abs() > 0.05, "zoom {zoom}: clouds move faster than the ground (ratio {ratio})");
+        }
+    }
+
     #[test]
     fn project_and_unproject_round_trip() {
         for angle in [0.0, 0.3, FRAC_PI_4, 1.2, 2.5, 4.0] {
             for zoom in 0..ZOOMS.len() {
                 let mut cam = Camera::new();
-                cam.angle = angle;
+                cam.set_angle(angle);
                 cam.set_zoom(zoom, 120, 40);
                 cam.look_at_point(10.5, 7.5, 5.0, 120, 40);
                 for &(x, y, z) in &[(0.0, 0.0, 0.0), (10.5, 7.5, 5.0), (-3.25, 12.0, 14.0), (40.0, -8.5, 3.0)] {
@@ -356,7 +766,7 @@ mod tests {
         let tiles = [(0, 0), (3, 1), (-2, 5), (7, -4), (10, 10), (-6, -6)];
         let mut cam = Camera::new();
         for i in 0..64 {
-            cam.angle = i as f32 * std::f32::consts::TAU / 64.0;
+            cam.set_angle(i as f32 * std::f32::consts::TAU / 64.0);
             let (fx, fy) = cam.forward();
             for &a in &tiles {
                 for &b in &tiles {
@@ -390,6 +800,7 @@ mod tests {
             cam.set_zoom(zoom, 120, 40);
             assert_eq!(cam.rows_per_metre(), *rows, "zoom {zoom} rows per metre");
             assert!((cam.columns_per_metre() - columns).abs() < 1e-3, "zoom {zoom} columns per metre: {}", cam.columns_per_metre());
+            assert_eq!(cam.scale().columns, cam.columns_per_metre());
             if zoom > 0 {
                 let (below_rows, below_columns) = expected[zoom - 1];
                 assert_eq!(*rows, below_rows * 2.0, "zoom {zoom} is twice the zoom below");
@@ -466,7 +877,7 @@ mod tests {
         // height, and on through a run of eight.
         let mut cam = Camera::new();
         for angle in [FRAC_PI_4, 0.0, 0.3, 1.2, 2.5, 4.0] {
-            cam.angle = angle;
+            cam.set_angle(angle);
             for zoom in 0..ZOOMS.len() {
                 cam.set_zoom(zoom, 120, 40);
                 cam.look_at_point(6.5, 6.5, 5.0, 120, 40);

@@ -390,7 +390,7 @@ impl HeightGrid {
                     // shadow cannot either, is not worth a volume.
                     let (sx, sy) = cam.project(cx, cy, ground);
                     let crown = (dims.trunk + dims.height) * s * cam.rows_per_metre();
-                    let wide = dims.radius * s / TILE_METRES * cam.a() + MARGIN;
+                    let wide = dims.radius * s * cam.columns_per_metre() + MARGIN;
                     if sx + wide < -MARGIN || sx - wide > sw as f32 + MARGIN || sy + MARGIN < 0.0 || sy - crown - MARGIN > sh as f32 {
                         continue;
                     }

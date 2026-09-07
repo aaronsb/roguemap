@@ -53,13 +53,31 @@ pub(crate) struct Lod {
     /// Cactus arms and the denser canopy glyphs.
     close: bool,
     bisections: u32,
+    /// Grass leans and crowns shear in the wind; at the overview it is off.
+    wind: bool,
+    /// The cloud layer seen from above (`Renderer::cloud_pass`).
+    pub(crate) cloud_layer: bool,
+    /// Props cast in the shadow mask; below this a prop is one glyph and
+    /// its shadow would be shorter than the cell it stands in.
+    pub(crate) prop_shadows: bool,
 }
 
 /// The level of detail at a zoom, by rows per metre: 0.75 far, 1.5 mid,
 /// 3 near, 6 close.
 pub(crate) fn lod_of(rows_per_metre: f32) -> Lod {
     let rpm = rows_per_metre;
-    Lod { profiles: rpm >= 1.5, volumes: rpm >= 1.5, model: rpm >= 1.5, bands: rpm >= 3.0, canopy_aa: rpm >= 6.0, close: rpm >= 6.0, bisections: if rpm >= 6.0 { 5 } else { 4 } }
+    Lod {
+        profiles: rpm >= 1.5,
+        volumes: rpm >= 1.5,
+        model: rpm >= 1.5,
+        bands: rpm >= 3.0,
+        canopy_aa: rpm >= 6.0,
+        close: rpm >= 6.0,
+        bisections: if rpm >= 6.0 { 5 } else { 4 },
+        wind: rpm >= 1.5,
+        cloud_layer: rpm < 1.5,
+        prop_shadows: rpm >= 3.0,
+    }
 }
 
 fn lod(cam: &Camera) -> Lod {
@@ -83,9 +101,9 @@ fn sun_of(n: (f32, f32, f32)) -> f32 {
 /// Screen-horizontal component of a unit normal: positive points
 /// screen-right.
 fn screen_x_of(n: (f32, f32, f32), cam: &Camera) -> f32 {
-    let (s, c) = cam.angle.sin_cos();
+    let (rx, ry) = cam.right();
     let len = (n.0 * n.0 + n.1 * n.1 + n.2 * n.2).sqrt().max(1e-6);
-    (n.0 * c - n.1 * s) / len
+    (n.0 * rx + n.1 * ry) / len
 }
 
 /// Grass lean field: a travelling wave whose speed and reach follow the wind.
@@ -143,7 +161,7 @@ fn quantise(cols: &[Rgb; 6]) -> Option<(char, Rgb, Rgb)> {
 /// Hash of a ground point on a grid near cell resolution, so texture stays
 /// put as the camera pans and thins consistently with zoom.
 fn ground_hash(cam: &Camera, x: f32, y: f32, seed: u32) -> u64 {
-    let qs = (2 * cam.hw) as f32;
+    let qs = cam.footprint().0 as f32;
     hash((x * qs).floor() as i64, (y * qs * 2.0).floor() as i64, seed as u64)
 }
 
@@ -159,7 +177,7 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32, rows
     let vig = biome::vigour(tile.temp as f32, world.season);
     let density_of = &sc.assets.surfaces.density;
     let ground_glyph = b.ground_glyph.lerp(pal.snow_glyph(), snow).lerp(base.scale(1.25), 1.0 - vig);
-    let wind_strength = if cam.hw <= 2 { 0.0 } else { world.weather.wind };
+    let wind_strength = if lod(cam).wind { world.weather.wind } else { 0.0 };
     // Ground kinds: a paved tile carries the dirt pair, a tilled one the
     // dirt glyph in furrows.
     if let Some(st) = tile.stack {
@@ -245,9 +263,7 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32, rows
 /// `rise` metres of height takes: vertical, horizontal, rising or falling
 /// on screen. Bare branches and the rows of a tilled field share it.
 fn stroke_dir(cam: &Camera, run: (f32, f32), rise: f32) -> usize {
-    let (s, c) = cam.angle.sin_cos();
-    let dx = cam.a() * (run.0 * c - run.1 * s);
-    let dy = cam.b() * (run.0 * s + run.1 * c) - rise * cam.rows_per_metre();
+    let (dx, dy) = cam.project_vector(run, rise);
     if dy.abs() * 2.0 < dx.abs() {
         1
     } else if dx.abs() * 2.0 < dy.abs() {
@@ -449,13 +465,12 @@ impl Renderer {
         let cam = sc.cam;
         let grid = self.grid();
         let lod = lod(cam);
-        let p0 = cam.unproject(sx, sy, 0.0);
-        let (s, c) = cam.angle.sin_cos();
-        let b = cam.b();
-        // Tiles of ground the point moves per metre of height, so that the
-        // screen position stays put: heights project through rows per metre.
+        // The ray as the camera casts it: the ground point under the cell
+        // and the tiles it moves per metre of height, so that the screen
+        // position stays put as the walk descends.
+        let crate::camera::Ray { p0, d } = cam.ray(sx, sy);
+        let (s, c) = cam.forward();
         let rpm = cam.rows_per_metre();
-        let d = (s * rpm / b, c * rpm / b);
         // Only the heights whose ground point lies in the grid can be met,
         // and outside them the walk would step through hundreds of metres of
         // air over a range it cannot see.
@@ -835,14 +850,13 @@ impl Renderer {
 
     /// Colour and texture every cell whose ray hit something.
     fn shade_hits(&mut self, sc: &Scene, hits: &[Option<Hit>]) {
-        let (fx, fy) = sc.cam.forward();
         let (w, h) = (self.w, self.h);
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) as usize;
                 let Some(hit) = hits[i] else { continue };
                 let (albedo, ch, glyph) = self.shade(sc, &hit, x, y);
-                let depth = hit.x * fx + hit.y * fy;
+                let depth = sc.cam.depth(hit.x, hit.y);
                 self.g[i] = GCell { albedo, ch, glyph, wx: hit.x, wy: hit.y, wz: hit.h, face: hit.face, lit: true, depth };
             }
         }
@@ -853,7 +867,6 @@ impl Renderer {
     /// left to the outline glyphs at the middle zooms, where a forest
     /// would otherwise supersample most of the screen.
     fn antialias_edges(&mut self, sc: &Scene, hits: &[Option<Hit>]) {
-        let (fx, fy) = sc.cam.forward();
         let (w, h) = (self.w, self.h);
         let lod = lod(sc.cam);
         let (canopy_aa, grown) = (lod.canopy_aa, lod.model);
@@ -899,7 +912,7 @@ impl Renderer {
                 // takes that terrain's position and lighting.
                 if self.g[i].depth == SKY_DEPTH {
                     let albedo = self.hit_color(sc, &hh);
-                    self.g[i] = GCell { albedo, ch: ' ', glyph: albedo, wx: hh.x, wy: hh.y, wz: hh.h, face: hh.face, lit: true, depth: hh.x * fx + hh.y * fy };
+                    self.g[i] = GCell { albedo, ch: ' ', glyph: albedo, wx: hh.x, wy: hh.y, wz: hh.h, face: hh.face, lit: true, depth: sc.cam.depth(hh.x, hh.y) };
                 }
                 let Some((ch, glyph, albedo)) = quantise(&cols) else { continue };
                 let cell = &mut self.g[i];
@@ -1048,8 +1061,11 @@ impl Renderer {
         let level = (hz / lh).floor();
         let within = hz / lh - level;
         let mat = self.material(sc, &hit.tile, kind);
+        // Tiles under one column, so a door or a window is a cell or two
+        // wide whatever the zoom.
+        let column = 1.0 / cam.footprint().0 as f32;
         if b.door && face == g.door && level < 0.5 && within < 0.5 {
-            let half = if cam.hw >= 16 { 1.0 / cam.hw as f32 } else { 0.6 / cam.hw as f32 };
+            let half = if lod(cam).close { 2.0 * column } else { 1.2 * column };
             if (local - 0.5).abs() < half {
                 return Some((ts.art.door, mat.wall_glyph.scale(0.7)));
             }
@@ -1058,7 +1074,7 @@ impl Renderer {
             let pitch = b.window_pitch.max(1e-3) / crate::map::TILE_METRES;
             let phase = (along / pitch).fract();
             // A window is about a cell and a half wide whatever the zoom.
-            let half = (0.75 / cam.hw as f32).max(0.06);
+            let half = (1.5 * column).max(0.06);
             if within >= lo && within < hi && (phase - 0.5).abs() * pitch < half {
                 let night = 1.0 - world.skylight();
                 let lit = b.light.map(|i| sc.assets.lights[i].color).map(|c| Rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8));
@@ -1149,7 +1165,7 @@ mod tests {
         // No sub-tile relief at the overview zoom: the surface is exactly flat.
         for (zoom, angle) in [(0, FRAC_PI_4), (0, 1.1), (0, 3.0), (0, 5.2)] {
             let mut cam = Camera::new();
-            cam.angle = angle;
+            cam.set_angle(angle);
             cam.set_zoom(zoom, w, h);
             cam.look_at(0, 0, &map, w, h);
             let sc = Scene::new(&map, ts, &world, &cam, 0.0);
@@ -1225,7 +1241,7 @@ mod tests {
         let (mid_x, mid_y, top_z) = (5.5, 5.5, 10.5);
         for angle in [FRAC_PI_4, FRAC_PI_4 + 0.3, 3.0 * FRAC_PI_4 - 0.2, PI + 0.4, 5.0 * FRAC_PI_4 + 0.1, 7.0 * FRAC_PI_4 - 0.25, 1.0, 5.6] {
             let mut cam = Camera::new();
-            cam.angle = angle;
+            cam.set_angle(angle);
             cam.set_zoom(1, w, h);
             cam.look_at(5, 5, &map, w, h);
             let sc = Scene::new(&map, ts, &world, &cam, 0.0);
@@ -1272,7 +1288,7 @@ mod tests {
         let plateau = 5.5;
         for angle in [FRAC_PI_4, FRAC_PI_4 + 0.4, 3.0 * FRAC_PI_4, 4.2] {
             let mut cam = Camera::new();
-            cam.angle = angle;
+            cam.set_angle(angle);
             cam.set_zoom(1, w, h);
             cam.look_at(4, 4, &map, w, h);
             let sc = Scene::new(&map, ts, &world, &cam, 0.0);

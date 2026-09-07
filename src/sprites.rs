@@ -185,19 +185,18 @@ impl Renderer {
         if world.placed.is_empty() && props.iter().all(|p| (cam.zoom as u8) < p.min_zoom) {
             return;
         }
-        let (fx, fy) = cam.forward();
         let (x0, y0, x1, y1) = self.tile_bounds(cam);
         let mut items: Vec<(f32, f32, f32, f32, usize)> = Vec::new();
         for my in y0..=y1 {
             for mx in x0..=x1 {
                 let Some(tile) = self.tile_at(sc, mx, my) else { continue };
-                scatter(sc, mx, my, &tile, |x, y, pi| items.push((x * fx + y * fy, x, y, tile.hf.max(SEA as f32), pi)));
+                scatter(sc, mx, my, &tile, |x, y, pi| items.push((cam.depth(x, y), x, y, tile.hf.max(SEA as f32), pi)));
             }
         }
         // Hand-placed props draw at every zoom: they are explicit, not scattered.
         for pl in world.placed.iter().filter(|pl| pl.prop < props.len()) {
             let Some(tile) = map.get(pl.x.floor() as i32, pl.y.floor() as i32) else { continue };
-            items.push((pl.x * fx + pl.y * fy, pl.x, pl.y, tile.hf.max(SEA as f32), pl.prop));
+            items.push((cam.depth(pl.x, pl.y), pl.x, pl.y, tile.hf.max(SEA as f32), pl.prop));
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (depth, x, y, z, pi) in items {

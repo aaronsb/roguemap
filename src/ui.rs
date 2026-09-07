@@ -258,8 +258,7 @@ impl Content for Inset {
         }
         let InsetView { w, h, cam, renderer, canvas } = &mut *view;
         let (w, h) = (*w, *h);
-        cam.angle = ctx.cam.angle;
-        cam.set_zoom(Camera::inset_zoom(ctx.cam.zoom), w, h);
+        *cam = ctx.cam.inset();
         // The inset follows the player wherever they stand; with nobody in
         // the world it keeps the main view's centre.
         match ctx.world.player() {
