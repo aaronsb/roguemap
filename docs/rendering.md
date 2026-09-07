@@ -303,11 +303,13 @@ which renders N frames and prints the mean:
 
 At 168x71 with the inset open, seed 7, on the boreal stand at
 `cx=500 cy=-300` — the densest forest in the world — a frame takes about
-11.8 ms at 1:8, 14.5 at 1:4, 15.2 at 1:2 and 17.2 at 1:1. Over the filled
-world at 1:4: the origin 13.3, the village 15.5, the origin in winter
-16.3. Part of the cost at the two outer zooms is the inset itself, which
-draws at 1:1. The budget is 16 ms a frame (issue #1); the stand at 1:1 and
-the winter origin sit just over it. The event loop polls on a 40 ms tick,
+12.2 ms at 1:8, 14.6 at 1:4, 15.2 at 1:2 and 19.2 at 1:1. Over the filled
+world at 1:4: the origin 13.2, the village 15.8, a village with fields
+15.5, the origin in winter 14.5. Open water is the cheapest scene there
+is — the ocean at 1:8 is 6.1 — because the walk meets the flat sea at the
+first sample under the clamp and there is nothing standing on it. Part of
+the cost at the two outer zooms is the inset itself, which draws at 1:1.
+The budget is 16 ms a frame (issue #1); only the stand at 1:1 is over it. The event loop polls on a 40 ms tick,
 so 25 frames a second is the ceiling either way. The first frame after a
 camera move is dearer than the rest, because the trees that came into view
 are grown on it.
