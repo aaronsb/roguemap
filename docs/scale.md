@@ -75,20 +75,52 @@ both its ratio and its name, so the top line reads `1:2 near`.
 
 ## Movement
 
-One keypress moves the player one tile at every zoom. Because the zoom
-changes how many cells a tile covers and not how big a tile is, that same
-press is a whole block on screen at 1:1 and an eighth of one at 1:8. The
-binding is `Action::Walk(dx, dy)` on `w a s d` and `h j k l`.
+The player's position is centimetres, `Entity::x_cm, y_cm`, and the tile
+it stands in is derived from it
+([ADR-006](adr/ADR-006-movement-by-screen-cell.md)). One keypress moves
+the figure one screen cell in the pressed direction at the current zoom:
+a column for `a` and `d`, a row for `w` and `s`. Because the zoom changes
+how much ground a cell covers, the same press is a few centimetres at
+1:1 and most of a metre at 1:8. The binding is `Action::Walk(dx, dy)` on
+`w a s d` and `h j k l`.
 
-Shift with an arrow is `Action::Run(dx, dy)`: eight tiles, a stride at any
-zoom. A plain arrow is `Action::Pan`, which slides the view by one tile
-and leaves the player where they are; `c` recentres on the player.
+| zoom | one column | one row | run of eight columns |
+|---|---|---|---|
+| close 1:1 | 8.8 cm | 35.4 cm | 71 cm |
+| near 1:2 | 17.7 cm | 70.7 cm | 1.4 m |
+| mid 1:4 | 35.4 cm | 141.4 cm | 2.8 m |
+| far 1:8 | 70.7 cm | 141.4 cm | 5.7 m |
 
-The `Traversal` setting decides what a direction means.
-`Camera::walk_step` either passes the pressed direction straight through
-as map axes, or, in screen space, sends it through
-`Camera::screen_dir_to_map` first, so that pressing `w` moves the figure
-up the screen whatever angle the camera has been rotated to.
+Those are the ground under a cell, `TILE_CM / (hw * √2)` for a column
+and `TILE_CM / (hh * √2)` for a row; far and mid share a half height of
+one and so a row step. `Camera::cell_step` aims each press at the centre
+of the next cell from wherever the figure stands, so the first press
+after a spawn or a teleport, which leave the figure on a cell boundary,
+is half a cell or one and a half, and every press after that is one cell
+and lands within a centimetre of a cell centre. The figure's feet are
+drawn at the exact point, at `Map::ground_at`; on a slope the rise or
+fall of the ground shows on top of the cell stepped.
+
+Shift with an arrow is `Action::Run(dx, dy)`: eight cells, one press at a
+time, stopping where a step is refused. A plain arrow is `Action::Pan`,
+which slides the view by one tile and leaves the player where they are;
+`c` recentres on the player.
+
+Collision is per tile: `World::try_move` refuses a step when the tile
+the new point falls in is off the map or not in the creature's
+`can_enter`, so the figure can stand a centimetre from the water's edge
+and no closer.
+
+The `Traversal` setting decides what a direction means. In screen space
+a press moves the figure that way on screen, which is a diagonal in map
+space at the compass view and turns with the camera. Along the map axes
+the step is the cell's ground length along the axis the key names, 9 cm
+sideways and 35 cm up or down at 1:1.
+
+`make snap OUT=a.png ARGS="scene=scale zoom=3 t=3 tod=12 player_dx=25
+player_dy=25"` renders the yardstick with the person a step from the
+tile centre: `player_dx` and `player_dy` are centimetres and go through
+the same move the keys make.
 
 ## Sprites at each scale
 

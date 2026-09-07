@@ -68,8 +68,8 @@ help line at the bottom of the screen.
 
 | Key | Action |
 |---|---|
-| `w a s d` or `h j k l` | walk the player; the camera follows |
-| arrows | pan by one tile; shift with an arrow strides eight |
+| `w a s d` or `h j k l` | walk the player one screen cell (9 cm sideways at 1:1, 71 cm at 1:8); the camera follows |
+| arrows | pan by one tile; shift with an arrow runs eight cells |
 | `c` | centre on the player |
 | `r` / `R`, `(` / `)` | rotate a quarter turn, or five degrees |
 | `z` / `Z` | zoom through far 1:8, mid 1:4, near 1:2, close 1:1 |

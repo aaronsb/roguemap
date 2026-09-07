@@ -35,8 +35,7 @@ is one command.
   halving of the next (0.75, 1.5, 3, 6 rows and 1.41, 2.83, 5.66, 11.31
   columns), so a 2 m person is 1.5, 3, 6 and 12 rows; heights project
   through rows per metre and unproject back, and no height moves a point
-  sideways; one keypress is one tile at every zoom and that tile is one
-  footprint on screen. The art tiers a sprite picks are the ones nearest
+  sideways. The art tiers a sprite picks are the ones nearest
   those rows. `relief` turns the generator's field into metres: zero at
   the shoreline, the sea bed at `FLOOR`, a valley floor a metre or two
   over the water and a range at `RELIEF`, rising all the way and inverted
@@ -144,7 +143,18 @@ is one command.
 
 ## Interaction
 
-- `World::try_move` refuses water and the island edge and moves on land.
+- **Movement** (ADR-006). A press moves the figure's screen cell by
+  exactly one column or row at every zoom and angle, from the cell
+  boundary a spawn leaves it on, from odd centimetres, at any height and
+  through a run of eight; the first press from a boundary lands within a
+  centimetre of a cell centre; from a cell centre the step is the ground
+  under one cell, halving exactly between zooms for columns and with the
+  half height for rows; a fractional anchor keeps its tile's depth and the
+  centre anchor is the tile anchor.
+- `World::try_move` takes centimetres, refuses water and the island edge
+  by the tile the new point lands in — a centimetre short of the pond is
+  fine, the next centimetre is not — and moves on land; the spawn is a
+  tile centre and negative positions floor to their tile.
 - `World::light_campfire` refuses water and places a light on land. The
   campfire is a placed light and counts at any hour; the lit-window light
   a building discovers while drawing joins the frame light count at night
@@ -154,10 +164,12 @@ is one command.
 - Settings: each row cycles through all values and wraps;
   `Settings::apply` pushes every row into the objects it governs; presets
   and rows agree in length.
-- Traversal: `Camera::walk_step` makes a screen-space step at 45 degrees a
+- Traversal: `Camera::cell_step` makes a screen-space step at 45 degrees a
   diagonal map step and a map-axes step a cardinal one.
-- World map: `WorldMap::teleport` lands on the nearest land tile to the
-  cursor.
+- World map: `WorldMap::teleport` lands at the centre of the nearest land
+  tile to the cursor.
+- Snapshot: `player_dx` and `player_dy` move the figure and go through the
+  same move the keys make, so a step off the island is refused.
 
 ## Data
 
