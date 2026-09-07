@@ -247,6 +247,29 @@ zoom from a person to a planet is ordinary projection throughout. At
 full-planet zoom the planet is a disc drawn rectilinearly, not a texture
 mapped onto a sphere.
 
+**The orthographic view is where the world is acted on.** The owner:
+"ortho is for specifically interacting with the world in a gameplay
+modes". That is a property of the projection rather than a preference. An
+orthographic view has no foreshortening, so a metre is the same number of
+columns wherever it falls on the screen and two things a screen distance
+apart are that far apart on the ground. Adjacency, reach and separation
+are read off the picture directly.
+
+A perspective view cannot answer those. Two things the same distance apart
+draw at different separations by their depth, and a player judging whether
+something is within reach would be judging the projection. So the two
+projections divide by what they are for: **orthographic to act, perspective
+to see.** ADR-010 argued the axis from the seeing half — an orthographic
+projection has no horizon — and this is the other half of the same
+argument.
+
+The deferred gameplay systems inherit it. The hex encounter grid (#28)
+answers what is adjacent, and the planner (#27) plots waypoints across
+ground the player is judging by eye; both want the projection where screen
+distance is ground distance. That is also why both projections are wanted
+at the same zoom: see the vista in perspective, plot the route across it
+in orthographic.
+
 The cost of keeping it rectilinear is at wide fields of view, where the
 projection stretches by `1 / cos(fov/2)` at the edge: 1.15 at 60 degrees,
 1.74 at the `fov` row's widest 110. A curvilinear projection would hold
