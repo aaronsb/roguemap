@@ -25,8 +25,8 @@ assets/
   creatures.toml    creatures: art, colours, walkable terrain; the player
                     is the first row
   surfaces.toml     the four seasonal palettes, the plain-surface texture
-                    rules (sand, dirt, rock, snow) and the grass and
-                    cattail densities
+                    rules (sand, dirt, rock, snow) with the grain their
+                    specks sit on, and the grass and cattail densities
   lights.toml       named light specs: colour, radius, intensity, falloff,
                     flicker
   settings.toml     settings rows: key, label, values, default, shortcut

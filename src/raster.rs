@@ -158,11 +158,44 @@ fn quantise(cols: &[Rgb; 6]) -> Option<(char, Rgb, Rgb)> {
     Some((sextant(bits), a, b))
 }
 
-/// Hash of a ground point on a grid near cell resolution, so texture stays
-/// put as the camera pans and thins consistently with zoom.
-fn ground_hash(cam: &Camera, x: f32, y: f32, seed: u32) -> u64 {
-    let qs = cam.footprint().0 as f32;
-    hash((x * qs).floor() as i64, (y * qs * 2.0).floor() as i64, seed as u64)
+/// Metres of ground a cell covers at a hit, from the surface's gradient in
+/// metres of rise per metre of run: the cell's own footprint at the point's
+/// depth, with what the surface's lean adds along the view, as one number.
+///
+/// The two extents are the square root of their product, so the lattice
+/// carries the cell's area; but the ground along the view runs away without
+/// bound as a surface turns edge-on, and a lattice step that long lays one
+/// speck across a run of cells and empties the ground between. `WIDEST`
+/// holds the step to a few cells across, which is the shape of a speck the
+/// rest of the frame draws.
+fn cell_span(sc: &Scene, x: f32, y: f32, z: f32, gx: f32, gy: f32) -> f32 {
+    const WIDEST: f32 = 4.0;
+    let depth = sc.cam.detail_rows() / sc.cam.detail_rows_at(x, y, z).max(1e-4);
+    let face = (1.0 - gx * sc.lean.0 - gy * sc.lean.1).abs().max(1e-3);
+    let lean = (1.0 + gx * gx + gy * gy).sqrt() / face;
+    let across = sc.span.0 * depth;
+    let along = sc.span.1 * depth * lean.max(1.0);
+    (across * along).sqrt().min(across * WIDEST).clamp(1e-3, 100.0)
+}
+
+/// One point's roll on the scatter lattice: a grid fixed in the world at
+/// the surface's grain, stepped up by powers of two until a step covers the
+/// ground the cell does. A speck sits at the same place at every zoom, tilt
+/// and distance, and the steps nest, so a step a cell can resolve drops the
+/// specks between its own and keeps the rest where they were.
+fn ground_hash(x: f32, y: f32, grain: f32, span: f32, seed: u32) -> u64 {
+    let steps = (span / grain).max(1.0).log2().floor().clamp(0.0, 24.0) as u32;
+    let q = grain * (1 << steps) as f32 / TILE_METRES;
+    let (i, j) = (ifloor(x / q) as i64, ifloor(y / q) as i64);
+    hash(i << steps, j << steps, seed as u64)
+}
+
+/// Metres between the specks of a surface's grain. Grass and water have no
+/// surface row and take the grain of the `density` row, as do the rules
+/// with no row of their own: roof tiles and leaves.
+fn grain_of(sc: &Scene, terrain: Terrain) -> f32 {
+    let s = &sc.assets.surfaces;
+    terrain.surface().map(|i| s.surface[i].grain_metres).unwrap_or(s.density.grain_metres)
 }
 
 /// Texture glyph and its colour for a top-surface cell, or a blank cell in
@@ -170,7 +203,7 @@ fn ground_hash(cam: &Camera, x: f32, y: f32, seed: u32) -> u64 {
 /// along, from the tile's merged run.
 fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32, rows_along_x: bool) -> (char, Rgb) {
     let (ts, pal, world, cam) = (sc.ts, &sc.pal, sc.world, sc.cam);
-    let hv = ground_hash(cam, hit.x, hit.y, tile.seed);
+    let hv = ground_hash(hit.x, hit.y, grain_of(sc, tile.terrain), hit.span, tile.seed);
     let r = (hv % 1000) as f32 / 1000.0;
     let snow = sc.snow_at(tile.temp);
     let b = tile.biome(sc.assets);
@@ -734,7 +767,8 @@ impl Renderer {
             let face = if (s * c > 0.0) == x_face { FACE_RIGHT } else { FACE_LEFT };
             (face, ((slope - CLIFF) * 1.5).ceil().clamp(1.0, 6.0) as i32)
         };
-        Hit { tile, mx, my, x, y, h, bed, face, below, sun, kind: HitKind::Terrain, which: 0, nsx: 0.0 }
+        let span = cell_span(sc, x, y, h, gx, gy);
+        Hit { tile, mx, my, x, y, h, bed, face, below, sun, kind: HitKind::Terrain, which: 0, nsx: 0.0, span }
     }
 
     /// A geometry crossing as a hit: walls take the screen side their face
@@ -766,7 +800,12 @@ impl Renderer {
             HitKind::Terrain => 0.0,
         };
         let nsx = screen_x_of(cand.normal, sc.cam);
-        Some(Hit { tile, mx: cand.mx, my: cand.my, x, y, h: cand.z, bed: cand.z, face, below: 0, sun, kind: cand.kind, which: cand.which, nsx })
+        // A roof or a crown takes the grain itself, with no step up. Tiles
+        // and leaves are drawn where the surface is, in front of whatever
+        // the cell would otherwise cover, so the ground the cell rakes is
+        // not theirs to be band-limited to.
+        let span = 0.0;
+        Some(Hit { tile, mx: cand.mx, my: cand.my, x, y, h: cand.z, bed: cand.z, face, below: 0, sun, kind: cand.kind, which: cand.which, nsx, span })
     }
 
     /// Unlit colour of a top surface at a fractional ground point: the
@@ -1175,7 +1214,7 @@ impl Renderer {
             HitKind::Roof => {
                 let kind = hit.tile.stack.map(|s| s.kind).unwrap_or(0);
                 let mat = self.material(sc, &hit.tile, kind);
-                if lod.bands && ground_hash(cam, hit.x, hit.y, hit.tile.seed) % 100 < 35 {
+                if lod.bands && ground_hash(hit.x, hit.y, sc.assets.surfaces.density.grain_metres, hit.span, hit.tile.seed) % 100 < 35 {
                     return (base, ts.art.roof_fill, mat.roof_glyph);
                 }
                 (base, ' ', base)
@@ -1186,7 +1225,7 @@ impl Renderer {
                 let snow = sc.world.snow_at(hit.tile.temp as f32);
                 let live = biome::seasonal(&sp.canopy_glyph, sc.world.season).lerp(pal.snow_glyph(), snow * 0.5);
                 let art = &ts.art;
-                let hv = ground_hash(cam, hit.x, hit.y, hit.tile.seed);
+                let hv = ground_hash(hit.x, hit.y, sc.assets.surfaces.density.grain_metres, hit.span, hit.tile.seed);
                 // A crown with no foliage is bare wood: strokes of branch,
                 // whichever way the cell falls, over the grey the walk gave
                 // it, and never the set's leaf fill.
@@ -1907,5 +1946,62 @@ mod tests {
         let spruce = one_tree(&assets, "spruce", 0);
         let (r, _) = tree_grid(&spruce, ts, 3.0, 2);
         assert!(r.grid().volumes.iter().any(|v| v.shape == Shape::Cluster), "an evergreen keeps its crown in winter");
+    }
+
+    /// The grain in tiles at a span, and the corner of the lattice cell a
+    /// point falls in: what `ground_hash` quantises to.
+    fn lattice(grain: f32, span: f32) -> f32 {
+        let steps = (span / grain).max(1.0).log2().floor() as u32;
+        grain * (1 << steps) as f32 / TILE_METRES
+    }
+
+    #[test]
+    fn a_speck_keeps_its_place_as_the_lattice_coarsens() {
+        // Powers of two, so every lattice below is exact in binary and the
+        // test compares hashes rather than rounding.
+        let grain = 0.125;
+        let fine = lattice(grain, grain);
+        for (i, j) in [(0i32, 0i32), (37, -12), (-4001, 913)] {
+            // A point at a coarse cell's corner, and the same point walked
+            // to the middle of a fine cell inside it.
+            for level in 0..8u32 {
+                let span = grain * (1 << level) as f32;
+                let q = lattice(grain, span);
+                assert_eq!(q, fine * (1 << level) as f32, "level {level}");
+                let (x, y) = (i as f32 * q, j as f32 * q);
+                let coarse = ground_hash(x + q * 0.5, y + q * 0.25, grain, span, 7);
+                let close = ground_hash(x + fine * 0.5, y + fine * 0.5, grain, grain, 7);
+                assert_eq!(coarse, close, "level {level} at ({i}, {j}): the speck a coarse cell draws is the one at its corner up close");
+            }
+        }
+    }
+
+    #[test]
+    fn the_lattice_holds_its_density_at_every_span() {
+        let grain = 0.125;
+        for level in 0..8u32 {
+            let span = grain * (1 << level) as f32;
+            let q = lattice(grain, span);
+            // One sample per lattice cell, so the count is the lattice's own
+            // density rather than a screen's.
+            let n = 4000;
+            let hits = (0..n).filter(|k| ground_hash(*k as f32 * q + q * 0.5, 11.0 * q + q * 0.5, grain, span, 7) % 1000 < 240).count();
+            let d = hits as f32 / n as f32;
+            assert!((d - 0.24).abs() < 0.03, "level {level}: {d} of the lattice carries a speck, not 0.24");
+        }
+    }
+
+    #[test]
+    fn a_speck_is_where_it_is_whatever_is_looking() {
+        // The lattice takes no camera: two spans an octave apart quantise
+        // the same point to the same corner, and nothing else moves it.
+        let grain = 0.0625;
+        let q = lattice(grain, 0.5);
+        // The middle of one lattice cell, and either end of it.
+        let (x, y) = (123.0 * q + q * 0.5, -79.0 * q + q * 0.5);
+        let a = ground_hash(x, y, grain, 0.5, 3);
+        assert_eq!(a, ground_hash(x, y, grain, 0.5, 3));
+        assert_ne!(a, ground_hash(x, y, grain, 0.5, 4), "a different seed is a different roll");
+        assert_eq!(a, ground_hash(x + q * 0.49, y - q * 0.49, grain, 0.5, 3), "anywhere in the cell is the same speck");
     }
 }

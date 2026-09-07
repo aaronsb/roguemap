@@ -246,6 +246,16 @@ is one command.
 - **Overlays.** The cloud sample for a screen cell (`Camera::cloud_view`)
   moves by C/(C-H) tiles per tile of camera pan; precipitation kind
   follows the temperature at the screen centre.
+- **The scatter lattice** (#35). Unit tests hold the lattice itself: a
+  point's speck is the same at every span an octave apart, since the
+  steps nest and a coarse cell hashes the fine cell at its corner; the
+  density stays the surface's at every span; and anywhere within a cell
+  is the same speck, from a function no camera is passed to.
+  `tests/scatter.rs` is the temporal pin, which a single frame cannot be:
+  a first-person view of a snowy mountain, then the same view one 40 ms
+  tick of walking later, and the count of cells whose speck came or went.
+  Fewer than one cell in a hundred may change, at 168x71 and at 80x25;
+  the camera-hung lattice moved more specks than the frame carried.
 
 ## Interaction
 

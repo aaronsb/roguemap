@@ -17,6 +17,9 @@ pub struct Surface {
     pub identity: Identity,
     /// Fraction of ground cells carrying a texture glyph.
     pub texture_density: f32,
+    /// Metres between the specks of this surface's grain: the lattice the
+    /// scatter sits on, fixed in the world (docs/rendering.md).
+    pub grain_metres: f32,
     /// Whether height lifts and wetness darkens the colour; snow stays flat.
     pub relief: bool,
     pub conditions: Conditions,
@@ -58,6 +61,9 @@ pub struct Season {
 /// Glyph densities of the surfaces with bespoke rules.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Density {
+    /// Metres between the specks of the grain the bespoke rules scatter:
+    /// tufts, waves, reeds, roof tiles and leaves.
+    pub grain_metres: f32,
     /// Grass tuft chance per cell at tuft level 0, plus this much per level.
     pub grass_base: f32,
     pub grass_per_level: f32,

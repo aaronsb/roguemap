@@ -70,27 +70,32 @@ water_glyph = [210, 230, 245]
 name = "sand"
 description = "Beaches and river banks at sea level."
 texture_density = 0.14
+grain_metres = 0.04
 relief = true
 
 [[surface]]
 name = "dirt"
 description = "Bare earth in patches through the grass."
 texture_density = 0.22
+grain_metres = 0.075
 relief = true
 
 [[surface]]
 name = "rock"
 description = "Bare rock above the treeline."
 texture_density = 0.24
+grain_metres = 0.15
 relief = true
 
 [[surface]]
 name = "snow"
 description = "Permanent snow in the deep cold; height does not shade it."
 texture_density = 0.18
+grain_metres = 0.075
 relief = false
 
 [density]
+grain_metres = 0.075
 grass_base = 0.04
 grass_per_level = 0.14
 cattail = 0.1

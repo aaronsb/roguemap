@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(kept.panes[0].shown, Tier::Large);
         // The dropped pane is a different picture: the whole crown is in
         // it, where the large tier had a trunk across the pane.
-        let canopy = |p: &Pane| p.canvas.cells.iter().filter(|c| c.ch == ts[0].art.round_mid[1]).count();
-        assert!(canopy(&fit.panes[0]) > canopy(&kept.panes[0]), "{} then {}", canopy(&fit.panes[0]), canopy(&kept.panes[0]));
+        let trunk = |p: &Pane| p.canvas.cells.iter().filter(|c| c.ch == ts[0].art.trunk[0].chars().next().unwrap()).count();
+        assert!(trunk(&kept.panes[0]) > 4 * trunk(&fit.panes[0]), "{} then {}", trunk(&fit.panes[0]), trunk(&kept.panes[0]));
     }
 }
