@@ -54,12 +54,16 @@ pub(crate) struct Lod {
 /// 3 near, 6 close.
 pub(crate) fn lod_of(rows_per_metre: f32) -> Lod {
     let rpm = rows_per_metre;
-    Lod { profiles: rpm >= 1.5, volumes: rpm >= 1.5, model: rpm >= 3.0, bands: rpm >= 3.0, canopy_aa: rpm >= 6.0, close: rpm >= 6.0, bisections: if rpm >= 6.0 { 5 } else { 4 } }
+    Lod { profiles: rpm >= 1.5, volumes: rpm >= 1.5, model: rpm >= 1.5, bands: rpm >= 3.0, canopy_aa: rpm >= 6.0, close: rpm >= 6.0, bisections: if rpm >= 6.0 { 5 } else { 4 } }
 }
 
 fn lod(cam: &Camera) -> Lod {
     lod_of(cam.rows_per_metre())
 }
+
+/// Brightness of a tree cell on the seam behind a nearer tree
+/// (`Renderer::outline_crowns`).
+const CROWN_SEAM: f32 = 0.66;
 
 /// The sun's ground direction, toward +x +y as the terrain shading has it.
 const SUN_GROUND: (f32, f32) = (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
@@ -288,7 +292,14 @@ impl Renderer {
             // the tile's index alone keeps a stand of grown trees out of
             // the cache: only the few volumes that survive are read.
             let floor = lo - grid.slack();
-            let (mid, half) = ((p0.0 + d.0 * (lo + hi) * 0.5, p0.1 + d.1 * (lo + hi) * 0.5), 0.5 * (d.0.abs() + d.1.abs()) * (hi - lo));
+            // The stroke as its midpoint and half its run, so a volume is
+            // rejected on its distance from the stroke itself rather than
+            // from a circle around it: at the mid zoom a step runs a whole
+            // tile of ground, and a circle that wide would pass most of a
+            // stand to the solver.
+            let mid = (p0.0 + d.0 * (lo + hi) * 0.5, p0.1 + d.1 * (lo + hi) * 0.5);
+            let hv = (d.0 * 0.5 * (hi - lo), d.1 * 0.5 * (hi - lo));
+            let hh = hv.0 * hv.0 + hv.1 * hv.1;
             let list = grid.buckets(geo);
             let cut = hi + geo.vspan + grid.slack();
             let mut from = if scan.mx == mx && scan.my == my { scan.at } else { list.partition_point(|b| b.top > cut) };
@@ -303,18 +314,26 @@ impl Renderer {
                 if b.h0 > hi {
                     continue; // it stands entirely above the segment
                 }
-                let (dx, dy) = (mid.0 - b.cx, mid.1 - b.cy);
-                let reach = b.r + half;
-                if dx * dx + dy * dy > reach * reach {
+                let (dx, dy) = (b.cx - mid.0, b.cy - mid.1);
+                let t = if hh > 1e-12 { ((dx * hv.0 + dy * hv.1) / hh).clamp(-1.0, 1.0) } else { 0.0 };
+                let (ex, ey) = (dx - t * hv.0, dy - t * hv.1);
+                if ex * ex + ey * ey > b.r * b.r {
                     continue;
                 }
+                // A leaf cluster is solved from the index entry alone: a
+                // stand of grown trees is tens of thousands of them, and
+                // reading each one the walk rejects is what a forest cannot
+                // afford. The volume is read only for what was met.
+                let h = if b.cluster { crate::volume::ellipsoid_hit((p0.0 - b.cx, p0.1 - b.cy), d, b.r * b.r, b.h0, b.top - b.h0, lo.max(b.h0), hi.min(b.top)) } else { grid.volume(b.v).hit(p0, d, lo, hi, lod.close) };
+                let Some(h) = h else { continue };
                 let (vi, v) = (b.v, grid.volume(b.v));
-                let Some(h) = v.hit(p0, d, lo, hi, lod.close) else { continue };
-                // A crown is not solid: a sample inside one meets foliage
-                // with the species' leaf density as its probability and
-                // otherwise passes through, so a thin crown shows flecks of
-                // what stands behind it (docs/structures.md).
-                if h.part == Part::Canopy && !v.dead {
+                // A stand-in crown is not solid: a sample inside one meets
+                // foliage with the species' leaf density as its probability
+                // and otherwise passes through, so a thin crown shows flecks
+                // of what stands behind it (docs/structures.md). A grown
+                // crown's holes are the gaps its grammar left between the
+                // clusters, so each cluster is solid.
+                if h.part == Part::Canopy && !v.dead && !b.cluster {
                     let density = sc.assets.species[v.species as usize % sc.assets.species.len()].leaf_density;
                     if !crate::volume::foliage_at(p0.0 + d.0 * h.z, p0.1 + d.1 * h.z, h.z, density) {
                         continue;
@@ -520,11 +539,11 @@ impl Renderer {
     }
 
     /// A tree's own canopy colour: its species' colour, brightened or
-    /// dimmed by an eighth and nudged toward yellow or blue, so a stand is
+    /// dimmed by a sixth and nudged toward yellow or blue, so a stand is
     /// not one flat green (ADR-002's volumes, ADR-004's scale).
     fn canopy_tint(&self, c: Rgb, v: &crate::volume::Volume) -> Rgb {
         let i = v.instance;
-        let hue = 1.0 + 0.10 * i.hue;
+        let hue = 1.0 + 0.14 * i.hue;
         Rgb((c.0 as f32 * i.tint * hue).clamp(0.0, 255.0) as u8, (c.1 as f32 * i.tint).clamp(0.0, 255.0) as u8, (c.2 as f32 * i.tint / hue).clamp(0.0, 255.0) as u8)
     }
 
@@ -619,8 +638,42 @@ impl Renderer {
     pub(crate) fn terrain_pass(&mut self, sc: &Scene, aa: bool) {
         let hits = self.raycast(sc);
         self.shade_hits(sc, &hits);
+        self.outline_crowns(sc, &hits);
         if aa {
             self.antialias_edges(sc, &hits);
+        }
+    }
+
+    /// Where one tree stands in front of another, the cells of the tree
+    /// behind along the seam are darkened, so every crown carries an
+    /// outline against its neighbours and a stand reads as trees rather
+    /// than as one canopy. Crown seams are never supersampled
+    /// (`antialias_edges`), so this is what separates two crowns of one
+    /// species in the same light.
+    fn outline_crowns(&mut self, sc: &Scene, hits: &[Option<Hit>]) {
+        let (w, h) = (self.w, self.h);
+        let cam = sc.cam;
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) as usize;
+                let Some(hit) = hits[i] else { continue };
+                if !hit.kind.is_tree() {
+                    continue;
+                }
+                let depth = cam.tile_depth(hit.mx, hit.my);
+                let behind = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        return false;
+                    }
+                    hits[(ny * w + nx) as usize].is_some_and(|n| n.kind.is_tree() && (n.mx, n.my) != (hit.mx, hit.my) && cam.tile_depth(n.mx, n.my) > depth)
+                });
+                if behind {
+                    let cell = &mut self.g[i];
+                    cell.albedo = cell.albedo.scale(CROWN_SEAM);
+                    cell.glyph = cell.glyph.scale(CROWN_SEAM);
+                }
+            }
         }
     }
 
@@ -1079,6 +1132,8 @@ mod tests {
             }
             if (x, y) == (2, 6) {
                 t.tree = Some(Flora { species: pine as u8, variant: 2 });
+                // A seed of zero rolls a standing snag; this pine is alive.
+                t.seed = 7;
             }
             t
         });
@@ -1104,18 +1159,23 @@ mod tests {
             let wall = r.ray(&sc, px, py).unwrap_or_else(|| panic!("zoom {zoom}: no hit on the wall"));
             assert_eq!(wall.kind, HitKind::Wall, "zoom {zoom}: {:?} at h {}", wall.kind, wall.h);
             assert!(wall.face != FACE_TOP && wall.h > 5.5 && wall.h < 5.5 + 2.0 * lh, "zoom {zoom}: wall at {}", wall.h);
-            // The tree: a crown over the trunk, met on the flank facing the
-            // camera half way up (a slanting ray only grazes a cone's apex),
-            // and plain ground beside it. From the near zooms up the pine is
-            // grown from its habit, so the flank is whichever of foliage and
-            // wood the ray meets first, not always foliage.
+            // The tree: grown from its habit at every one of these zooms,
+            // so what a ray meets is whichever of foliage and wood comes
+            // first. Down the leader a metre and a half under the top it
+            // is the tree; on the flank facing the camera half way up it
+            // is the tree wherever the tiers leave no gap for the ray to
+            // slip through; and four tiles off it is plain ground.
             let v = *r.grid().tree_crowns().find(|v| (v.mx, v.my) == (2, 6)).expect("the pine has a crown");
             let (fx, fy) = cam.forward();
+            let (px, py) = cam.project(v.cx, v.cy, v.top() - 1.5);
+            let leader = r.ray(&sc, px, py).unwrap_or_else(|| panic!("zoom {zoom}: no hit down the leader"));
+            assert!(leader.kind.is_tree(), "zoom {zoom}: {:?}", leader.kind);
+            assert!((leader.h - (v.top() - 1.5)).abs() < 2.0, "zoom {zoom}: the leader is met near the top ({} vs {})", leader.h, v.top());
             let half = v.h0 + 0.5 * v.height;
             let (px, py) = cam.project(v.cx + 0.5 * v.radius * fx, v.cy + 0.5 * v.radius * fy, half);
-            let crown = r.ray(&sc, px, py).unwrap_or_else(|| panic!("zoom {zoom}: no hit on the crown's flank"));
-            assert!(crown.kind.is_tree(), "zoom {zoom}: {:?}", crown.kind);
-            assert!((crown.h - half).abs() < 1.5, "zoom {zoom}: the flank is met half way up ({} vs {})", crown.h, half);
+            if let Some(crown) = r.ray(&sc, px, py).filter(|h| h.kind.is_tree()) {
+                assert!((crown.h - half).abs() < 1.5, "zoom {zoom}: the flank is met half way up ({} vs {})", crown.h, half);
+            }
             let (px, py) = cam.project(v.cx + 4.0, v.cy - 1.0, 5.5);
             let ground = r.ray(&sc, px, py).unwrap();
             assert_eq!(ground.kind, HitKind::Terrain, "zoom {zoom}: four tiles from the trunk is ground");
@@ -1168,15 +1228,18 @@ mod tests {
         let assets = test_assets();
         let ts = &Tileset::all(&assets)[0];
         let map = one_tree(&assets, "oak", 12);
-        // At the mid zoom the oak is one stand-in volume, the shape its
-        // habit reads as from far away.
+        // At the mid zoom the oak is already its model, at the coarse
+        // level: fewer primitives than the near zoom draws, and the
+        // stand-in beside them for the shadow mask.
         let (r, _) = tree_grid(&map, ts, 1.0, 1);
-        assert_eq!(r.grid().volumes.len(), 1);
-        assert_eq!(r.grid().volumes[0].shape, Shape::Ellipsoid);
-        // At the near zoom it is its model: branches and leaf clusters, one
-        // stand-in kept for the shadow mask, and every primitive bucketed
-        // into the tiles its footprint covers.
+        let mid = r.grid().volumes.len();
+        assert!(mid > 10, "a grown oak at the mid zoom: {mid} volumes");
+        assert_eq!(r.grid().volumes[r.grid().crowns[0] as usize].shape, Shape::Ellipsoid);
+        // At the near zoom it is its model in more detail: branches and
+        // leaf clusters, one stand-in kept for the shadow mask, and every
+        // primitive bucketed into the tiles its footprint covers.
         let (r, (x0, y0, x1, y1)) = tree_grid(&map, ts, 1.0, 2);
+        assert!(r.grid().volumes.len() > mid, "the near zoom keeps more of the model than the mid one: {} vs {mid}", r.grid().volumes.len());
         let grid = r.grid();
         let kinds = |k: Shape| grid.volumes.iter().filter(|v| v.shape == k).count();
         assert_eq!(grid.crowns.len(), 1, "one tree, one crown for the shadow mask");
@@ -1210,6 +1273,72 @@ mod tests {
         // A tile well clear of the crown carries nothing.
         let far = grid.geo(8 - 8, 8).expect("a tile eight over");
         assert_eq!(far.vol.1, 0);
+    }
+
+    #[test]
+    fn a_model_is_grown_from_the_mid_zoom_up_and_its_detail_follows_the_zoom() {
+        use crate::grid::Detail;
+        // Rows per metre at the four zooms: the overview draws billboards,
+        // every other zoom the grown model.
+        assert!(!lod_of(0.75).volumes && !lod_of(0.75).model);
+        assert!(lod_of(1.5).volumes && lod_of(1.5).model);
+        assert!(lod_of(3.0).model && lod_of(6.0).model);
+        // The detail level counts the zooms a model is grown at, and the
+        // lattice and the twig cut halve with each zoom in.
+        let (mid, near, close) = (Detail::at(1.5, 2.83), Detail::at(3.0, 5.66), Detail::at(6.0, 11.31));
+        assert_eq!((mid.level, near.level, close.level), (0, 1, 2));
+        assert!((mid.cell / near.cell - 2.0).abs() < 1e-3 && (near.cell / close.cell - 2.0).abs() < 1e-3);
+        assert!((mid.min_radius / near.min_radius - 2.0).abs() < 1e-2 && (near.min_radius / close.min_radius - 2.0).abs() < 1e-2);
+        assert!(mid.cell > 2.0 && close.cell < 1.0, "about four rows of height: {} m at 1:4, {} m at 1:1", mid.cell, close.cell);
+    }
+
+    #[test]
+    fn a_crown_behind_a_nearer_tree_is_darkened_along_the_seam() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let pine = assets.species.iter().position(|s| s.name == "pine").unwrap();
+        // Two live pines four tiles apart on the camera's forward diagonal,
+        // so the nearer one stands in front of the lower half of the other
+        // on screen and the far crown shows over it.
+        let map = Map::synthetic(16, 16, assets.clone(), 0, move |x, y| {
+            let mut t = Tile::flat(5);
+            t.seed = 7;
+            if (x, y) == (8, 8) || (x, y) == (12, 12) {
+                t.tree = Some(Flora { species: pine as u8, variant: 2 });
+            }
+            t
+        });
+        let world = World::new(1);
+        let (w, h) = (120, 120);
+        let mut cam = Camera::new();
+        cam.set_zoom(1, w, h);
+        cam.look_at(8, 8, &map, w, h);
+        let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+        let mut r = prepared(&sc, w, h);
+        r.terrain_pass(&sc, false);
+        let (near, far) = ((12, 12), (8, 8));
+        assert!(cam.tile_depth(near.0, near.1) > cam.tile_depth(far.0, far.1));
+        let hit_at = |x: i32, y: i32| r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5).filter(|hh| hh.kind.is_tree()).map(|hh| ((hh.mx, hh.my), hh));
+        let (mut seam, mut plain) = (0, 0);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let Some((tree, hh)) = hit_at(x, y) else { continue };
+                if tree != far {
+                    continue;
+                }
+                let beside: Vec<_> = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().filter_map(|&(dx, dy)| hit_at(x + dx, y + dy).map(|(t, _)| t)).collect();
+                let base = r.hit_color(&sc, &hh);
+                let cell = r.g[(y * w + x) as usize];
+                if beside.contains(&near) {
+                    seam += 1;
+                    assert_eq!(cell.albedo, base.scale(CROWN_SEAM), "a far-tree cell beside the near tree is darkened at ({x}, {y})");
+                } else if beside.len() == 4 && beside.iter().all(|t| *t == far) {
+                    plain += 1;
+                    assert_eq!(cell.albedo, base, "a cell inside the far crown keeps its colour at ({x}, {y})");
+                }
+            }
+        }
+        assert!(seam > 3 && plain > 3, "the seam runs through the frame: {seam} seam cells, {plain} inside");
     }
 
     #[test]

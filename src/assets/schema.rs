@@ -353,6 +353,9 @@ pub struct LsystemRow {
     /// Fraction of the height with no live branches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prune_height: Option<f32>,
+    /// How flat a cluster on a level branch is, 0 round to 1 flat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_flat: Option<f32>,
     /// Symbol to its replacements. A table, so it comes last.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rules: BTreeMap<String, Rule>,
@@ -401,6 +404,10 @@ pub struct StyleParamsRow {
     pub depth: u8,
     pub length: f32,
     pub leaf_radius: f32,
+    /// How flat a cluster on a level branch is, 0 round to 1 flat; a
+    /// habit that leaves it out keeps its clusters round.
+    #[serde(default)]
+    pub leaf_flat: f32,
 }
 
 // materials.toml

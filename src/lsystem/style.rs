@@ -45,6 +45,8 @@ pub struct Params {
     pub length: f32,
     /// Radius of an `L` cluster, in metres.
     pub leaf_radius: f32,
+    /// How flat a cluster on a level branch is, 0 round to 1 flat.
+    pub leaf_flat: f32,
 }
 
 /// The counts a template may repeat by, matched whole after `*`.
@@ -120,6 +122,7 @@ impl Style {
             asymmetry: p.asymmetry,
             jitter: p.jitter,
             prune_height: p.prune_height,
+            leaf_flat: p.leaf_flat,
         })
     }
 }
@@ -139,6 +142,7 @@ pub struct Overrides {
     pub depth: Option<u8>,
     pub length: Option<f32>,
     pub leaf_radius: Option<f32>,
+    pub leaf_flat: Option<f32>,
 }
 
 impl Overrides {
@@ -155,6 +159,7 @@ impl Overrides {
             depth: self.depth.unwrap_or(base.depth),
             length: self.length.unwrap_or(base.length),
             leaf_radius: self.leaf_radius.unwrap_or(base.leaf_radius),
+            leaf_flat: self.leaf_flat.unwrap_or(base.leaf_flat),
         }
     }
 }
@@ -234,7 +239,7 @@ mod tests {
     use super::*;
 
     fn params() -> Params {
-        Params { branch_angle: 20.0, forks: 5, taper: 0.9, droop: 0.0, leaf_density: 1.0, asymmetry: 0.1, jitter: 0.08, prune_height: 0.2, depth: 6, length: 1.0, leaf_radius: 0.4 }
+        Params { branch_angle: 20.0, forks: 5, taper: 0.9, droop: 0.0, leaf_density: 1.0, asymmetry: 0.1, jitter: 0.08, prune_height: 0.2, depth: 6, length: 1.0, leaf_radius: 0.4, leaf_flat: 0.0 }
     }
 
     #[test]

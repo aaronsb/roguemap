@@ -92,6 +92,55 @@ pub struct Leaf {
     pub radius: [f32; 3],
 }
 
+/// The leaf clusters of one lattice cell on their way to becoming one
+/// (`TreeModel::simplify`): the box they fill, their volume-weighted
+/// centroid and their volumes summed per axis.
+struct Merge {
+    weight: f32,
+    centroid: [f32; 3],
+    lo: [f32; 3],
+    hi: [f32; 3],
+    /// Sum of the squared radii per axis: the screen the clusters would
+    /// cover if none overlapped, up to a constant.
+    squares: [f32; 3],
+}
+
+impl Default for Merge {
+    fn default() -> Merge {
+        Merge { weight: 0.0, centroid: [0.0; 3], lo: [f32::INFINITY; 3], hi: [f32::NEG_INFINITY; 3], squares: [0.0; 3] }
+    }
+}
+
+impl Merge {
+    fn add(&mut self, l: &Leaf) {
+        let w = (l.radius[0] * l.radius[1] * l.radius[2]).max(1e-6);
+        self.weight += w;
+        for i in 0..3 {
+            self.centroid[i] += w * l.centre[i];
+            self.lo[i] = self.lo[i].min(l.centre[i] - l.radius[i]);
+            self.hi[i] = self.hi[i].max(l.centre[i] + l.radius[i]);
+            self.squares[i] += l.radius[i] * l.radius[i];
+        }
+    }
+
+    /// The one cluster standing for the cell: at the centroid, no wider on
+    /// any axis than the box its members fill and covering no more of the
+    /// screen than they would side by side. A cluster that stood alone
+    /// comes back as it was; a cell of several is a blob about the size of
+    /// their union rather than of their bounding box, so a crown keeps the
+    /// lumps its leaves grew in instead of swelling into the lattice.
+    fn leaf(&self) -> Leaf {
+        let mut centre = [0.0; 3];
+        let mut radius = [0.0; 3];
+        for i in 0..3 {
+            radius[i] = (0.5 * (self.hi[i] - self.lo[i])).min(self.squares[i].sqrt());
+            let c = self.centroid[i] / self.weight.max(1e-6);
+            centre[i] = c.max(self.lo[i] + radius[i]).min(self.hi[i] - radius[i]);
+        }
+        Leaf { centre, radius }
+    }
+}
+
 /// An axis-aligned box in metres.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bounds {
@@ -175,6 +224,14 @@ impl Growth {
 /// A leaf cluster smaller than this fraction of its full radius is not
 /// drawn at all: the last few leaves of autumn are a bare tree.
 pub const BARE_BELOW: f32 = 0.05;
+
+/// Fraction of the leafy branch cut a bare or dead tree keeps its twigs
+/// down to (`TreeModel::simplify`).
+pub const BARE_TWIG: f32 = 0.35;
+
+/// Fraction of the bole's radius the branch cut never rises above, so a
+/// thin-trunked species keeps its trunk at every zoom.
+pub const BOLE_KEEP: f32 = 0.6;
 
 /// A tree as geometry: branch capsules and foliage ellipsoids, in metres,
 /// with the ground at `bounds.min[2]` and the trunk near the x-y origin.
@@ -330,6 +387,40 @@ impl TreeModel {
         out
     }
 
+    /// The bole: the chain of segments from the foot of the trunk, each
+    /// starting where the last ended, followed as long as it stays at
+    /// least `floor` thick. Where several segments start at one point the
+    /// thickest carries on, and among equals the straightest, since a
+    /// whorl branch leaves at an angle and the leader does not.
+    pub fn bole(&self, floor: f32) -> Vec<usize> {
+        let key = |p: [f32; 3]| ((p[0] * 1e3).round() as i32, (p[1] * 1e3).round() as i32, (p[2] * 1e3).round() as i32);
+        let mut starts: BTreeMap<(i32, i32, i32), Vec<usize>> = BTreeMap::new();
+        for (i, s) in self.segments.iter().enumerate() {
+            starts.entry(key(s.a)).or_default().push(i);
+        }
+        let dir = |s: &Segment| {
+            let d = [s.b[0] - s.a[0], s.b[1] - s.a[1], s.b[2] - s.a[2]];
+            let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+            [d[0] / n, d[1] / n, d[2] / n]
+        };
+        let mut chain = Vec::new();
+        let Some(mut at) = (0..self.segments.len()).min_by(|&i, &j| self.segments[i].a[2].total_cmp(&self.segments[j].a[2])) else { return chain };
+        while self.segments[at].radius >= floor && !chain.contains(&at) {
+            chain.push(at);
+            let here = &self.segments[at];
+            let d = dir(here);
+            let Some(next) = starts.get(&key(here.b)) else { break };
+            let widest = next.iter().map(|&i| self.segments[i].radius).fold(0.0f32, f32::max);
+            let straight = |i: usize| {
+                let e = dir(&self.segments[i]);
+                d[0] * e[0] + d[1] * e[1] + d[2] * e[2]
+            };
+            let Some(&n) = next.iter().filter(|&&i| self.segments[i].radius >= widest * 0.999).max_by(|&&i, &&j| straight(i).total_cmp(&straight(j))) else { break };
+            at = n;
+        }
+        chain
+    }
+
     /// The model as the ray walk wants it at a zoom: leaf clusters closer
     /// together than `cell` metres merged into one, and branches thinner
     /// than `min_radius` dropped.
@@ -343,43 +434,61 @@ impl TreeModel {
     pub fn simplify(&self, cell: f32, min_radius: f32) -> TreeModel {
         let mut out = TreeModel { segments: Vec::new(), leaves: Vec::new(), bounds: Bounds::default(), state: self.state };
         // A twig is only hidden while there are leaves on it: a bare oak in
-        // winter and a dead one at any season are their twigs, so nothing
-        // is dropped from a model with no foliage.
-        let min_radius = if self.leaves.is_empty() { 0.0 } else { min_radius };
-        out.segments.extend(self.segments.iter().filter(|s| s.radius >= min_radius).copied());
-        // The thickest branch is the bole; a tree that thinned away to
-        // nothing would lose its trunk, so keep it whatever the zoom.
-        if out.segments.is_empty() {
-            if let Some(s) = self.segments.iter().max_by(|a, b| a.radius.total_cmp(&b.radius)) {
-                out.segments.push(*s);
+        // winter and a dead one at any season are their twigs, so a model
+        // with no foliage keeps them down to a fraction of that width,
+        // where a twig is too thin to fill a cell and only costs the walk.
+        let min_radius = if self.leaves.is_empty() { min_radius * BARE_TWIG } else { min_radius };
+        // A species whose bole is thinner than the cut would lose its
+        // trunk, so the bole is kept whatever the zoom: the chain from the
+        // foot, as far up as it stays most of its own width.
+        let thickest = self.segments.iter().fold(0.0f32, |m, s| m.max(s.radius));
+        let bole = self.bole(BOLE_KEEP * thickest);
+        let mut keep = vec![false; self.segments.len()];
+        for &i in &bole {
+            keep[i] = true;
+        }
+        out.segments.extend(self.segments.iter().zip(&keep).filter(|(s, k)| !**k && s.radius >= min_radius).map(|(s, _)| *s));
+        // The bole is one straight run of short pieces, and at a zoom where
+        // a piece is a row or two the walk gains nothing from testing each:
+        // pieces are joined into capsules of up to two lattice cells of
+        // rise, thick as the mean of what they replace.
+        let join = 2.0 * cell.max(0.0);
+        let mut run: Option<(Segment, f32, u32)> = None;
+        for &i in &bole {
+            let s = self.segments[i];
+            match run {
+                Some((ref mut j, ref mut sum, ref mut n)) if (s.b[2] - j.a[2]).abs() <= join => {
+                    j.b = s.b;
+                    *sum += s.radius;
+                    *n += 1;
+                }
+                _ => {
+                    if let Some((j, sum, n)) = run.take() {
+                        out.segments.push(Segment { radius: sum / n as f32, ..j });
+                    }
+                    run = Some((s, s.radius, 1));
+                }
             }
+        }
+        if let Some((j, sum, n)) = run {
+            out.segments.push(Segment { radius: sum / n as f32, ..j });
         }
         if cell <= 0.0 {
             out.leaves.extend_from_slice(&self.leaves);
             out.rebound();
             return out;
         }
-        // One pass down a lattice of `cell` metres: the first cluster in a
-        // cell keeps the cell, and later ones grow it to hold them.
+        // One pass down a lattice of `cell` metres, gathering the clusters
+        // of each cell into one. The lattice is centred on the trunk, so
+        // the leader's clusters share a column of cells rather than being
+        // split four ways around the axis and leaving the core hollow.
         let inv = 1.0 / cell;
-        let mut cells: BTreeMap<(i32, i32, i32), usize> = BTreeMap::new();
+        let mut cells: BTreeMap<(i32, i32, i32), Merge> = BTreeMap::new();
         for l in &self.leaves {
-            let key = ((l.centre[0] * inv).floor() as i32, (l.centre[1] * inv).floor() as i32, (l.centre[2] * inv).floor() as i32);
-            match cells.get(&key) {
-                Some(&at) => {
-                    let m: &mut Leaf = &mut out.leaves[at];
-                    for i in 0..3 {
-                        let (lo, hi) = ((m.centre[i] - m.radius[i]).min(l.centre[i] - l.radius[i]), (m.centre[i] + m.radius[i]).max(l.centre[i] + l.radius[i]));
-                        m.centre[i] = 0.5 * (lo + hi);
-                        m.radius[i] = 0.5 * (hi - lo);
-                    }
-                }
-                None => {
-                    cells.insert(key, out.leaves.len());
-                    out.leaves.push(*l);
-                }
-            }
+            let key = ((l.centre[0] * inv + 0.5).floor() as i32, (l.centre[1] * inv + 0.5).floor() as i32, (l.centre[2] * inv).floor() as i32);
+            cells.entry(key).or_default().add(l);
         }
+        out.leaves.extend(cells.values().map(Merge::leaf));
         out.rebound();
         out
     }
@@ -497,13 +606,18 @@ pub struct Grammar {
     /// Fraction of the tree's height carrying no live branches, `0..1`: a
     /// tree self-prunes as it grows and the lower limbs die away.
     pub prune_height: f32,
+    /// How flat a cluster on a level branch is, `0..=1`: 0 keeps every
+    /// cluster round, 1 squashes one on a horizontal branch to nothing.
+    /// Needles on a whorl branch are a spray, so a conifer's tiers read
+    /// as tiers with gaps between them.
+    pub leaf_flat: f32,
 }
 
 /// The turtle knobs with no effect: a bare grammar with no habit.
 impl Grammar {
     /// Field defaults for a grammar written out by hand, so a species that
     /// gives only axiom and rules behaves like a plain L-system.
-    pub const PLAIN: Habit = Habit { droop: 0.0, leaf_density: 1.0, asymmetry: 0.0, jitter: 0.08, prune_height: 0.0 };
+    pub const PLAIN: Habit = Habit { droop: 0.0, leaf_density: 1.0, asymmetry: 0.0, jitter: 0.08, prune_height: 0.0, leaf_flat: 0.0 };
 }
 
 /// The habit knobs on their own, for defaulting and overriding.
@@ -514,6 +628,7 @@ pub struct Habit {
     pub asymmetry: f32,
     pub jitter: f32,
     pub prune_height: f32,
+    pub leaf_flat: f32,
 }
 
 impl Grammar {
@@ -542,7 +657,7 @@ impl Grammar {
         if !(-1.0..=1.0).contains(&self.droop) {
             return Err(format!("droop {} is outside -1..1", self.droop));
         }
-        for (field, v) in [("leaf_density", self.leaf_density), ("asymmetry", self.asymmetry), ("jitter", self.jitter), ("prune_height", self.prune_height)] {
+        for (field, v) in [("leaf_density", self.leaf_density), ("asymmetry", self.asymmetry), ("jitter", self.jitter), ("prune_height", self.prune_height), ("leaf_flat", self.leaf_flat)] {
             if !(0.0..=1.0).contains(&v) {
                 return Err(format!("{field} {v} is outside 0..1"));
             }
@@ -731,7 +846,12 @@ impl Grammar {
                                 *v += (hash01(clusters, 5 + i as i64, seed) - 0.5) * jitter * leaf;
                             }
                         }
-                        m.leaves.push(Leaf { centre: c, radius: [leaf; 3] });
+                        // Foliage on a level branch is a spray, on an
+                        // upright one a clump: the cluster flattens by
+                        // `leaf_flat` as the heading turns level.
+                        let flat = self.leaf_flat.clamp(0.0, 1.0);
+                        let rz = leaf * (1.0 - flat + flat * t.frame[0][2].abs());
+                        m.leaves.push(Leaf { centre: c, radius: [leaf, leaf, rz] });
                     }
                 }
                 _ => {}
@@ -865,6 +985,7 @@ mod tests {
             asymmetry: 0.0,
             jitter: 0.0,
             prune_height: 0.0,
+            leaf_flat: 0.0,
         }
     }
 
@@ -885,6 +1006,7 @@ mod tests {
             asymmetry: 0.3,
             jitter: 0.1,
             prune_height: 0.1,
+            leaf_flat: 0.0,
         }
     }
 
@@ -904,6 +1026,7 @@ mod tests {
             asymmetry: 0.0,
             jitter: 0.0,
             prune_height: 0.0,
+            leaf_flat: 0.0,
         }
     }
 
@@ -1154,5 +1277,100 @@ mod tests {
         .contains("draws nothing"));
         simple().validate().unwrap();
         oak().validate().unwrap();
+    }
+
+    #[test]
+    fn a_merged_cluster_is_no_smaller_than_its_biggest_member_and_no_bigger_than_their_box_or_their_area() {
+        let leaf = |x: f32, y: f32, z: f32, r: f32| Leaf { centre: [x, y, z], radius: [r; 3] };
+        // Three clusters in a row share a four-metre cell over the trunk;
+        // a fourth stands alone two cells away.
+        let near = [leaf(0.0, 0.1, 5.0, 0.4), leaf(0.9, 0.3, 5.2, 0.4), leaf(1.8, -0.2, 4.8, 0.4)];
+        let lone = leaf(9.0, 9.0, 9.0, 0.4);
+        let mut m = TreeModel { segments: vec![Segment { a: [0.0; 3], b: [0.0, 0.0, 6.0], radius: 0.3 }], leaves: near.to_vec(), bounds: Bounds::default(), state: State::Alive };
+        m.leaves.push(lone);
+        m.rebound();
+        let s = m.simplify(4.0, 0.0);
+        assert_eq!(s.leaves.len(), 2, "one cluster per occupied cell: {:?}", s.leaves);
+        let alone = s.leaves.iter().find(|l| l.centre[0] > 5.0).expect("the lone cluster");
+        assert!((0..3).all(|i| (alone.centre[i] - lone.centre[i]).abs() < 1e-4 && (alone.radius[i] - lone.radius[i]).abs() < 1e-4), "a cluster on its own comes back as it was: {alone:?}");
+        let merged = s.leaves.iter().find(|l| l.centre[0] < 5.0).expect("the merged cluster");
+        for i in 0..3 {
+            let (lo, hi) = near.iter().fold((f32::MAX, f32::MIN), |(lo, hi), l| (lo.min(l.centre[i] - l.radius[i]), hi.max(l.centre[i] + l.radius[i])));
+            let area: f32 = near.iter().map(|l| l.radius[i] * l.radius[i]).sum::<f32>().sqrt();
+            assert!(merged.radius[i] >= 0.4 - 1e-5, "axis {i}: no smaller than a member, {}", merged.radius[i]);
+            assert!(merged.radius[i] <= 0.5 * (hi - lo) + 1e-5, "axis {i}: no wider than the box, {} vs {}", merged.radius[i], 0.5 * (hi - lo));
+            assert!(merged.radius[i] <= area + 1e-5, "axis {i}: no more screen than the members, {} vs {area}", merged.radius[i]);
+            assert!(merged.centre[i] - merged.radius[i] >= lo - 1e-4 && merged.centre[i] + merged.radius[i] <= hi + 1e-4, "axis {i}: inside the box");
+        }
+        // The old rule would have swelled the three into the whole box,
+        // 1.3 m either way along the row; the merged cluster stays at the
+        // width their screen area allows.
+        assert!(merged.radius[0] < 0.8, "the x radius stays well under the box's half width of 1.3: {}", merged.radius[0]);
+    }
+
+    #[test]
+    fn the_bole_survives_the_branch_cut_and_a_bare_tree_keeps_finer_twigs() {
+        let mut leafy = oak().grow(6, [10.0, 10.0, 18.0], Growth::FULL);
+        leafy.set_trunk_radius(0.5);
+        // The bole is a chain from the foot, each piece starting where the
+        // last ended, thick enough to be the trunk.
+        let bole = leafy.bole(0.3);
+        assert!(bole.len() >= 2, "the trunk is a chain of pieces: {bole:?}");
+        assert!(leafy.segments[bole[0]].a[2].abs() < 1e-3, "it starts at the foot");
+        for pair in bole.windows(2) {
+            let (below, above) = (leafy.segments[pair[0]], leafy.segments[pair[1]]);
+            assert!(below.b.iter().zip(above.a).all(|(p, q)| (p - q).abs() < 1e-3), "each piece starts where the last ended");
+            assert!(above.radius >= 0.3 && above.radius <= below.radius + 1e-5, "and thins upward");
+        }
+        // A cut above every branch keeps the bole and nothing else; with a
+        // lattice coarser than the tree the pieces join into one capsule,
+        // still standing on the ground.
+        let trunk_only = leafy.simplify(20.0, 10.0);
+        assert_eq!(trunk_only.segments.len(), 1, "one capsule for {} pieces: {:?}", bole.len(), trunk_only.segments);
+        assert!(trunk_only.segments.iter().any(|s| s.a[2].abs() < 1e-3), "the foot is kept");
+        let top = trunk_only.segments.iter().map(|s| s.b[2]).fold(0.0, f32::max);
+        assert!((top - leafy.segments[*bole.last().unwrap()].b[2]).abs() < 1e-3, "the joined bole reaches as high as the chain did");
+        // Bare, the same tree keeps twigs the leafy one drops.
+        let mut bare = oak().grow(6, [10.0, 10.0, 18.0], Growth::BARE);
+        bare.set_trunk_radius(0.5);
+        assert!(bare.leaves.is_empty());
+        let (kept_leafy, kept_bare) = (leafy.simplify(1.0, 0.3).segments.len(), bare.simplify(1.0, 0.3).segments.len());
+        assert!(kept_bare > kept_leafy, "bare {kept_bare} vs leafy {kept_leafy}");
+        let thinnest = bare.simplify(1.0, 0.3).segments.iter().map(|s| s.radius).fold(f32::MAX, f32::min);
+        assert!(thinnest < 0.3 && thinnest >= 0.3 * BARE_TWIG - 1e-5, "down to a fraction of the cut: {thinnest}");
+    }
+
+    #[test]
+    fn leaf_flat_squashes_a_cluster_on_a_level_branch_and_leaves_an_upright_one_round() {
+        // A leader with a cluster at its tip, and one branch pitched flat
+        // with a cluster at its end. No jitter, so the headings are exact.
+        let flat = |leaf_flat: f32| Grammar {
+            axiom: "F[&&&FL]FL".to_string(),
+            rules: BTreeMap::new(),
+            dead_rules: BTreeMap::new(),
+            depth: 0,
+            angle: 30.0,
+            length: 2.0,
+            taper: 1.0,
+            leaf_radius: 0.6,
+            droop: 0.0,
+            leaf_density: 1.0,
+            asymmetry: 0.0,
+            jitter: 0.0,
+            prune_height: 0.0,
+            leaf_flat,
+        };
+        let radii = |m: &TreeModel| {
+            assert_eq!(m.leaves.len(), 2, "{:?}", m.leaves);
+            // The leader's cluster is the higher one.
+            let mut l = m.leaves.clone();
+            l.sort_by(|a, b| b.centre[2].total_cmp(&a.centre[2]));
+            (l[0].radius, l[1].radius)
+        };
+        let (leader, branch) = radii(&flat(0.0).grow(1, [4.0, 4.0, 5.0], Growth::FULL));
+        assert_eq!((leader, branch), ([0.6; 3], [0.6; 3]), "at zero every cluster is round");
+        let (leader, branch) = radii(&flat(0.5).grow(1, [4.0, 4.0, 5.0], Growth::FULL));
+        assert_eq!(leader, [0.6; 3], "the upright cluster keeps its height");
+        assert!((branch[2] - 0.3).abs() < 0.02 && branch[0] == 0.6 && branch[1] == 0.6, "the level one keeps half: {branch:?}");
     }
 }

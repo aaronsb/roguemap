@@ -295,6 +295,7 @@ fn grammar(ctx: &Ctx, i: usize, s: &SpeciesRow, styles: &[Style]) -> Result<Opti
         depth: row.depth,
         length: row.length,
         leaf_radius: row.leaf_radius,
+        leaf_flat: row.leaf_flat,
     };
     let g = match &s.style {
         Some(name) => {
@@ -332,6 +333,7 @@ fn grammar(ctx: &Ctx, i: usize, s: &SpeciesRow, styles: &[Style]) -> Result<Opti
                 asymmetry: row.asymmetry.unwrap_or(plain.asymmetry),
                 jitter: row.jitter.unwrap_or(plain.jitter),
                 prune_height: row.prune_height.unwrap_or(plain.prune_height),
+                leaf_flat: row.leaf_flat.unwrap_or(plain.leaf_flat),
             }
         }
         None => {
@@ -386,6 +388,7 @@ fn styles(raw: &TreeStylesFile) -> Result<Vec<Style>, AssetError> {
                 depth: p.depth,
                 length: p.length,
                 leaf_radius: p.leaf_radius,
+                leaf_flat: p.leaf_flat,
             },
         };
         // The defaults must themselves make a tree, so a species that

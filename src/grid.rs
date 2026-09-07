@@ -71,10 +71,22 @@ pub(crate) struct Detail {
 
 impl Detail {
     /// The detail a camera asks for: a lattice four rows of height across
-    /// and a twig about a column thick.
-    fn of(cam: &crate::camera::Camera) -> Detail {
-        let (rows, cols) = (cam.rows_per_metre(), cam.columns_per_metre());
-        Detail { level: (rows >= 6.0) as u8, cell: 4.0 / rows.max(0.1), min_radius: 1.1 / cols.max(0.1) }
+    /// and a twig about a column thick. The level counts the zooms a model
+    /// is grown at: 0 at the mid zoom, 1 near, 2 close.
+    pub(crate) fn of(cam: &crate::camera::Camera) -> Detail {
+        Detail::at(cam.rows_per_metre(), cam.columns_per_metre())
+    }
+
+    /// The same from a zoom's scale alone.
+    pub(crate) fn at(rows: f32, cols: f32) -> Detail {
+        let level = if rows >= 6.0 {
+            2
+        } else if rows >= 3.0 {
+            1
+        } else {
+            0
+        };
+        Detail { level, cell: 4.0 / rows.max(0.1), min_radius: 1.1 / cols.max(0.1) }
     }
 }
 
@@ -168,6 +180,9 @@ pub(crate) struct Bucket {
     pub cy: f32,
     pub r: f32,
     pub v: u32,
+    /// A leaf cluster: an upright ellipsoid the walk can solve from this
+    /// entry alone, without reading the volume.
+    pub cluster: bool,
 }
 
 /// Smooth heights, tiles and geometry of the tiles in view.
@@ -451,7 +466,7 @@ impl HeightGrid {
             }
         }
         cache.sweep();
-        let mut vol_index = vec![Bucket { top: 0.0, h0: 0.0, cx: 0.0, cy: 0.0, r: 0.0, v: 0 }; counts.iter().sum::<u32>() as usize];
+        let mut vol_index = vec![Bucket { top: 0.0, h0: 0.0, cx: 0.0, cy: 0.0, r: 0.0, v: 0, cluster: false }; counts.iter().sum::<u32>() as usize];
         let mut start = 0u32;
         let mut starts = vec![0u32; n];
         for (i, g) in geo.iter_mut().enumerate() {
@@ -471,7 +486,7 @@ impl HeightGrid {
             let span = spans[vi as usize];
             let v = &volumes[vi as usize];
             let (rx, ry, rr) = v.reach();
-            let entry = Bucket { top: v.top(), h0: v.h0, cx: rx, cy: ry, r: rr, v: vi };
+            let entry = Bucket { top: v.top(), h0: v.h0, cx: rx, cy: ry, r: rr, v: vi, cluster: v.shape == Shape::Cluster };
             for ty in span.1..=span.3 {
                 let row = (ty - y0) * w - x0;
                 for tx in span.0..=span.2 {

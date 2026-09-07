@@ -117,12 +117,12 @@ pub fn variant_scale(variant: u8) -> f32 {
     [0.8, 0.9, 1.0, 1.1][variant as usize % 4]
 }
 
-/// One instance's own scales from its tile's seed: height, crown radius
-/// and canopy brightness, each a quarter either way (an eighth for the
-/// colour), so no two trees in a stand are the same tree.
+/// One instance's own scales from its tile's seed: height and crown radius
+/// a quarter either way, canopy brightness a sixth, so no two trees in a
+/// stand are the same tree.
 pub fn instance(seed: u32) -> Instance {
     let unit = |k: u32| ((seed.wrapping_mul(k) >> 9) % 1024) as f32 / 1024.0;
-    Instance { height: 0.75 + 0.5 * unit(0x9E3779B1), radius: 0.75 + 0.5 * unit(0x85EBCA77), tint: 0.88 + 0.24 * unit(0xC2B2AE35), hue: unit(0x27D4EB2F) - 0.5 }
+    Instance { height: 0.75 + 0.5 * unit(0x9E3779B1), radius: 0.75 + 0.5 * unit(0x85EBCA77), tint: 0.84 + 0.32 * unit(0xC2B2AE35), hue: unit(0x27D4EB2F) - 0.5 }
 }
 
 /// The variation one tree carries over its species.
@@ -303,12 +303,7 @@ impl Volume {
             match self.shape {
                 // A branch was answered above; the rest are quadrics.
                 Shape::Branch => {}
-                Shape::Ellipsoid | Shape::Lsystem | Shape::Cluster => {
-                    let zc = h0 + 0.5 * hh;
-                    let v2 = 0.25 * hh * hh;
-                    let z = crossing(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * zc / v2, aa / r2 + zc * zc / v2 - 1.0);
-                    consider(z.map(|z| VolumeHit { z, part: Part::Canopy, normal: (q(a, b, z).0 / r2, q(a, b, z).1 / r2, (z - zc) / v2) }));
-                }
+                Shape::Ellipsoid | Shape::Lsystem | Shape::Cluster => consider(ellipsoid_hit(a, b, r2, h0, hh, clo, chi)),
                 Shape::Dome => {
                     let v2 = hh * hh;
                     let z = crossing(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * h0 / v2, aa / r2 + h0 * h0 / v2 - 1.0);
@@ -426,6 +421,26 @@ fn roots(a: f32, b: f32, c: f32, lo: f32, hi: f32) -> impl Iterator<Item = f32> 
 #[inline]
 fn q(a: (f32, f32), b: (f32, f32), z: f32) -> (f32, f32) {
     (a.0 + b.0 * z, a.1 + b.1 * z)
+}
+
+/// The ray's path `a + b z`, relative to the axis, against an ellipsoid of
+/// squared ground radius `r2` standing from `h0` to `h0 + hh`, over the
+/// heights `clo..=chi`: the highest crossing, or, for a segment whose top
+/// is already inside, that top (see `Volume::hit`). The walk calls this
+/// straight from a tile's index for a leaf cluster, since the index holds
+/// everything a cluster needs and the cluster itself need not be read.
+#[inline]
+pub(crate) fn ellipsoid_hit(a: (f32, f32), b: (f32, f32), r2: f32, h0: f32, hh: f32, clo: f32, chi: f32) -> Option<VolumeHit> {
+    if clo > chi {
+        return None;
+    }
+    let (aa, ab, bb) = (a.0 * a.0 + a.1 * a.1, a.0 * b.0 + a.1 * b.1, b.0 * b.0 + b.1 * b.1);
+    let zc = h0 + 0.5 * hh;
+    let v2 = (0.25 * hh * hh).max(1e-6);
+    let (qa, qb, qc) = (bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * zc / v2, aa / r2 + zc * zc / v2 - 1.0);
+    let z = largest_root(qa, qb, qc, clo, chi).or_else(|| (qa * chi * chi + qb * chi + qc < 0.0).then_some(chi))?;
+    let qq = q(a, b, z);
+    Some(VolumeHit { z, part: Part::Canopy, normal: (qq.0 / r2, qq.1 / r2, (z - zc) / v2) })
 }
 
 /// A vertical cylinder of radius `r` on `[lo, hi]` with a flat cap at

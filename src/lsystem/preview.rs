@@ -357,6 +357,7 @@ mod tests {
             asymmetry: 0.0,
             jitter: 0.08,
             prune_height: 0.0,
+            leaf_flat: 0.0,
         }
         .grow(3, [9.0, 9.0, 16.0], Growth::FULL)
     }
