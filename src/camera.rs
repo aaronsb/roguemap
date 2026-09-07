@@ -564,6 +564,17 @@ impl Camera {
         self.mode != Mode::Free
     }
 
+    /// Whether the vantage is placed from the character (ADR-010): the
+    /// four placements stand at a distance from it and hold it at the
+    /// screen centre, so they aim at the character and track it every
+    /// tick. The table is aimed at the ground under the screen centre
+    /// under either projection, and follows by its dead zone. The
+    /// projection is a separate question, and asking it here is what
+    /// gave the orthographic chase no character to stand on.
+    pub fn placed_on_character(&self) -> bool {
+        self.mode != Mode::Table
+    }
+
     /// The mode's name, as the `camera` settings row shows it.
     pub fn mode_name(&self) -> &'static str {
         Camera::MODES[self.mode_index()]
@@ -1514,13 +1525,17 @@ impl Camera {
     }
 
     /// The point this camera aims at to look at an entity: its point at
-    /// the drawn height of its tile on the table; the middle of
-    /// the creature standing on the ground under it for the chase and
+    /// the drawn height of its tile on the table, which is the height
+    /// the table draws that tile at under either projection; the middle
+    /// of the creature standing on the ground under it for the chase and
     /// shoulder views; its eye, `EYE_HEIGHT` of its height over the
-    /// ground, for the first-person view.
+    /// ground, for the first-person view. The vantage answers it: a
+    /// placement aims at the creature whichever projection draws it, so
+    /// an orthographic chase glides over the ground the figure walks on
+    /// rather than stepping by whole metres from tile top to tile top.
     pub fn entity_point(&self, e: &Entity, map: &Map) -> (f32, f32, f32) {
         let (x, y) = e.pos();
-        if self.is_perspective() {
+        if self.placed_on_character() {
             let creature = &map.assets.creatures[e.kind as usize % map.assets.creatures.len()];
             let up = if self.mode == Mode::FirstPerson { Camera::EYE_HEIGHT } else { 0.5 };
             return (x, y, map.ground_at(x, y) + up * creature.size[2]);
@@ -2941,6 +2956,56 @@ mod tests {
         let (cx, cy) = (px.floor() as i32, py.floor() as i32);
         assert!(cx >= sw / 3 && cx <= sw - sw / 3, "back inside the zone at column {cx}");
         assert!(cy >= sh / 3 && cy <= sh - sh / 3, "and at row {cy}");
+    }
+
+    #[test]
+    fn a_placement_aims_at_the_creature_under_either_projection_and_the_table_at_its_tile() {
+        let assets = crate::assets::test_assets();
+        // Ground that climbs a level every three tiles, so the top of the
+        // tile under a walking figure and the ground it walks on part.
+        let map = Map::synthetic(24, 24, assets.clone(), 1, |x, _| crate::map::Tile::flat(3 + x / 3));
+        let mut world = World::new(1);
+        world.spawn_player(&map, 11, 11, 0.0);
+        let (sw, sh) = (120, 40);
+        let placements = || [Camera::chase(0.3), Camera::chase(0.3).in_projection(ORTHO), Camera::shoulder(0.3), Camera::shoulder(0.3).in_projection(ORTHO), Camera::first_person(0.3)];
+        let tables = || [Camera::table(1), Camera::table(1).in_projection(PERSP)];
+        // The vantage answers who the view is placed from, and every
+        // placement is placed from the character under either projection.
+        for cam in placements() {
+            assert!(cam.placed_on_character(), "{}", cam.view_label());
+        }
+        for cam in tables() {
+            assert!(!cam.placed_on_character(), "{}", cam.view_label());
+        }
+        let aimed = |cam: &Camera, world: &World| cam.entity_point(world.player().unwrap(), &map).2;
+        let p = world.player().unwrap();
+        let (px, py) = p.pos();
+        let creature = &assets.creatures[p.kind as usize % assets.creatures.len()];
+        let middle = map.ground_at(px, py) + 0.5 * creature.size[2];
+        for cam in placements() {
+            let want = if cam.mode() == Mode::FirstPerson { map.ground_at(px, py) + Camera::EYE_HEIGHT * creature.size[2] } else { middle };
+            assert!((aimed(&cam, &world) - want).abs() < 1e-4, "{}: aimed at {}, not {want}", cam.view_label(), aimed(&cam, &world));
+        }
+        let top = map.get(p.mx(), p.my()).expect("a tile under the figure").draw_z() as f32;
+        for cam in tables() {
+            assert_eq!(aimed(&cam, &world), top, "{}: the table aims at the drawn height of the tile", cam.view_label());
+        }
+        // So walking across a tile boundary the placement's aimed height
+        // follows the ground, where the tile's top steps a whole metre
+        // and an orthographic chase would bob with it.
+        let mut chase = Camera::chase(0.3).in_projection(ORTHO);
+        chase.look_at_entity(world.player().unwrap(), &map, sw, sh);
+        let (mut was_chase, mut was_table) = (aimed(&chase, &world), aimed(&tables()[0], &world));
+        let (mut chase_step, mut table_step) = (0.0f32, 0.0f32);
+        for _ in 0..6 {
+            assert!(world.try_move(&map, 40, 0), "walk 40 cm along the climb");
+            let (now_chase, now_table) = (aimed(&chase, &world), aimed(&tables()[0], &world));
+            chase_step = chase_step.max((now_chase - was_chase).abs());
+            table_step = table_step.max((now_table - was_table).abs());
+            (was_chase, was_table) = (now_chase, now_table);
+        }
+        assert!(chase_step < 0.5, "the chase glides: {chase_step} m in a step");
+        assert!(table_step >= 1.0, "and the tile top is where the whole metre is: {table_step} m");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crossterm::event::KeyCode;
 
 use crate::assets::Assets;
 use crate::blocks::Stack;
-use crate::camera::{Camera, Mode, Projection};
+use crate::camera::{Camera, Projection};
 use crate::canvas::Canvas;
 use crate::frame::{FrameCtx, Frames};
 use crate::input::{self, Coupling, Held};
@@ -74,7 +74,7 @@ impl SnapArgs {
 /// sphere under a perspective one) and fov (degrees, for a view that
 /// reads one), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
-/// character stands on; a perspective view's default is cx, cy), walk
+/// character stands on; a placement's default is cx, cy), walk
 /// (`KEYS,SECONDS`: hold those walk keys that long in 40 ms ticks,
 /// ADR-008) with run (1 for the run speed), coupling (body-turns or
 /// view-only: whether the body turns with the view, ADR-009).
@@ -199,10 +199,12 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
             }
         }
         world.spawn_player(&map, mx, my, cam.angle());
-    } else if a.flag("player") || free || cam.is_perspective() {
-        // A perspective view is placed from the character, so it always
-        // has one, standing at the view centre; px, py put them elsewhere.
-        let (px, py) = if cam.is_perspective() { (cx, cy) } else { (map.w as i32 / 2, map.h as i32 / 2) };
+    } else if a.flag("player") || free || cam.placed_on_character() {
+        // A placement is aimed from the character, so it always has one,
+        // standing at the view centre; px, py put them elsewhere. The
+        // table is aimed at the ground under cx, cy under either
+        // projection and takes a character only when asked for one.
+        let (px, py) = if cam.placed_on_character() { (cx, cy) } else { (map.w as i32 / 2, map.h as i32 / 2) };
         world.spawn_player(&map, a.num("px", px as f32) as i32, a.num("py", py as f32) as i32, cam.angle());
     }
     // player_dx / player_dy walk the player from the spawn, in centimetres,
@@ -217,7 +219,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     }
     // A placement is aimed from the character; the table is aimed at the
     // ground under cx, cy whichever projection reads it.
-    if let Some(p) = world.player().filter(|_| cam.mode() != Mode::Table) {
+    if let Some(p) = world.player().filter(|_| cam.placed_on_character()) {
         cam.look_at_entity(p, &map, sw, sh);
     }
     // camera=free detaches the eye where the switch from the aimed table
@@ -360,6 +362,31 @@ mod tests {
         for frame in [&table, &free] {
             assert!(frame.contains("25.00, 25.00 m"), "the character stands where it was spawned");
         }
+    }
+
+    /// Who stands in a headless frame is the vantage's question, not the
+    /// projection's (ADR-010): a placement is aimed from the character
+    /// and always has one, and the table takes one only when asked.
+    #[test]
+    fn a_placement_has_a_character_under_either_projection_and_the_table_takes_one_when_asked() {
+        let shot = |extra: &[&str]| {
+            let mut args = vec!["fill=1", "cx=0", "cy=0", "t=3", "tod=12"];
+            args.extend_from_slice(extra);
+            glyphs(&render(test_assets(), 120, 40, &args))
+        };
+        // An orthographic chase stands the character at the view centre
+        // and aims at it, so putting it elsewhere draws another frame.
+        let chase = ["camera=chase", "projection=orthographic"];
+        let here = shot(&chase);
+        let there = shot(&[chase[0], chase[1], "px=8", "py=8"]);
+        assert_ne!(here, there, "the orthographic chase is aimed from a character it has");
+        assert_ne!(here, shot(&["camera=chase", "px=8", "py=8"]), "and draws it under its own projection too");
+        // A perspective table is aimed at the ground under cx, cy, so it
+        // has no character until one is asked for.
+        let table = ["zoom=1", "projection=perspective"];
+        let empty = shot(&table);
+        assert_eq!(empty, shot(&[table[0], table[1], "px=8", "py=8"]), "nobody to put anywhere");
+        assert_ne!(empty, shot(&[table[0], table[1], "player=1"]), "player=1 puts one in");
     }
 
     #[test]

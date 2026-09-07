@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 
 use roguemap::assets::Assets;
-use roguemap::camera::{Camera, Mode};
+use roguemap::camera::Camera;
 use roguemap::canvas::Canvas;
 use roguemap::frame::{Flow, FrameCtx, Frames, Item, List};
 use roguemap::input::{self, Action, Held, Look, Mouse};
@@ -114,7 +114,10 @@ impl App {
         } else {
             self.fly_held(dt);
         }
-        if self.cam.addresses_character() && (self.cam.is_perspective() || self.settling) {
+        // A placement is aimed from the character and tracks it every
+        // tick; the table follows by its dead zone, which owes a step
+        // only while a walk is settling.
+        if self.cam.addresses_character() && (self.cam.placed_on_character() || self.settling) {
             let settled = self.cam.follow(&self.world, &self.map, self.sw, self.sh);
             self.settling = !settled;
         }
@@ -208,7 +211,7 @@ impl App {
                 // The rows tilt the isometric table (ADR-009).
                 self.cam.pitch_by(pitch.to_radians());
             }
-            Look::Wheel(dir) if self.cam.mode() != Mode::Table => self.settings.step_fov(-dir, self.cam.fov_degrees()),
+            Look::Wheel(dir) if self.cam.placed_on_character() => self.settings.step_fov(-dir, self.cam.fov_degrees()),
             Look::Wheel(dir) => self.cam.zoom_by(dir, self.sw, self.sh),
         }
     }
