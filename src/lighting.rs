@@ -44,6 +44,15 @@ pub(crate) fn knee(v: f32) -> f32 {
     1.6 * (1.0 - (-v / 1.6).exp())
 }
 
+/// How much of the sky colour a surface `depth` metres into the fog takes
+/// (#21): none at the eye, all of it at the fog distance, rising as the
+/// square in between so the middle distance stays legible and the far
+/// field goes to sky where the walk stops anyway.
+pub(crate) fn fog_factor(depth: f32, distance: f32) -> f32 {
+    let t = (depth / distance.max(1e-3)).clamp(0.0, 1.0);
+    t * t
+}
+
 impl Renderer {
     /// Lit windows: one light per stack in view whose kind names one, at
     /// night, scaled by how dark the sky is.
@@ -81,6 +90,9 @@ impl Renderer {
             Some((x0, y0, x1, y1)) => world.cloud_shadows_over(x0, y0, x1, y1),
             None => world.cloud_shadows(),
         };
+        // The fog: every lit cell fades toward the sky by its depth from
+        // the eye, or in an orthographic view past the screen centre.
+        let fog = sc.fog.map(|distance| (distance, sc.cam.fog_origin(self.w, self.h), world.sky()));
         for y in 0..self.h {
             for x in 0..self.w {
                 let g = self.g[(y * self.w + x) as usize];
@@ -100,7 +112,15 @@ impl Renderer {
                 }
                 let pl = point_light_at(g.wx, g.wy, g.wz, &lights, t);
                 l = [l[0] + knee(pl[0]), l[1] + knee(pl[1]), l[2] + knee(pl[2])];
-                cv.put(x, y, g.ch, mul(g.glyph, l), mul(g.albedo, l));
+                let (mut fg, mut bg) = (mul(g.glyph, l), mul(g.albedo, l));
+                if let Some((distance, origin, sky)) = fog {
+                    let f = fog_factor(sc.cam.fog_depth(origin, g.wx, g.wy, g.wz), distance);
+                    if f > 0.0 {
+                        fg = fg.lerp(sky, f);
+                        bg = bg.lerp(sky, f);
+                    }
+                }
+                cv.put(x, y, g.ch, fg, bg);
             }
         }
     }
@@ -143,6 +163,58 @@ mod tests {
         // one tile along.
         let (above, beside) = (point_light_at(2.0, 3.0, 1.0 + 4.0, &lights, 0.0), point_light_at(2.0 + 1.0, 3.0, 1.0, &lights, 0.0));
         assert_eq!(above, beside);
+    }
+
+    #[test]
+    fn fog_is_nothing_at_the_eye_and_everything_at_the_distance() {
+        assert_eq!(fog_factor(0.0, 120.0), 0.0);
+        assert_eq!(fog_factor(120.0, 120.0), 1.0);
+        assert_eq!(fog_factor(500.0, 120.0), 1.0, "past the distance there is only sky");
+        assert_eq!(fog_factor(-30.0, 120.0), 0.0, "in front of an orthographic origin there is none");
+        let mut last = 0.0;
+        for i in 1..=120 {
+            let f = fog_factor(i as f32, 120.0);
+            assert!(f > last && f <= 1.0, "rises through the distance: {f} at {i} m");
+            last = f;
+        }
+        assert!(fog_factor(60.0, 120.0) < 0.5, "the middle distance keeps most of its colour");
+        // The scene carries the fog for a perspective eye and not for the
+        // isometric view unless asked.
+        let assets = crate::assets::test_assets();
+        let map = crate::map::Map::new(4, 4, 1, assets.clone());
+        let ts = &crate::tileset::Tileset::all(&assets)[0];
+        let world = World::new(1);
+        let iso = crate::camera::Camera::new();
+        let sc = Scene::new(&map, ts, &world, &iso, 0.0);
+        assert_eq!(sc.fog, None);
+        assert_eq!(sc.far, world.visibility());
+        assert_eq!(Scene::new(&map, ts, &world, &iso, 0.0).with_fog(crate::render::FogMode::Always).fog, Some(sc.far));
+        let eye = crate::camera::Camera::first_person(0.0);
+        let sc = Scene::new(&map, ts, &world, &eye, 0.0);
+        assert_eq!(sc.fog, Some(sc.far));
+        assert_eq!(Scene::new(&map, ts, &world, &eye, 0.0).with_fog(crate::render::FogMode::Never).fog, None);
+        let sh = crate::camera::Camera::shoulder(0.0);
+        assert!((Scene::new(&map, ts, &world, &sh, 0.0).far - sc.far * 1.5).abs() < 1e-3, "the shoulder view sees half as far again");
+        // From the eye the depth is the distance to the point; nothing is
+        // behind it.
+        let origin = eye.fog_origin(120, 40);
+        assert_eq!(origin, eye.eye());
+        assert_eq!(eye.fog_depth(origin, origin.0, origin.1, origin.2), 0.0);
+        let d = eye.fog_depth(origin, origin.0 + 3.0, origin.1 + 4.0, origin.2);
+        assert!((d - 10.0).abs() < 1e-4, "five tiles off is ten metres: {d}");
+        // Visibility closes in with cloud, rain and night, never under
+        // fifteen metres.
+        let mut w = World::new(1);
+        w.weather.cover = 0.0;
+        w.weather.precip = 0.0;
+        w.tod = 12.0;
+        let clear = w.visibility();
+        assert!((clear - World::CLEAR_VISIBILITY).abs() < 1.0, "{clear}");
+        w.weather.cover = 1.0;
+        w.weather.precip = 1.0;
+        assert!(w.visibility() < clear * 0.3 && w.visibility() >= 15.0);
+        w.tod = 0.0;
+        assert_eq!(w.visibility(), 15.0);
     }
 
     #[test]
