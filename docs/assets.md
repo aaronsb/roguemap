@@ -33,6 +33,8 @@ assets/
   ui.toml           overlay frames: name, title, content kind, anchor,
                     size, border, background, z, priority, show rule,
                     toggle key (ADR-005)
+  editor-ui.toml    the editor's panes as frames, in the same row shape
+                    as ui.toml
   tilesets/
     petscii.toml    glyph roles and sprite vocabulary for the PETSCII set
     ascii.toml      the same for the ASCII set
