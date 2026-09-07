@@ -7,17 +7,31 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
+/// A channel value rounded to the nearest byte, halves away from zero and
+/// saturating, exactly as `v.round() as u8` would, without the library
+/// call: every blend and scale in a frame rounds three channels, so the
+/// call would be a measurable share of the frame.
+#[inline]
+fn round_u8(v: f32) -> u8 {
+    // Truncating the shifted value floors it for anything that can round
+    // to a byte; the sum may round up across an integer where `v` sits just
+    // under a half, which the exact comparison against `r - 0.5` undoes.
+    let r = (v + 0.5) as i32;
+    let r = if v < r as f32 - 0.5 { r - 1 } else { r };
+    r.clamp(0, 255) as u8
+}
+
 impl Rgb {
     /// Multiply each channel by `f`, clamped to the byte range.
     pub fn scale(self, f: f32) -> Rgb {
-        let m = |c: u8| (c as f32 * f).round().clamp(0.0, 255.0) as u8;
+        let m = |c: u8| round_u8(c as f32 * f);
         Rgb(m(self.0), m(self.1), m(self.2))
     }
 
     /// Linear blend from `self` toward `other` by `t` in 0..=1.
     pub fn lerp(self, other: Rgb, t: f32) -> Rgb {
         let t = t.clamp(0.0, 1.0);
-        let m = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+        let m = |a: u8, b: u8| round_u8(a as f32 + (b as f32 - a as f32) * t);
         Rgb(m(self.0, other.0), m(self.1, other.1), m(self.2, other.2))
     }
 }

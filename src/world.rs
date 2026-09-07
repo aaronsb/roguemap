@@ -97,6 +97,22 @@ pub struct Weather {
 /// Named weather presets: cover, precipitation.
 pub const WEATHER_PRESETS: [(f32, f32); 4] = [(0.15, 0.0), (0.75, 0.0), (0.9, 0.5), (1.0, 1.0)];
 pub const STORM: usize = 3;
+/// The cloud shadow field at one moment (`World::cloud_shadows`).
+pub struct CloudShadows {
+    offset: (f32, f32),
+    shift: (f32, f32),
+    threshold: f32,
+}
+
+impl CloudShadows {
+    /// What `World::cloud_shadow` gives at a ground point.
+    #[inline]
+    pub fn at(&self, x: f32, y: f32) -> f32 {
+        let ((ox, oy), (sx, sy), th) = (self.offset, self.shift, self.threshold);
+        smoothstep(th, th + 0.10, World::cloud_field(x + ox + sx, y + oy + sy))
+    }
+}
+
 /// Named wind presets.
 pub const WIND_PRESETS: [f32; 4] = [0.05, 0.2, 0.55, 1.0];
 /// Day lengths in seconds.
@@ -335,10 +351,13 @@ impl World {
     /// How much of the sun a ground point loses to the cloud whose shadow
     /// falls on it, 0 clear to 1 fully shaded.
     pub fn cloud_shadow(&self, x: f32, y: f32) -> f32 {
-        let (ox, oy) = self.cloud_offset;
-        let (sx, sy) = self.shadow_shift();
-        let th = self.cloud_threshold();
-        smoothstep(th, th + 0.10, Self::cloud_field(x + ox + sx, y + oy + sy))
+        self.cloud_shadows().at(x, y)
+    }
+
+    /// The cloud shadow field for this moment, its drift, shift and
+    /// threshold worked out once for a pass that asks at every cell.
+    pub fn cloud_shadows(&self) -> CloudShadows {
+        CloudShadows { offset: self.cloud_offset, shift: self.shadow_shift(), threshold: self.cloud_threshold() }
     }
 
     /// Local gust strength at a tile, 0 still to 1 full sway. Calm air gives

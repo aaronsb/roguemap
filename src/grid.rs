@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::biome::Species;
 use crate::blocks::{self, door_face, label_runs, merges, ridge_along_x, Column, Ground, Profile, Runs, Stack, NO_FACE};
 use crate::lsystem::{Growth, Placement, State, TreeModel};
-use crate::map::{Tile, MAX_Z, SEA, TILE_METRES};
+use crate::map::{Fields, Tile, MAX_Z, SEA, TILE_METRES};
 use crate::noise::{hash01, ifloor};
 use crate::render::Scene;
 use crate::volume::{instance, size_scale, stands_dead, variant_scale, Shape, Volume};
@@ -158,6 +158,9 @@ pub(crate) struct Geo {
     pub top: f32,
     /// Upper bound of the terrain surface in the 3x3 around the tile.
     pub hmax: f32,
+    /// Whether the tile is on the map at all; the walk asks at every
+    /// sample, and this keeps it out of the tile array.
+    pub on_map: bool,
     /// Range into the volume index.
     pub vol: (u32, u32),
     /// Tallest volume on the tile measured base to top: how far back from
@@ -175,10 +178,11 @@ pub(crate) struct Geo {
 pub(crate) struct Bucket {
     pub top: f32,
     pub h0: f32,
-    /// Ground circle of the volume, from `Volume::reach`.
+    /// Ground circle of the volume, from `Volume::reach`, its radius
+    /// squared for the walk's distance test.
     pub cx: f32,
     pub cy: f32,
-    pub r: f32,
+    pub r2: f32,
     pub v: u32,
     /// A leaf cluster: an upright ellipsoid the walk can solve from this
     /// entry alone, without reading the volume.
@@ -210,6 +214,8 @@ pub(crate) struct HeightGrid {
     bw: i32,
     /// Highest `top` anywhere in the grid.
     pub(crate) max_top: f32,
+    /// The detail and patch fields over the grid, hashed once.
+    pub(crate) fields: Fields,
 }
 
 /// The volumes' indices, tallest first, by counting sort on their tops:
@@ -259,7 +265,9 @@ impl HeightGrid {
         let n = (w * h) as usize;
         let tiles = map.tiles_in(x0, y0, x1, y1);
         let data: Vec<f32> = tiles.iter().map(|t| t.map(|t| t.hf).unwrap_or(0.0)).collect();
-        let empty = Geo { stack: None, runs: Runs::SINGLE, open: 0, door: NO_FACE, base: 0.0, flat: false, zs: 0.0, top: 0.0, hmax: 0.0, vol: (0, 0), vspan: 0.0 };
+        let octaves = crate::raster::detail_octaves(cam);
+        let fields = map.fields(x0, y0, x1, y1, octaves);
+        let empty = Geo { stack: None, runs: Runs::SINGLE, open: 0, door: NO_FACE, base: 0.0, flat: false, zs: 0.0, top: 0.0, hmax: 0.0, on_map: false, vol: (0, 0), vspan: 0.0 };
         let mut geo = vec![empty; n];
         let at = |x: i32, y: i32| ((y - y0) * w + (x - x0)) as usize;
 
@@ -279,6 +287,7 @@ impl HeightGrid {
                 g.hmax = hmax + 0.5;
                 g.top = g.hmax;
                 let Some(t) = tiles[i] else { continue };
+                g.on_map = true;
                 g.base = t.hf.max(SEA as f32);
                 g.zs = g.base;
                 g.stack = t.stack;
@@ -358,7 +367,6 @@ impl HeightGrid {
         let detail = Detail::of(cam);
         cache.begin();
         if lod.volumes {
-            let octaves = crate::raster::detail_octaves(cam);
             for y in y0..=y1 {
                 for x in x0..=x1 {
                     let i = at(x, y);
@@ -376,7 +384,7 @@ impl HeightGrid {
                     let jx = (hash01(x as i64, y as i64, seed ^ 0x11) - 0.5) * 0.3;
                     let jy = (hash01(x as i64, y as i64, seed ^ 0x22) - 0.5) * 0.3;
                     let (cx, cy) = (x as f32 + 0.5 + jx, y as f32 + 0.5 + jy);
-                    let ground = (t.hf + map.detail(cx, cy, octaves)).max(SEA as f32);
+                    let ground = (t.hf + fields.detail(cx, cy)).max(SEA as f32);
                     // A tree whose crown cannot reach the screen, and whose
                     // shadow cannot either, is not worth a volume.
                     let (sx, sy) = cam.project(cx, cy, ground);
@@ -466,7 +474,7 @@ impl HeightGrid {
             }
         }
         cache.sweep();
-        let mut vol_index = vec![Bucket { top: 0.0, h0: 0.0, cx: 0.0, cy: 0.0, r: 0.0, v: 0, cluster: false }; counts.iter().sum::<u32>() as usize];
+        let mut vol_index = vec![Bucket { top: 0.0, h0: 0.0, cx: 0.0, cy: 0.0, r2: 0.0, v: 0, cluster: false }; counts.iter().sum::<u32>() as usize];
         let mut start = 0u32;
         let mut starts = vec![0u32; n];
         for (i, g) in geo.iter_mut().enumerate() {
@@ -486,7 +494,7 @@ impl HeightGrid {
             let span = spans[vi as usize];
             let v = &volumes[vi as usize];
             let (rx, ry, rr) = v.reach();
-            let entry = Bucket { top: v.top(), h0: v.h0, cx: rx, cy: ry, r: rr, v: vi, cluster: v.shape == Shape::Cluster };
+            let entry = Bucket { top: v.top(), h0: v.h0, cx: rx, cy: ry, r2: rr * rr, v: vi, cluster: v.shape == Shape::Cluster };
             for ty in span.1..=span.3 {
                 let row = (ty - y0) * w - x0;
                 for tx in span.0..=span.2 {
@@ -509,11 +517,13 @@ impl HeightGrid {
                 max_top = max_top.max(t);
             }
         }
-        HeightGrid { x0, y0, w, h, data, tiles, geo, volumes, crowns, vol_index, slack, blocks, bw, max_top }
+        HeightGrid { x0, y0, w, h, data, tiles, geo, volumes, crowns, vol_index, slack, blocks, bw, max_top, fields }
     }
 
+    /// A tile's index into the grid's row-major arrays, if it is in the
+    /// grid.
     #[inline]
-    fn index(&self, x: i32, y: i32) -> Option<usize> {
+    pub(crate) fn index(&self, x: i32, y: i32) -> Option<usize> {
         if x < self.x0 || y < self.y0 || x >= self.x0 + self.w || y >= self.y0 + self.h {
             None
         } else {
@@ -521,21 +531,21 @@ impl HeightGrid {
         }
     }
 
-    #[inline]
-    fn at(&self, x: i32, y: i32) -> f32 {
-        let (cx, cy) = ((x - self.x0).clamp(0, self.w - 1), (y - self.y0).clamp(0, self.h - 1));
-        self.data[(cy * self.w + cx) as usize]
+    /// Tiles in the grid, on the map or not.
+    pub(crate) fn len(&self) -> usize {
+        (self.w * self.h) as usize
     }
 
-    /// Bilinear sample of the smooth height between tile centres.
+    /// Bilinear sample of the smooth height between tile centres, the
+    /// corners clamped to the grid.
     pub(crate) fn sample(&self, xf: f32, yf: f32) -> f32 {
         let (gx, gy) = (xf - 0.5, yf - 0.5);
         let (ix, iy) = (ifloor(gx), ifloor(gy));
         let (fx, fy) = (gx - ix as f32, gy - iy as f32);
-        let a = self.at(ix, iy);
-        let b = self.at(ix + 1, iy);
-        let c = self.at(ix, iy + 1);
-        let d = self.at(ix + 1, iy + 1);
+        let (cx0, cx1) = ((ix - self.x0).clamp(0, self.w - 1) as usize, (ix + 1 - self.x0).clamp(0, self.w - 1) as usize);
+        let (cy0, cy1) = ((iy - self.y0).clamp(0, self.h - 1) as usize, (iy + 1 - self.y0).clamp(0, self.h - 1) as usize);
+        let (r0, r1) = (&self.data[cy0 * self.w as usize..], &self.data[cy1 * self.w as usize..]);
+        let (a, b, c, d) = (r0[cx0], r0[cx1], r1[cx0], r1[cx1]);
         let top = a + (b - a) * fx;
         let bot = c + (d - c) * fx;
         top + (bot - top) * fy
@@ -550,9 +560,8 @@ impl HeightGrid {
     /// The geometry of a tile that is in the grid and on the map.
     #[inline]
     pub(crate) fn geo(&self, x: i32, y: i32) -> Option<&Geo> {
-        let i = self.index(x, y)?;
-        self.tiles[i].as_ref()?;
-        Some(&self.geo[i])
+        let g = &self.geo[self.index(x, y)?];
+        g.on_map.then_some(g)
     }
 
     /// A tile's whole volume list, ordered by top.
@@ -613,8 +622,10 @@ impl HeightGrid {
             if dv.abs() < 1e-9 {
                 continue;
             }
-            let (t0, t1) = ((m0 - v0) / dv, (m0 + BLOCK as f32 - v0) / dv);
-            lo = lo.max(t0.min(t1));
+            // Descending, the point moves against `d`, so a positive drift
+            // leaves through the block's low edge: one division per axis.
+            let edge = if dv > 0.0 { m0 } else { m0 + BLOCK as f32 };
+            lo = lo.max((edge - v0) / dv);
         }
         lo
     }

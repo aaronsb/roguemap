@@ -19,6 +19,14 @@ pub fn ifloor(x: f32) -> i32 {
     i - (x < i as f32) as i32
 }
 
+/// Ceiling of a float within the `i32` range as an integer, without the
+/// library call.
+#[inline]
+pub fn iceil(x: f32) -> i32 {
+    let i = x as i32;
+    i + (x > i as f32) as i32
+}
+
 /// Hash mapped to `[0, 1)`.
 pub fn hash01(x: i64, y: i64, seed: u64) -> f32 {
     (hash(x, y, seed) >> 40) as f32 / (1u64 << 24) as f32
@@ -30,10 +38,9 @@ fn smooth(t: f32) -> f32 {
 
 /// Bilinear value noise in `[0, 1)`.
 pub fn value(x: f32, y: f32, seed: u64) -> f32 {
-    let xi = x.floor();
-    let yi = y.floor();
-    let fx = smooth(x - xi);
-    let fy = smooth(y - yi);
+    let (xi, yi) = (ifloor(x), ifloor(y));
+    let fx = smooth(x - xi as f32);
+    let fy = smooth(y - yi as f32);
     let (xi, yi) = (xi as i64, yi as i64);
     let a = hash01(xi, yi, seed);
     let b = hash01(xi + 1, yi, seed);
@@ -57,6 +64,80 @@ pub fn fbm(x: f32, y: f32, seed: u64, octaves: u32) -> f32 {
         freq *= 2.0;
     }
     sum / norm
+}
+
+/// One octave's lattice of `hash01` values over a rectangle.
+struct Layer {
+    x0: i64,
+    y0: i64,
+    w: usize,
+    h: usize,
+    v: Vec<f32>,
+}
+
+/// `fbm` over a rectangle with its lattice hashed once: a field the walk
+/// samples a hundred thousand times a frame interpolates from memory and
+/// comes out the same to the bit, since the hashes and the arithmetic on
+/// them are the ones `fbm` would do. A point outside the rectangle is
+/// hashed as `fbm` hashes it.
+pub struct FbmCache {
+    seed: u64,
+    layers: Vec<Layer>,
+}
+
+impl FbmCache {
+    /// The lattices for `fbm(x, y, seed, octaves)` over `x0..=x1` by
+    /// `y0..=y1` in noise units.
+    pub fn new(x0: f32, y0: f32, x1: f32, y1: f32, seed: u64, octaves: u32) -> FbmCache {
+        let mut layers = Vec::with_capacity(octaves as usize);
+        let mut freq = 1.0f32;
+        for o in 0..octaves {
+            let lseed = seed.wrapping_add(o as u64 * 7919);
+            let (lx0, ly0) = (ifloor(x0 * freq) as i64 - 1, ifloor(y0 * freq) as i64 - 1);
+            let (lx1, ly1) = (ifloor(x1 * freq) as i64 + 2, ifloor(y1 * freq) as i64 + 2);
+            let (w, h) = ((lx1 - lx0 + 1).max(0) as usize, (ly1 - ly0 + 1).max(0) as usize);
+            let mut v = Vec::with_capacity(w * h);
+            for yi in ly0..=ly1 {
+                for xi in lx0..=lx1 {
+                    v.push(hash01(xi, yi, lseed));
+                }
+            }
+            layers.push(Layer { x0: lx0, y0: ly0, w, h, v });
+            freq *= 2.0;
+        }
+        FbmCache { seed, layers }
+    }
+
+    /// What `fbm(x, y, seed, octaves)` returns.
+    #[inline]
+    pub fn fbm(&self, x: f32, y: f32) -> f32 {
+        let mut sum = 0.0;
+        let mut amp = 1.0;
+        let mut norm = 0.0;
+        let mut freq = 1.0;
+        for (o, layer) in self.layers.iter().enumerate() {
+            let (xs, ys) = (x * freq, y * freq);
+            let (xi, yi) = (ifloor(xs), ifloor(ys));
+            let fx = smooth(xs - xi as f32);
+            let fy = smooth(ys - yi as f32);
+            let (lx, ly) = (xi as i64 - layer.x0, yi as i64 - layer.y0);
+            let (a, b, c, d) = if lx >= 0 && ly >= 0 && (lx as usize) + 1 < layer.w && (ly as usize) + 1 < layer.h {
+                let i = ly as usize * layer.w + lx as usize;
+                (layer.v[i], layer.v[i + 1], layer.v[i + layer.w], layer.v[i + layer.w + 1])
+            } else {
+                let lseed = self.seed.wrapping_add(o as u64 * 7919);
+                let (xi, yi) = (xi as i64, yi as i64);
+                (hash01(xi, yi, lseed), hash01(xi + 1, yi, lseed), hash01(xi, yi + 1, lseed), hash01(xi + 1, yi + 1, lseed))
+            };
+            let top = a + (b - a) * fx;
+            let bot = c + (d - c) * fx;
+            sum += amp * (top + (bot - top) * fy);
+            norm += amp;
+            amp *= 0.5;
+            freq *= 2.0;
+        }
+        sum / norm
+    }
 }
 
 /// Hermite step from 0 at `e0` to 1 at `e1`.

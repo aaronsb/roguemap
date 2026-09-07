@@ -10,7 +10,7 @@ use crate::camera::Camera;
 use crate::canvas::Rgb;
 use crate::grid::{Geo, HeightGrid, TOP_CAP};
 use crate::map::{Terrain, Tile, FLOOR, SEA, TILE_METRES};
-use crate::noise::{hash, ifloor, smoothstep};
+use crate::noise::{hash, iceil, ifloor, smoothstep};
 use crate::palette::{surface_color, DIRT};
 use crate::render::{GCell, Hit, HitKind, Renderer, Scene, FACE_LEFT, FACE_RIGHT, FACE_TOP, SKY_DEPTH};
 use crate::volume::Part;
@@ -29,6 +29,10 @@ pub(crate) fn detail_octaves(cam: &Camera) -> u32 {
         3
     }
 }
+
+/// Surface kinds a top face can take besides water, for the per-tile colour
+/// memo: `Terrain` less `Water`, indexed by the kind's discriminant less one.
+pub(crate) const SURFACE_KINDS: usize = 5;
 
 /// What the walk draws at a zoom (the level-of-detail table of ADR-002).
 #[derive(Clone, Copy)]
@@ -148,7 +152,7 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
     let (ts, pal, world, cam) = (sc.ts, &sc.pal, sc.world, sc.cam);
     let hv = ground_hash(cam, hit.x, hit.y, tile.seed);
     let r = (hv % 1000) as f32 / 1000.0;
-    let snow = world.snow_at(tile.temp as f32);
+    let snow = sc.snow_at(tile.temp);
     let b = tile.biome(sc.assets);
     let vig = biome::vigour(tile.temp as f32, world.season);
     let density_of = &sc.assets.surfaces.density;
@@ -262,8 +266,9 @@ impl Renderer {
     }
 
     /// The continuous field alone, for gradients.
-    fn field_height(&self, sc: &Scene, x: f32, y: f32) -> f32 {
-        let h = self.grid().sample(x, y) + sc.map.detail(x, y, detail_octaves(sc.cam));
+    fn field_height(&self, _sc: &Scene, x: f32, y: f32) -> f32 {
+        let grid = self.grid();
+        let h = grid.sample(x, y) + grid.fields.detail(x, y);
         h.max(SEA as f32)
     }
 
@@ -300,6 +305,12 @@ impl Renderer {
             let mid = (p0.0 + d.0 * (lo + hi) * 0.5, p0.1 + d.1 * (lo + hi) * 0.5);
             let hv = (d.0 * 0.5 * (hi - lo), d.1 * 0.5 * (hi - lo));
             let hh = hv.0 * hv.0 + hv.1 * hv.1;
+            // The distance test multiplies by the reciprocal, which can put
+            // an entry a few ulps either side of where dividing would; the
+            // solver is exact, so widening the circle by more than that
+            // hands it the same entries and a few it rejects.
+            let inv_hh = if hh > 1e-12 { 1.0 / hh } else { 0.0 };
+            const SLOP: f32 = 1.0 + 1e-5;
             let list = grid.buckets(geo);
             let cut = hi + geo.vspan + grid.slack();
             let mut from = if scan.mx == mx && scan.my == my { scan.at } else { list.partition_point(|b| b.top > cut) };
@@ -315,16 +326,16 @@ impl Renderer {
                     continue; // it stands entirely above the segment
                 }
                 let (dx, dy) = (b.cx - mid.0, b.cy - mid.1);
-                let t = if hh > 1e-12 { ((dx * hv.0 + dy * hv.1) / hh).clamp(-1.0, 1.0) } else { 0.0 };
+                let t = ((dx * hv.0 + dy * hv.1) * inv_hh).clamp(-1.0, 1.0);
                 let (ex, ey) = (dx - t * hv.0, dy - t * hv.1);
-                if ex * ex + ey * ey > b.r * b.r {
+                if ex * ex + ey * ey > b.r2 * SLOP {
                     continue;
                 }
                 // A leaf cluster is solved from the index entry alone: a
                 // stand of grown trees is tens of thousands of them, and
                 // reading each one the walk rejects is what a forest cannot
                 // afford. The volume is read only for what was met.
-                let h = if b.cluster { crate::volume::ellipsoid_hit((p0.0 - b.cx, p0.1 - b.cy), d, b.r * b.r, b.h0, b.top - b.h0, lo.max(b.h0), hi.min(b.top)) } else { grid.volume(b.v).hit(p0, d, lo, hi, lod.close) };
+                let h = if b.cluster { crate::volume::ellipsoid_hit((p0.0 - b.cx, p0.1 - b.cy), d, b.r2, b.h0, b.top - b.h0, lo.max(b.h0), hi.min(b.top)) } else { grid.volume(b.v).hit(p0, d, lo, hi, lod.close) };
                 let Some(h) = h else { continue };
                 let (vi, v) = (b.v, grid.volume(b.v));
                 // A stand-in crown is not solid: a sample inside one meets
@@ -411,7 +422,7 @@ impl Renderer {
         // every zoom: fine enough that a step cannot cross a terrace.
         let steps = (rpm / 2.0).ceil().max(1.0) as i32;
         let bottom = ((zlo.max(FLOOR)) * steps as f32).floor() as i32;
-        let mut i = (top * steps as f32).ceil() as i32;
+        let mut i = iceil(top * steps as f32);
         let mut z_prev = i as f32 / steps as f32;
         let mut prev: Option<(i32, i32, &Geo)> = None;
         let mut scan = Scan { mx: i32::MIN, my: i32::MIN, at: 0 };
@@ -426,7 +437,7 @@ impl Renderer {
             let ceiling = grid.block_top(mx, my);
             if zf > ceiling {
                 let jump = ceiling.max(grid.block_exit(p0, d, mx, my));
-                let next = (jump * steps as f32).ceil() as i32;
+                let next = iceil(jump * steps as f32);
                 if next < i {
                     i = next;
                     prev = None;
@@ -517,25 +528,57 @@ impl Renderer {
     /// and the field's slope shades it toward or away from the sun.
     fn field_color(&self, sc: &Scene, hit: &Hit) -> Rgb {
         let h = hit.h;
-        let kind = sc.map.surface_at(hit.x, hit.y, h, hit.tile.temp as f32);
+        let grid = self.grid();
+        let kind = sc.map.surface_kind(h, hit.tile.temp as f32, || self.beach(sc, hit.x, hit.y), || self.shore(sc, hit.x, hit.y), || grid.fields.patch(hit.x, hit.y));
         let mut t = hit.tile;
         t.terrain = kind;
-        if kind == Terrain::Water {
+        let mut c = if kind == Terrain::Water {
             t.z = (h.floor() as i32).min(SEA - 1);
-        }
-        let mut c = surface_color(&t, &sc.pal, sc.world, sc.assets);
+            surface_color(&t, &sc.pal, sc.world, sc.assets)
+        } else {
+            // The tile's colour for this kind, worked out once per frame:
+            // every sub-ray through the cell asks for it again.
+            let slot = grid.index(hit.mx, hit.my).and_then(|i| self.colors.get(i * SURFACE_KINDS + kind as usize - 1));
+            match slot.map(|s| s.get()) {
+                Some(v) if v != u32::MAX => Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8),
+                _ => {
+                    let c = surface_color(&t, &sc.pal, sc.world, sc.assets);
+                    if let Some(s) = slot {
+                        s.set(((c.0 as u32) << 16) | ((c.1 as u32) << 8) | c.2 as u32);
+                    }
+                    c
+                }
+            }
+        };
         if let Some(st) = hit.tile.stack {
             let b = st.kind(sc.assets);
             if b.ground == Ground::Pave && kind != Terrain::Water {
-                let snow = sc.world.snow_at(hit.tile.temp as f32);
+                let snow = sc.snow_at(hit.tile.temp);
                 c = self.material(sc, &hit.tile, st.kind).wall.lerp(sc.pal.snow(), snow);
             }
         }
         if kind != Terrain::Water {
             // Slope shading toward or away from the sun.
-            c = c.scale(1.0 + 0.18 * hit.sun * sc.world.daylight());
+            c = c.scale(1.0 + 0.18 * hit.sun * sc.daylight);
         }
         c
+    }
+
+    /// Whether a ground point lies on or beside sand or water, as
+    /// `Map::beach` answers it, from the frame's grid wherever the tiles are
+    /// in it.
+    fn beach(&self, sc: &Scene, xf: f32, yf: f32) -> bool {
+        let (x, y) = (xf.floor() as i32, yf.floor() as i32);
+        let sandy = |x: i32, y: i32| self.tile_at(sc, x, y).map(|t| matches!(t.terrain, Terrain::Sand | Terrain::Water)).unwrap_or(false);
+        sandy(x, y) || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| sandy(x + dx, y + dy))
+    }
+
+    /// Whether a ground point lies within a tile of water, as `Map::shore`
+    /// answers it, from the frame's grid wherever the tiles are in it.
+    fn shore(&self, sc: &Scene, xf: f32, yf: f32) -> bool {
+        let (x, y) = (xf.floor() as i32, yf.floor() as i32);
+        self.tile_at(sc, x, y).map(|t| t.near_water || t.terrain == Terrain::Water).unwrap_or(false)
+            || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| self.tile_at(sc, x + dx, y + dy).map(|t| t.terrain == Terrain::Water).unwrap_or(false))
     }
 
     /// A tree's own canopy colour: its species' colour, brightened or
@@ -582,8 +625,8 @@ impl Renderer {
     /// geometry's own colour.
     fn hit_color(&self, sc: &Scene, hit: &Hit) -> Rgb {
         let (world, pal) = (sc.world, &sc.pal);
-        let daylight = world.daylight();
-        let snow = world.snow_at(hit.tile.temp as f32);
+        let daylight = sc.daylight;
+        let snow = sc.snow_at(hit.tile.temp);
         match hit.kind {
             HitKind::Terrain => {
                 let surface = self.field_color(sc, hit);

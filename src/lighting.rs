@@ -77,6 +77,7 @@ impl Renderer {
         let sunny = sun[0] + sun[1] + sun[2] > 0.01;
         let face_k = [1.0f32, 0.78, 0.5];
         let lights: Vec<&Light> = world.lights.iter().chain(self.frame_lights.iter()).collect();
+        let clouds = world.cloud_shadows();
         for y in 0..self.h {
             for x in 0..self.w {
                 let g = self.g[(y * self.w + x) as usize];
@@ -89,7 +90,7 @@ impl Renderer {
                 let amb_face = 0.75 + 0.25 * fk;
                 l = [l[0] * amb_face, l[1] * amb_face, l[2] * amb_face];
                 if sunny {
-                    let shadow = world.cloud_shadow(g.wx, g.wy);
+                    let shadow = clouds.at(g.wx, g.wy);
                     let cast = self.shadow.as_ref().map(|m| m.at_surface(g.wx, g.wy, g.wz)).unwrap_or(0.0);
                     let s = fk * (1.0 - 0.72 * shadow) * (1.0 - 0.6 * cast);
                     l = [l[0] + sun[0] * s, l[1] + sun[1] * s, l[2] + sun[2] * s];

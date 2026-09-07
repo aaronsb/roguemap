@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::Assets;
 use crate::biome::{self, Biome, Block, Material, Species};
 use crate::blocks::Stack;
-use crate::noise::{fbm, hash};
+use crate::noise::{fbm, hash, FbmCache};
 use crate::volume::{instance, size_scale, variant_scale};
 
 /// Sea level: heights are metres above it, so the shoreline is zero.
@@ -257,6 +257,33 @@ struct Building {
     stack: Stack,
 }
 
+/// The continuous fields over a tile range for one frame (`Map::fields`):
+/// the same values `Map::detail` and `Map::patch` give, from lattices
+/// hashed once.
+pub struct Fields {
+    octaves: u32,
+    detail: FbmCache,
+    patch: FbmCache,
+}
+
+impl Fields {
+    /// What `Map::detail` gives at this point for the octaves the fields
+    /// were built with.
+    #[inline]
+    pub fn detail(&self, xf: f32, yf: f32) -> f32 {
+        if self.octaves == 0 {
+            return 0.0;
+        }
+        (self.detail.fbm(xf * 0.6 + 3.0, yf * 0.6 + 1.0) - 0.5) * 0.9
+    }
+
+    /// What `Map::patch` gives at this point.
+    #[inline]
+    pub fn patch(&self, xf: f32, yf: f32) -> f32 {
+        self.patch.fbm(xf * 0.13, yf * 0.13)
+    }
+}
+
 /// A generated block of tiles with the ceiling over everything in it.
 struct Chunk {
     tiles: Vec<Tile>,
@@ -494,6 +521,18 @@ impl Map {
         (fbm(xf * 0.6 + 3.0, yf * 0.6 + 1.0, self.seed ^ 0xD7, octaves) - 0.5) * 0.9
     }
 
+    /// The continuous fields the walk samples, with their noise lattices
+    /// hashed once over the tile range `x0..=x1` by `y0..=y1` for a frame:
+    /// `detail` and the dirt `patch` behind `surface_at`, sampled a hundred
+    /// thousand times a frame, come out the same to the bit.
+    pub fn fields(&self, x0: i32, y0: i32, x1: i32, y1: i32, octaves: u32) -> Fields {
+        let (fx0, fy0, fx1, fy1) = (x0 as f32 - 2.0, y0 as f32 - 2.0, x1 as f32 + 3.0, y1 as f32 + 3.0);
+        let octaves = if self.fixture.is_some() { 0 } else { octaves };
+        let detail = FbmCache::new(fx0 * 0.6 + 3.0, fy0 * 0.6 + 1.0, fx1 * 0.6 + 3.0, fy1 * 0.6 + 1.0, self.seed ^ 0xD7, octaves);
+        let patch = FbmCache::new(fx0 * 0.13, fy0 * 0.13, fx1 * 0.13, fy1 * 0.13, self.seed ^ 0x51, 3);
+        Fields { octaves, detail, patch }
+    }
+
     /// Tile height: the smooth field floored at the tile centre.
     pub fn height(&self, x: i32, y: i32) -> i32 {
         self.height_smooth(x as f32 + 0.5, y as f32 + 0.5).floor() as i32
@@ -546,18 +585,26 @@ impl Map {
 
     /// Surface kind at a fractional position from the continuous fields.
     pub fn surface_at(&self, xf: f32, yf: f32, h: f32, temp: f32) -> Terrain {
+        self.surface_kind(h, temp, || self.beach(xf, yf), || self.shore(xf, yf), || self.patch(xf, yf))
+    }
+
+    /// The surface kind from a height and the climate, asking for the
+    /// beach, the shore and the dirt patch only where they decide: the walk answers
+    /// them from its frame grid and cached fields (`Fields`), the map from
+    /// its chunks.
+    pub fn surface_kind(&self, h: f32, temp: f32, beach: impl FnOnce() -> bool, shore: impl FnOnce() -> bool, patch: impl FnOnce() -> f32) -> Terrain {
         if let Some(f) = &self.fixture {
             return f.terrain;
         }
         if h < SEA as f32 {
             Terrain::Water
-        } else if (h < SEA as f32 + 0.45 && self.beach(xf, yf)) || (h < SEA as f32 + 1.3 && self.shore(xf, yf)) {
+        } else if (h < SEA as f32 + 0.45 && beach()) || (h < SEA as f32 + 1.3 && shore()) {
             Terrain::Sand
         } else if temp <= -16.0 {
             Terrain::Snow
         } else if h >= ROCK_Z as f32 {
             Terrain::Rock
-        } else if self.patch(xf, yf) > 0.72 {
+        } else if patch() > 0.72 {
             Terrain::Dirt
         } else {
             Terrain::Grass

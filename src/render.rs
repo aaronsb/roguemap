@@ -11,6 +11,8 @@
 //! mask (shadow.rs), and point lights; overlays (overlay.rs) add
 //! precipitation and the cloud layer.
 
+use std::cell::Cell;
+
 use crate::assets::Assets;
 use crate::camera::Camera;
 use crate::canvas::{Canvas, Rgb};
@@ -45,14 +47,29 @@ pub struct Scene<'a> {
     pub t: f32,
     /// Water choppiness for this frame.
     pub chop: f32,
+    /// `World::daylight` for this frame, asked for at every hit.
+    pub daylight: f32,
+    /// `World::snow_at` by annual temperature, `temp + 128` as the index:
+    /// a tile's temperature is a whole degree, and every hit asks.
+    snow: [f32; 256],
 }
 
 impl<'a> Scene<'a> {
-    /// Gather one frame's inputs; the seasonal palette and water choppiness
-    /// are derived once here.
+    /// Gather one frame's inputs; the seasonal palette, water choppiness
+    /// and the per-hit world queries are derived once here.
     pub fn new(map: &'a Map, ts: &'a Tileset, world: &'a World, cam: &'a Camera, t: f32) -> Scene<'a> {
         let assets: &'a Assets = &map.assets;
-        Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness() }
+        let mut snow = [0.0f32; 256];
+        for (i, s) in snow.iter_mut().enumerate() {
+            *s = world.snow_at((i as i32 - 128) as f32);
+        }
+        Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness(), daylight: world.daylight(), snow }
+    }
+
+    /// `World::snow_at` for a tile's annual temperature.
+    #[inline]
+    pub fn snow_at(&self, temp: i8) -> f32 {
+        self.snow[(temp as i32 + 128) as usize]
     }
 }
 
@@ -146,6 +163,10 @@ pub struct Renderer {
     /// Per-cell surface identity from the centre sample, for edge detection.
     pub(crate) ids: Vec<u64>,
     pub(crate) heights: Option<HeightGrid>,
+    /// The surface colour of each grid tile per surface kind, packed as a
+    /// colour or `u32::MAX` until a hit asks for it: a hit and the sub-rays
+    /// around it share a tile, and the colour is the tile's and the kind's.
+    pub(crate) colors: Vec<Cell<u32>>,
     /// Cast shadows for the frame; none at night.
     pub(crate) shadow: Option<ShadowMask>,
     /// Lights discovered while drawing this frame, such as lit windows.
@@ -158,7 +179,7 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(w: i32, h: i32) -> Renderer {
         let sky = GCell { albedo: Rgb(0, 0, 0), ch: ' ', glyph: Rgb(0, 0, 0), wx: 0.0, wy: 0.0, wz: 0.0, face: 0, lit: false, depth: SKY_DEPTH };
-        Renderer { w, h, g: vec![sky; (w * h) as usize], ids: vec![0; (w * h) as usize], heights: None, shadow: None, frame_lights: Vec::new(), models: ModelCache::new() }
+        Renderer { w, h, g: vec![sky; (w * h) as usize], ids: vec![0; (w * h) as usize], heights: None, colors: Vec::new(), shadow: None, frame_lights: Vec::new(), models: ModelCache::new() }
     }
 
     pub fn resize(&mut self, w: i32, h: i32) {
@@ -179,6 +200,17 @@ impl Renderer {
         }
     }
 
+    /// The tile at a map position, as `Map::get` gives it, from the frame
+    /// grid wherever the position is in it: the grid copied its tiles from
+    /// the chunks when it was built, and the passes after it need not go
+    /// back to the chunk map for every tile in view.
+    pub(crate) fn tile_at(&self, sc: &Scene, mx: i32, my: i32) -> Option<Tile> {
+        match self.heights.as_ref().filter(|g| g.index(mx, my).is_some()) {
+            Some(g) => g.tile(mx, my).copied(),
+            None => sc.map.get(mx, my),
+        }
+    }
+
     /// Draw one frame of the scene into `cv`.
     pub fn draw(&mut self, cv: &mut Canvas, sc: &Scene, opts: &RenderOptions) {
         self.frame_lights.clear();
@@ -186,6 +218,8 @@ impl Renderer {
         let (x0, y0, x1, y1) = self.visible_bounds(sc.cam, self.view_ceiling(sc));
         let grid = HeightGrid::build(sc, x0, y0, x1, y1, self.w, self.h, &mut self.models);
         self.shadow = ShadowMask::build(sc, &grid);
+        self.colors.clear();
+        self.colors.resize(grid.len() * crate::raster::SURFACE_KINDS, Cell::new(u32::MAX));
         self.heights = Some(grid);
         self.stack_lights(sc);
         self.terrain_pass(sc, opts.aa && sc.ts.antialias);

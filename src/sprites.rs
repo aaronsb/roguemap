@@ -106,13 +106,13 @@ impl Renderer {
     /// Entities, and at the smallest zooms trees, back to front with a
     /// depth test.
     pub(crate) fn sprite_pass(&mut self, sc: &Scene) {
-        let (map, world, cam) = (sc.map, sc.world, sc.cam);
+        let (world, cam) = (sc.world, sc.cam);
         let tiny_trees = tree_billboards(cam);
         let (x0, y0, x1, y1) = self.tile_bounds(cam);
         let mut items: Vec<(f32, i32, i32, Tile)> = Vec::new();
         for my in y0..=y1 {
             for mx in x0..=x1 {
-                let Some(tile) = map.get(mx, my) else { continue };
+                let Some(tile) = self.tile_at(sc, mx, my) else { continue };
                 let has_entity = world.entities.iter().any(|e| e.mx == mx && e.my == my);
                 if !(tiny_trees && tile.tree.is_some()) && !has_entity {
                     continue;
@@ -185,7 +185,7 @@ impl Renderer {
         let mut items: Vec<(f32, f32, f32, f32, usize)> = Vec::new();
         for my in y0..=y1 {
             for mx in x0..=x1 {
-                let Some(tile) = map.get(mx, my) else { continue };
+                let Some(tile) = self.tile_at(sc, mx, my) else { continue };
                 scatter(sc, mx, my, &tile, |x, y, pi| items.push((x * fx + y * fy, x, y, tile.hf.max(SEA as f32), pi)));
             }
         }
