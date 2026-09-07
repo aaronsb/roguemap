@@ -198,3 +198,34 @@ Stage 2, perspective:
    as the yaw on both modes.
 9. The cloud plane from the eye; walking by heading and creature speed;
    golden frames for the perspective mode.
+
+### Stage 2 as landed
+
+Steps 6 to 8 and the cloud plane of step 9 are in, with three departures
+from the plan above, each for a reason found on the way.
+
+- The walk is parameterised by distance for the eye rather than
+  reparameterised for everyone: `Renderer::ray_march` marches `eye + dir
+  * t` and hands each segment to the existing geometry tests in their
+  height form, which are instantiated for a climbing direction (`UP`) and
+  given the segment's own foot as the zero of height — a near-level ray's
+  drift is hundreds of tiles per metre, and with the world's zero the
+  quadratics' discriminants cancel to nothing in `f32`. The isometric
+  walk is the other instantiation and keeps its bits; the strict golden
+  comparison is the gate.
+- The settings row's perspective value is three presets rather than one:
+  `chase`, `shoulder` (the owner's distant over-the-shoulder view, well
+  back and high, off to one side, forty degrees wide, seeing half as far
+  again) and `first-person`, each a `Placement`. The field of view is not
+  a constant baked into a preset: the `fov` row (preset, or 30 to 110
+  degrees in tens) overrides the placement's default, `<` and `>` step it
+  in play, and the snapshot pins it with `fov=`.
+- The fog distance is a weather quantity, `World::visibility`, scaled by
+  the mode, rather than a setting; the `fog` row only says where the fade
+  applies (perspective views, everywhere, nowhere).
+
+Stage 3 is what is left of step 9: walking by heading and creature speed
+with a walk cycle and facing (in perspective a press still moves the
+ground a cell covers at the character's depth, ADR-006's rule carried
+over), and the rest of #19 — the world map turning with the yaw and the
+inset choosing its own heading.

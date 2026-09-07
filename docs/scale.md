@@ -82,6 +82,22 @@ footprint a 1:8 tile can have in whole cells.
 `z` / `Z` step through the four. The status bar names the current one by
 both its ratio and its name, so the top line reads `1:2 near`.
 
+## The perspective modes
+
+A perspective view has no footprint: its scale is the number of rows a
+metre spans at the character's depth, `focal / 2 / depth * cos(pitch)`
+with the focal length `(columns / 2) / tan(fov / 2)`, and every other
+point takes the scale at its own depth
+([rendering.md](rendering.md), "The eye"). On a 168x71 screen at the
+presets' own fields of view that is about 5.3 rows per metre for the
+chase view (a 2 m person 10 or 11 rows, as at 1:2), 5.8 for the shoulder
+view, and 18 for the first-person view, which states its scale four
+metres out, where whoever you face stands. The zoom preset nearest that
+scale is what the frame carries for everything keyed by zoom, and the
+inset takes the other end of the scale from it. `z` / `Z` halve and
+double the chase distance instead of stepping footprints; the status
+line reads `chase 12m fov 60 pitch 30`.
+
 ## Movement
 
 The player's position is centimetres, `Entity::x_cm, y_cm`, and the tile
@@ -126,6 +142,12 @@ space at the compass view and turns with the camera. Along the map axes
 the step is the cell's ground length along the axis the key names, 9 cm
 sideways and 35 cm up or down at 1:1.
 
+In a perspective mode a press moves the ground a cell covers at the
+character's depth, a row counting as two columns, since a cell is twice
+as tall as it is wide: about 8 cm a column in the chase view. Walking by
+heading and creature speed, with a walk cycle and facing, is ADR-007's
+stage 3 and not this rule.
+
 `make snap OUT=a.png ARGS="scene=scale zoom=3 t=3 tod=12 player_dx=25
 player_dy=25"` renders the yardstick with the person a step from the
 tile centre: `player_dx` and `player_dy` are centimetres and go through
@@ -139,7 +161,11 @@ drawn at the number of rows its height implies, so level of detail keys
 off rows per metre rather than off the footprint. The player is a
 twelve-row figure at 1:1, six at 1:2, three at 1:4, and a single `@` at
 1:8. A sprite picks the tier whose row count is nearest what the thing
-stands at that zoom, and stands with its feet on the ground.
+stands at that zoom, and stands with its feet on the ground. From an eye
+it picks by the rows a metre is worth at its own depth, so a creature
+far down a first-person view is a glyph and one beside you the twelve-row
+figure; the first-person view's own character is the eye and is not
+drawn.
 
 ![scale-zmid](screenshots/scale-zmid.png)
 
@@ -165,7 +191,9 @@ pub fn inset_zoom(main: usize) -> usize {
 While the main view is zoomed out at all — 1:2, 1:4 or 1:8 — the inset
 shows 1:1. When the main view is already at 1:1, the inset shows 1:8. The
 two views never share a level, so there is always a close reading and a
-far one on screen at once.
+far one on screen at once. A perspective view's inset is the isometric
+view at the other end from the preset nearest its scale: 1:8 beside the
+first-person view, 1:1 beside a chase view zoomed out.
 
 The inset draws the scene alone: no HUD over it, and antialiasing and the
 cloud layer off. Its title carries the ratio it is drawing at, so it reads

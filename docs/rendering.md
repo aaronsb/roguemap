@@ -35,8 +35,9 @@ and then the cloud layer over it.
 A `Camera` is a yaw (the heading, `angle`), a pitch above the horizon, a
 field of view, a scale and a screen offset
 ([ADR-007](adr/ADR-007-general-camera.md)). A field of view of zero is an
-orthographic view, and every camera is one until perspective lands. An
-orthographic view projects through a basis of three numbers — `a`
+orthographic view, which the isometric mode is; a positive one is a
+perspective view from an eye, which the chase, shoulder and first-person
+modes are. An orthographic view projects through a basis of three numbers — `a`
 columns per tile across the screen, `b` rows per tile of ground depth
 toward the camera, and `rpm` rows per metre of height — which are the
 scale times the pitch's sine and cosine:
@@ -56,6 +57,39 @@ built or its zoom set, not from the pitch on every call, so the preset's
 numbers are exact; the yaw's sine and cosine are cached the same way, so
 the heading is set through `set_angle`.
 
+### The eye
+
+A perspective mode places its eye from the character by a `Placement`:
+the screen centre is the point the camera is aimed at pushed `ahead`
+metres away along the ground and `lateral` metres to the right, the eye
+sits `distance` metres back from that centre along the view direction,
+pitched down by `pitch`, and the mode names a default field of view that
+the `fov` settings row overrides. `Camera::perspective(eye, yaw, pitch,
+fov)` is the general form the three presets are instances of.
+
+| mode | distance | pitch | fov | centre from the character | the eye | fog |
+|---|---|---|---|---|---|---|
+| chase | 12 m | 30 | 60 | on it | close behind and above the character's middle, following them | 1x |
+| shoulder | 30 m | 20 | 40 | 12 m ahead, 3 m right | well back and high, off to one side, looking past the shoulder; the figure sits low and off-centre | 1.5x |
+| first-person | 0 | 0 | 60 | on it | the character's eye, `EYE_HEIGHT` (0.85) of their height over the ground; the character is not drawn | 1x |
+
+The projection is the eye's: a point's offset from the eye is resolved
+along the view direction, screen right and screen up and divided by its
+depth, with a focal length of `(sw / 2) / tan(fov / 2)` columns and half
+that in rows, since a cell is twice as tall as it is wide. A point behind
+the eye lands far off screen. The basis of a perspective view is the
+scale at the character's depth: `rows_per_metre` is `focal / 2 / depth *
+cos(pitch)`, the first-person view stating it four metres out
+(`FIRST_PERSON_DEPTH`), so level of detail, the sprite tiers of ADR-004
+and the zoom preset carried for what is keyed by zoom keep one answer per
+frame. `rows_per_metre_at` gives any other point's, which is what a
+creature, a prop and a tree take at their own distance. Rotation turns
+the eye about the character, `{` and `}` pitch it, zoom halves or
+doubles the chase distance between three metres and sixty-four, `<` and
+`>` widen and narrow the field of view, and the camera follows the
+character every frame. The `camera` settings row switches the mode
+through `Camera::in_mode`, which keeps the yaw and the aimed point.
+
 ### What the camera owns
 
 `camera.rs` is the one place that maps the world to the screen. A module
@@ -65,6 +99,11 @@ that needs a camera quantity asks for it rather than deriving it:
 |---|---|---|
 | `project`, `unproject`, `project_tile`, `anchor_at` | a world point on screen and back | sprites, lights, the grid's culling, the view bounds |
 | `ray(sx, sy)` | the ray through a cell, `p0 + d * z` | the walk and its sub-rays |
+| `eye_ray(sx, sy)` | the eye's ray through a cell, `eye + dir * t` | the perspective walk, the cloud plane from the eye |
+| `rows_per_metre_at(x, y, z)` | the scale at a point's own depth | sprite and prop tiers, a tree's model detail |
+| `fog_origin(sw, sh)`, `fog_depth` | where the fog is measured from and how deep a point is in it | the light pass, the sub-rays' start |
+| `reach(w, far)` | the ground under the frustum out to the fog | the grid's box |
+| `in_mode(i)`, `hides_player()`, `view_label()` | the mode switch, whether the character is the eye, the status line | the settings row, the sprite pass, the HUD |
 | `forward()`, `right()`, `depth(x, y)`, `tile_depth` | the map-space view axes and the depth sort | face shading, the sprite and prop sort, crown seams |
 | `project_vector(run, rise)` | a world displacement in cells | stroke directions for bare branches and furrows |
 | `footprint()` | the cells a tile spans | the ground texture lattice, door and window widths, `pan` |
@@ -89,6 +128,29 @@ distance: a metre of height moves the ground point by
 that keeps the screen position fixed, so the path is `p(z) = p0 + d * z`.
 In an orthographic view every cell's drift is the same; a perspective
 ray from an eye has its own, in the same form.
+
+### The walk from an eye
+
+A level ray has no height to step by, so a perspective ray is marched by
+distance from the eye instead (`Renderer::ray_march`): `P(t) = eye + dir
+* t`, from the eye (or, for a sub-ray, from a couple of metres before the
+nearest hit around its cell) out to the fog distance, the edge of the
+grid, the sea bed or the height of the tallest thing in view. The step
+grows with the depth so it stays about two screen rows of travel, between
+a quarter of a metre and four. Each segment goes to the same geometry
+tests in their height form: a whisker of tilt (`Camera::level_guard`,
+a thousandth) keeps a level ray's drift finite, the direction is a
+constant the tests are instantiated for (`hit_along::<UP>`: a climbing
+ray's nearest crossing is the lowest, it enters a column at the low end
+of its path, and a crown it is already inside counts at its foot), and
+every segment is solved with its own foot as the zero of height and the
+ground point there as `p0`, because a near-level ray's drift of hundreds
+of tiles per metre loses the quadratics' digits in `f32` with the world's
+zero. A terrain crossing is then bisected along the ray. The isometric
+walk is the other instantiation of the same code, with neither the
+direction nor the shift in it, which is what keeps its bits.
+
+### The walk down
 
 The walk starts at the highest thing that could be met — the grid's
 ceiling, capped at `TOP_CAP`, which is the top of the world plus 40 metres
@@ -261,6 +323,23 @@ flickers on its own phase. Radii are metres, so the `torch` row —
 `falloff = 2.0`, `flicker_amount = 0.3`, `flicker_rate = 2.5` — reaches
 two and a half tiles and flickers hard.
 
+### Fog
+
+The last thing the light pass does to a lit cell is fade it toward the
+sky colour by its depth in the fog (#21): `Scene.fog` is the distance,
+`fog_factor(depth, distance)` is nothing at the eye, everything at the
+distance and the square in between, so the middle distance keeps its
+colour and the far field goes to sky where the perspective walk stops
+anyway. The depth is the distance from the eye, or in the isometric
+view the depth along the view past the screen centre, so it can be
+fogged too (the `fog` settings row: perspective views only, always, or
+never). The distance is a weather quantity, `World::visibility`: 120 m on
+a clear noon, cut by cloud cover and precipitation, halved by full
+night, never under 15 m, and scaled by the camera mode — the shoulder
+view, a narrow look into the distance, sees half as far again. `Scene.far`
+is that distance whatever the row says; it bounds the walk and sizes the
+grid.
+
 ## Sextant antialiasing
 
 A cell on a boundary between two visibly different surfaces is
@@ -301,6 +380,15 @@ Canopy glyph fill is 30 percent of crown cells below 1:1 and 45 percent at
 it, and cactus arms appear only at 1:1.
 Nothing is placed per level of detail; the block kind, the species and the
 adjacency rules produce all of it.
+
+From an eye the table is read twice over: once at the character's depth
+for the frame — the profiles, bands, bisections, wind, prop shadows —
+and once per tree at its own, so a spruce twelve metres off is its model
+at the level its rows fall in (the detail snapped to that level's preset,
+so every tree at a level shares one simplification and the model cache
+one key) and one seventy metres off is its stand-in cone. Sprites and
+props pick their tiers the same way. The cloud layer is drawn from the eye
+in every perspective mode, over the sky cells only.
 
 ## Once a frame
 
@@ -351,7 +439,19 @@ which renders N frames and prints the mean:
 
 At 168x71 with the inset open, seed 7, on the boreal stand at
 `cx=500 cy=-300` — the densest forest in the world — a frame takes about
-12.2 ms at 1:8, 14.6 at 1:4, 15.2 at 1:2 and 19.2 at 1:1. Over the filled
+12.2 ms at 1:8, 14.6 at 1:4, 15.2 at 1:2 and 19.2 at 1:1. From inside
+that stand the perspective views cost more: chase 21.6, shoulder 23.0 and
+first person 29.5. The gallery's own scenes — the chase view at the
+stand's edge, the shoulder view over the village and the first-person
+view on the island shore — are COST_CHASE, COST_SHOULDER and
+COST_FIRST_PERSON. What bounds a perspective frame is the geometry near
+the eye: the walk stops at the fog distance, but halving it from 120 m to
+60 m saves under a millisecond in the stand, because most rays end on a
+tree long before it, and the trees within the model range (48 m at 168
+columns, where a tree's rows per metre fall under 1.5) are what the rays
+test. The first-person view is the dearest because its rays start on the
+ground among the finest models and its scale is stated four metres out,
+so every switch the level-of-detail table has is on. Over the filled
 world at 1:4: the origin 13.2, the village 15.8, a village with fields
 15.5, the origin in winter 14.5. Open water is the cheapest scene there
 is — the ocean at 1:8 is 6.1 — because the walk meets the flat sea at the

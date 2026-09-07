@@ -13,8 +13,8 @@ is one command.
   `roguemap::snapshot::render`, and compares each with its reference in
   `tests/golden/<name>.frame`: width and height as u32 little-endian, then
   per cell a u32 codepoint and the foreground and background bytes. The
-  references are committed (about half a megabyte for thirteen 120x40
-  frames). The comparison scores a frame by the percentage of identical
+  references are committed (about three quarters of a megabyte for
+  sixteen 120x40 frames). The comparison scores a frame by the percentage of identical
   cells, the percentage with the same glyph, and the mean six-channel
   colour distance; it passes at `GOLDEN_MIN_IDENTICAL` (default 98) and
   `GOLDEN_MAX_DISTANCE` (default 2.0), or with every cell identical under
@@ -27,7 +27,11 @@ is one command.
   and a sprite shifted one cell is reported by its differing cells.
   One frame, `props`, is there for the prop shadows: a close view of a
   boulder field at 15:00, the only shot whose sun is low enough for the
-  mask to be built at a zoom where props cast.
+  mask to be built at a zoom where props cast. Three are perspective
+  views (ADR-007 stage 2): `chase` at the boreal stand's edge, `shoulder`
+  over the village, and `firstperson` on the island's river shore, pitched
+  five degrees down. Every isometric frame is unchanged to the bit by
+  stage 2, which `GOLDEN_STRICT=1` checks.
 - **Camera** (ADR-007). The general projection gives the old formulas'
   bits: the footprint-era `project` and `unproject` live in the test
   module and a lattice of 441 points by six heights, at every zoom and
@@ -45,7 +49,25 @@ is one command.
   toward the camera is `b` rows; the footprint is the cells a pan slides
   by. Project then unproject returns the input at every zoom and several
   angles; `screen_dir_to_map` gives the eight compass steps; `tile_depth`
-  orders a nearer tile above a farther one at every angle.
+  orders a nearer tile above a farther one at every angle. Perspective
+  (stage 2): the eye's ray through a cell starts at the eye, is a unit
+  direction, and every point along it projects back to that cell, in all
+  three presets; the height form the walk's geometry takes passes through
+  the eye, and a level ray keeps a finite drift under the level guard;
+  the target lies the chase distance down the centre ray; the scale is
+  the on-axis differential at the character's depth, measured on the
+  centre ray, twice the depth gives half the rows, and the preset carried
+  is the nearest; the first-person eye sits `EYE_HEIGHT` of the creature's
+  height over the ground (1.7 m up a 2 m person), hides the character and
+  is put back on them by `follow`; the chase eye is the placement's
+  distance behind and above the character's middle along the heading at
+  its pitch; the shoulder view puts the figure in the left half and the
+  lower third; every mode in `MODES` builds and switching keeps the yaw
+  and the aimed point; zoom halves and doubles the chase distance within
+  its range, the pitch clamps to its range and an isometric pitch does not
+  move, the field-of-view override carries across a mode switch and `None`
+  restores the preset's; the compass snap turns to the next diagonal
+  heading.
 - **Scale** (ADR-004). Each zoom's rows and columns per metre are an exact
   halving of the next (0.75, 1.5, 3, 6 rows and 1.41, 2.83, 5.66, 11.31
   columns), so a 2 m person is 1.5, 3, 6 and 12 rows; heights project
@@ -97,7 +119,10 @@ is one command.
   metre up and not at the overview; the detail level counts the zooms a
   model is grown at, and its lattice and twig cut halve with each zoom in.
   An oak at the mid zoom is its model with fewer primitives than at the
-  near zoom, its stand-in beside them for the shadow mask.
+  near zoom, its stand-in beside them for the shadow mask. From a
+  first-person eye a pine twelve metres off is grown and one seventy-five
+  metres off is its stand-in cone alone, and the walk meets each; the
+  isometric mid zoom grows both.
 - **Grown models** (`src/lsystem/mod.rs`). A merged cluster is no smaller
   than its biggest member and no wider on any axis than the box its
   members fill or the screen they would cover side by side, and a cluster
@@ -151,7 +176,13 @@ is one command.
   glyph; two colours split three and three yield the expected pattern.
 - **Lighting.** The knee is monotonic and bounded; a point light at
   distance zero gives its intensity and at its radius gives zero; ambient
-  at midnight is the night floor.
+  at midnight is the night floor. Fog (#21) is nothing at the eye,
+  everything at the distance and rises through it, keeping most of the
+  colour half way; a scene carries it for a perspective eye and not for
+  the isometric view unless asked, the shoulder view sees half as far
+  again, the depth from the eye is the distance to the point, and
+  visibility closes in with cloud, rain and night, never under fifteen
+  metres.
 - **Overlays.** The cloud sample for a screen cell (`Camera::cloud_view`)
   moves by C/(C-H) tiles per tile of camera pan; precipitation kind
   follows the temperature at the screen centre.
@@ -177,9 +208,12 @@ is one command.
 - Weather: a storm preset raises precipitation; snowpack grows below
   freezing and melts above; wetness dries faster in sun.
 - Settings: each row cycles through all values and wraps;
-  `Settings::apply` pushes every row into the objects it governs; presets
-  and rows agree in length, and the `camera` row's values are
-  `Camera::MODES`.
+  `Settings::apply` pushes every row into the objects it governs,
+  including the camera's mode and field of view; presets and rows agree
+  in length, the `camera` row's values are `Camera::MODES`, the `fog` row's
+  are `FogMode::NAMES`, the `fov` row is `preset` then rising whole
+  degrees, and its keys step from the camera's own field of view without
+  wrapping through `preset`.
 - Traversal: `Camera::cell_step` makes a screen-space step at 45 degrees a
   diagonal map step and a map-axes step a cardinal one.
 - World map: `WorldMap::teleport` lands at the centre of the nearest land

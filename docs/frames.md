@@ -108,7 +108,12 @@ typing in it does not walk the player.
 | `history` | `L` | centre | the last fifty events |
 | `conversation` | `C` | bottom | wrapped text with a prompt |
 
-`roguemap --snap` takes `open=name,name` to render any of them headless.
+`roguemap --snap` takes `open=name,name` to render any of them headless,
+`camera=chase` (or `shoulder`, `first-person`) for the perspective modes
+with `pitch=` and `fov=` in degrees, `fog=` metres of visibility (`0` for
+no fade), `fogmode=always` for the fog row, and `px=`, `py=` for the tile
+the character stands on, which a perspective view otherwise puts at the
+view centre.
 
 ## The HUD lines
 
@@ -119,7 +124,9 @@ The top bar is one line:
 ```
 
 It names the camera heading in degrees, the zoom as its ratio and its
-name, the season by name and as a number, the clock with `(paused)` when
+name — or, in a perspective mode, the mode with its distance, field of
+view and pitch, `chase 12m fov 60 pitch 30` — the season by name and as a
+number, the clock with `(paused)` when
 the clock is stopped, the cloud cover, wind and precipitation as
 percentages, the glyph set, the light count — placed lights plus the ones
 this frame discovered, such as lit windows — and the tile under the
@@ -145,7 +152,9 @@ shortcut and the binding table in step.
 | Setting | Values | Shortcut |
 |---|---|---|
 | Traversal | screen space, map axes | |
-| Camera | isometric | |
+| Camera | isometric, chase, shoulder, first-person | |
+| Field of view | preset, 30, 40, 50, 60, 70, 80, 90, 100, 110 | `<` `>` |
+| Fog | perspective, always, never | |
 | World view | island, filled | `v` |
 | Glyphs | petscii, ascii | `g` |
 | HUD | shown, hidden | `H` |
@@ -159,8 +168,15 @@ shortcut and the binding table in step.
 
 `Settings::apply` pushes each row into the object it governs: the world
 view sets whether the map is bounded, the clock sets `auto_time`, weather
-and wind set their presets, day length sets the seconds in a day, and
-antialias and cloud layer become the renderer's two options.
+and wind set their presets, day length sets the seconds in a day, the
+camera row puts the camera in its mode and the field of view row
+overrides the mode's own field of view (the preset's is 60 degrees for
+chase and first-person and 40 for shoulder; the isometric mode has none
+and ignores the row), and antialias, cloud layer and fog become the
+renderer's options. `<` and `>` step the field of view row in tens of
+degrees from wherever the camera stands and never wrap it back to
+`preset`; `{` and `}` pitch a perspective view by five degrees, which is
+the camera's and not a row.
 
 ## The world map
 

@@ -2,7 +2,8 @@
 
 [github.com/aaronsb/roguemap](https://github.com/aaronsb/roguemap)
 
-An isometric, height-mapped terrain renderer for the terminal, in Rust.
+A height-mapped terrain renderer for the terminal, in Rust: isometric,
+or from an eye behind or at the character.
 
 There is no tile atlas. Every screen cell casts a ray back into the world
 and walks down the continuous height field under it, testing the buildings
@@ -38,7 +39,9 @@ Rendered by `make screenshots` through the headless snapshot pipeline.
 | ![winter](docs/screenshots/winter.png) Winter after two days of storm | ![lsystem-oak-winter](docs/screenshots/lsystem-oak-winter.png) The gnarled oak bare in winter |
 | ![night](docs/screenshots/night.png) Night, a campfire and lit windows | ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom |
 | ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses | ![worldmap](docs/screenshots/worldmap.png) The world map |
-| ![ascii](docs/screenshots/ascii.png) The ASCII glyph set | ![settings](docs/screenshots/settings.png) The settings frame |
+| ![chase](docs/screenshots/chase.png) The chase camera at the boreal stand's edge: the figure twelve metres ahead, the far field fading to sky | ![first-person](docs/screenshots/first-person.png) First person on the island shore: the river running off the island's edge |
+| ![shoulder](docs/screenshots/shoulder.png) The shoulder camera over the village: well back and high, forty degrees wide, looking past the figure into the distance | ![ascii](docs/screenshots/ascii.png) The ASCII glyph set |
+| ![settings](docs/screenshots/settings.png) The settings frame | |
 | ![lsystem-oak](docs/screenshots/lsystem-oak.png) A gnarled oak in summer, from the `decurrent` habit | ![lsystem-conifer](docs/screenshots/lsystem-conifer.png) A spruce from the `excurrent` habit, its tiers flattened into sprays |
 | ![editor](docs/screenshots/editor.png) The asset editor | |
 
@@ -71,13 +74,15 @@ help line at the bottom of the screen.
 | `w a s d` or `h j k l` | walk the player one screen cell (9 cm sideways at 1:1, 71 cm at 1:8); the camera follows |
 | arrows | pan by one tile; shift with an arrow runs eight cells |
 | `c` | centre on the player |
-| `r` / `R`, `(` / `)` | rotate a quarter turn, or five degrees |
-| `z` / `Z` | zoom through far 1:8, mid 1:4, near 1:2, close 1:1 |
+| `r` / `R`, `(` / `)` | snap to the next compass view, or turn five degrees |
+| `z` / `Z` | zoom through far 1:8, mid 1:4, near 1:2, close 1:1; in a chase view halve or double the distance |
+| `{` / `}` | pitch a perspective view down or up by five degrees |
+| `<` / `>` | narrow or widen the field of view by ten degrees |
 | `v` | island or filled world |
 | `g` | PETSCII or ASCII glyphs |
 | `[` / `]`, `,` / `.`, `p` | step the season, step the clock, pause it |
 | `W`, `f`, `F` | cycle the weather, light a campfire, put the fires out |
-| `Tab` or `o` | the settings frame |
+| `Tab` or `o` | the settings frame: the camera mode (isometric, chase, shoulder, first-person), the field of view, the fog and the rest |
 | `m` | the world map |
 | `n` | the inset view at the other end of the zoom scale |
 | `i`, `I`, `L`, `C` | inventory, stats, history, conversation |

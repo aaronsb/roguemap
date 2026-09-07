@@ -30,7 +30,9 @@ terminal shows with the same font.
 | ![village](screenshots/village.png) A village on the steppe at 1:4 | ![filled](screenshots/filled.png) The filled world at 1:4 |
 | ![night](screenshots/night.png) Night: a campfire and lit windows | ![winter](screenshots/winter.png) Winter after two simulated days of storm |
 | ![clouds](screenshots/clouds.png) Above the cloud layer at the widest zoom | ![worldmap](screenshots/worldmap.png) The world map, four tiles per column |
-| ![editor](screenshots/editor.png) The asset editor on the `oak` species row | ![lsystem-conifer](screenshots/lsystem-conifer.png) A spruce, side on, from the `excurrent` habit |
+| ![chase](screenshots/chase.png) The chase camera at the boreal stand's edge | ![first-person](screenshots/first-person.png) First person on the island shore, the river running off the island's edge |
+| ![shoulder](screenshots/shoulder.png) The shoulder camera over the village, looking past the figure into the distance | ![editor](screenshots/editor.png) The asset editor on the `oak` species row |
+| ![lsystem-conifer](screenshots/lsystem-conifer.png) A spruce, side on, from the `excurrent` habit | |
 | ![lsystem-oak](screenshots/lsystem-oak.png) A gnarled oak in summer | ![lsystem-oak-winter](screenshots/lsystem-oak-winter.png) The same oak bare in winter |
 
 ## The doc tree
@@ -38,7 +40,7 @@ terminal shows with the same font.
 | Page | What it covers |
 |---|---|
 | [world.md](world.md) | The height field, relief in metres, rivers, climate, biomes, chunks and the world map |
-| [rendering.md](rendering.md) | The camera, the ray walk, block and tree geometry, shadows, lighting, antialiasing, level of detail, cost |
+| [rendering.md](rendering.md) | The camera and its modes, the ray walk from above and from an eye, block and tree geometry, shadows, lighting, fog, antialiasing, level of detail, cost |
 | [scale.md](scale.md) | Metres, the four zooms and their ratios, movement, the inset view |
 | [trees.md](trees.md) | The growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |
