@@ -119,7 +119,10 @@ brings it back to the character. `V` enters it from whatever view was in
 play and returns to that view; entered from an eye it takes the eye it
 found, and from the table the point under the screen centre pushed back
 along the yaw and up by the tilt at thirty metres, so the switch does not
-jump. `Camera::addresses_character` is the question that separates the
+jump. Leaving is that push undone, the point thirty metres down the eye's
+own view: `V` twice is the view it was entered from, and a flown eye
+leaves the table on the ground ahead of it.
+`Camera::addresses_character` is the question that separates the
 two: the walk keys walk the character and the view follows, or they fly
 the eye and nothing follows.
 

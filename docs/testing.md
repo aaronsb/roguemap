@@ -55,7 +55,12 @@ is one command.
   `forward`, `right`, `depth` and `project_vector` are the yaw's sine and
   cosine, and a unit of ground
   toward the camera is `b` rows; the footprint is the cells a pan slides
-  by. Project then unproject returns the input at every zoom and several
+  by, kept with the basis, so a tilted table reports its own and an eye
+  the preset it carries, through aiming, flying and a mode switch; an
+  orthographic `eye_ray` is the table's own ray in the perspective form,
+  `ray`'s ground point down it and `ray`'s drift along it, at tilts from
+  30 degrees to 90. Project then unproject returns the input at every
+  zoom and several
   angles; `screen_dir_to_map` gives the eight compass steps; `tile_depth`
   orders a nearer tile above a farther one at every angle. Perspective
   (stage 2): the eye's ray through a cell starts at the eye, is a unit
@@ -113,7 +118,16 @@ is one command.
   it found; the character is drawn and does not move; flying ten metres
   forward moves the eye ten metres and descends when the view looks down;
   `follow` leaves it where it is however far the character walks; and
-  leaving it is a table again at the tilt it lent.
+  leaving it is a table again at the tilt it lent, aimed where the eye
+  looked: entered and left with nothing between, the table's offset and
+  focus height are the ones it had, and after a pitch and a flight the
+  point aimed at is the ground thirty metres down the view rather than
+  the eye's own height. Two fly keys are a unit diagonal, a diagonal key
+  the two it stands for, and two opposite keys nothing to fly toward.
+  The game binary's own tests, in a module beside it, drive the doors:
+  entering by `V` or by the popover's `camera` row ends the walk, keeps
+  the mode to return to and leaves no walk for a later tick to log, and
+  two fly keys move the eye one key's pace.
 - **Scale** (ADR-004). Each zoom's rows and columns per metre are an exact
   halving of the next (0.75, 1.5, 3, 6 rows and 1.41, 2.83, 5.66, 11.31
   columns), so a 2 m person is 1.5, 3, 6 and 12 rows; heights project
