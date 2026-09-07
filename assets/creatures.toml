@@ -7,4 +7,4 @@ size = [0.6, 0.4, 2.0]
 color = [52, 74, 150]
 glyph = [240, 214, 176]
 can_enter = ["sand", "grass", "dirt", "rock", "snow"]
-speed = 2.0
+speed = 1.4

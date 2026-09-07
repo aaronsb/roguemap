@@ -19,6 +19,9 @@ use crate::ui;
 use crate::world::{self, World};
 use crate::worldmap::WorldMap;
 
+/// The game's tick in seconds, which `walk=` steps by.
+pub const TICK: f32 = 0.04;
+
 /// `key=value` arguments of a headless snapshot.
 pub struct SnapArgs {
     pub kv: HashMap<String, String>,
@@ -63,7 +66,9 @@ impl SnapArgs {
 /// shoulder or first-person: ADR-007), pitch and fov (degrees, for a
 /// perspective camera), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
-/// character stands on; a perspective view's default is cx, cy).
+/// character stands on; a perspective view's default is cx, cy), walk
+/// (`KEY,SECONDS`: hold a walk key that long in 40 ms ticks, ADR-008)
+/// with run (1 for the run speed).
 pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> Canvas {
     let a = SnapArgs::parse(args);
     let (sw, sh) = (w as i32, h as i32);
@@ -184,8 +189,25 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         world.light_campfire(&map, mx, my);
     }
     // A perspective view is placed from the character.
-    if cam.is_perspective() {
-        cam.follow(&world, &map, sw, sh);
+    if let Some(p) = world.player().filter(|_| cam.is_perspective()) {
+        cam.look_at_entity(p, &map, sw, sh);
+    }
+    // walk=KEY,SECONDS holds a walk key (w, a, s, d) for that long in
+    // 40 ms ticks of the same walk and camera follow the game runs
+    // (ADR-008), with run=1 for the run speed, so a frame mid-stride is
+    // reproducible.
+    if let Some((key, secs)) = a.text("walk").and_then(|w| w.split_once(',')) {
+        let key = key.chars().next().unwrap_or('d');
+        let ticks = (secs.parse::<f32>().unwrap_or(0.0) / TICK).round().max(0.0) as usize;
+        if let Some(crate::input::Action::Walk(dx, dy)) = crate::input::lookup(crate::input::SCENE, crossterm::event::KeyCode::Char(key), false) {
+            let heading = cam.heading(settings.screen_space(), dx, dy);
+            let facing = cam.facing_of(heading);
+            for _ in 0..ticks {
+                world.walk_toward(heading, a.flag("run"), facing);
+                world.step_walk(&map, TICK);
+                cam.follow(&world, &map, sw, sh);
+            }
+        }
     }
     let t = a.num("t", 0.0);
     let mut wmap = WorldMap::new();
@@ -279,5 +301,21 @@ mod tests {
         // The argument goes through try_move: a step that lands off the island
         // is refused and the frame is the spawn's.
         assert_eq!(glyphs(&world_of(&[])), glyphs(&world_of(&["player_dx=-9999999"])));
+    }
+
+    #[test]
+    fn a_walk_is_reproducible_and_moves_the_figure_into_its_stride() {
+        let walk = |extra: &[&str]| {
+            let mut args = vec!["scene=scale", "zoom=3", "t=3", "tod=12", "hud=0"];
+            args.extend_from_slice(extra);
+            glyphs(&render(test_assets(), 120, 40, &args))
+        };
+        let rest = walk(&[]);
+        let once = walk(&["walk=d,0.3"]);
+        assert_eq!(once, walk(&["walk=d,0.3"]), "the same ticks give the same frame");
+        assert_ne!(once, rest, "0.3 s at 1.4 m/s is half a metre and a stride");
+        assert_ne!(walk(&["walk=d,0.3", "run=1"]), once, "running covers more ground in the same time");
+        assert_ne!(walk(&["walk=a,0.3"]), once, "left is the other way");
+        assert_eq!(walk(&["walk=d,0"]), rest, "no time, no walk");
     }
 }

@@ -19,9 +19,6 @@ use roguemap::world::World;
 use roguemap::worldmap::WorldMap;
 use roguemap::{lsystem, snapshot, terminal, ui};
 
-/// Screen cells a shift-arrow stride covers (ADR-006).
-const STRIDE: i32 = 8;
-
 /// Whether the main loop goes on after a key.
 enum Loop {
     Continue,
@@ -43,6 +40,13 @@ struct App {
     /// The corner the inset view was last in, so the toggle key can put it
     /// back where the settings row had it.
     inset_corner: usize,
+    /// Whether the isometric view is still easing after a walk (ADR-008):
+    /// set by a walk key, cleared once the figure is back inside the dead
+    /// zone or by a pan, so the pan keys keep their effect.
+    settling: bool,
+    /// Whether the player was walking after the last tick, so the end of
+    /// a walk can be logged once.
+    walking: bool,
     /// Screen size in cells.
     sw: i32,
     sh: i32,
@@ -61,7 +65,26 @@ impl App {
         cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
         let inset_corner = settings.get("inset").max(1);
-        App { map, world, cam, settings, inset_corner, wmap: WorldMap::new(), frames, renderer: Renderer::new(sw, sh), tilesets, sw, sh }
+        App { map, world, cam, settings, inset_corner, settling: false, walking: false, wmap: WorldMap::new(), frames, renderer: Renderer::new(sw, sh), tilesets, sw, sh }
+    }
+
+    /// One tick of time (ADR-008): the clock and the weather, the
+    /// player's walk, and the camera easing after them — every tick in a
+    /// perspective mode, and in the isometric mode while a walk is still
+    /// settling. The end of a walk goes to the history.
+    fn tick(&mut self, dt: f32) {
+        self.world.tick(dt);
+        let walking = self.world.step_walk(&self.map, dt);
+        if self.walking && !walking {
+            if let Some((x, y)) = self.world.player().map(|p| p.metres()) {
+                self.log(format!("walked to {x:.2}, {y:.2} m"));
+            }
+        }
+        self.walking = walking;
+        if self.cam.is_perspective() || self.settling {
+            let settled = self.cam.follow(&self.world, &self.map, self.sw, self.sh);
+            self.settling = !settled;
+        }
     }
 
     fn resize(&mut self, w: i32, h: i32) {
@@ -75,10 +98,6 @@ impl App {
     /// rendered under one.
     fn frame(&mut self, cv: &mut Canvas, t: f32) {
         let opts = self.settings.apply(&mut self.map, &mut self.world, &mut self.cam);
-        // A perspective view is placed from the character every frame.
-        if self.cam.is_perspective() {
-            self.cam.follow(&self.world, &self.map, self.sw, self.sh);
-        }
         ui::apply_settings(&mut self.frames, &self.settings);
         let corner = self.settings.get("inset");
         if corner != 0 {
@@ -161,9 +180,12 @@ impl App {
         match a {
             Action::Quit => return Loop::Quit,
             Action::Toggle(name) => self.toggle(name),
-            Action::Walk(dx, dy) => self.walk((dx, dy), 1),
-            Action::Run(dx, dy) => self.walk((dx, dy), STRIDE),
-            Action::Pan(dx, dy) => self.cam.pan(dx, dy),
+            Action::Walk(dx, dy) => self.walk((dx, dy), false),
+            Action::Run(dx, dy) => self.walk((dx, dy), true),
+            Action::Pan(dx, dy) => {
+                self.cam.pan(dx, dy);
+                self.settling = false;
+            }
             Action::Centre => {
                 if let Some(p) = self.world.player() {
                     self.cam.look_at_entity(p, &self.map, sw, sh);
@@ -221,31 +243,16 @@ impl App {
         }
     }
 
-    /// Move the player `cells` screen cells and keep the camera on them.
-    /// One keypress is one screen cell at the current zoom (ADR-006): the
-    /// ground under a column or a row, about 9 cm sideways at 1:1 and 71
-    /// at 1:8, each press aimed at the centre of the next cell from where
-    /// the figure then stands. In screen space a key moves the figure that
-    /// way on screen, which is a diagonal in map space; in map-axes mode
-    /// keys follow the map's own north and east by the same length. A
-    /// stride stops where a step is refused.
-    fn walk(&mut self, dir: (i32, i32), cells: i32) {
-        let mut moved = false;
-        for _ in 0..cells {
-            let Some(p) = self.world.player() else { break };
-            let (x, y) = p.pos();
-            let (dx, dy) = self.cam.cell_step(self.settings.screen_space(), dir.0, dir.1, (p.x_cm, p.y_cm), self.map.ground_at(x, y));
-            if !self.world.try_move(&self.map, dx, dy) {
-                break;
-            }
-            moved = true;
-        }
-        if moved {
-            if let Some((x, y)) = self.world.player().map(|p| p.metres()) {
-                self.log(format!("walked to {x:.2}, {y:.2} m"));
-            }
-        }
-        self.cam.follow(&self.world, &self.map, self.sw, self.sh);
+    /// A walk key (ADR-008): set the player's heading — in screen space
+    /// the ground under the pressed screen direction, which is a diagonal
+    /// in map space at the compass view; along the map axes the axis the
+    /// key names — facing that way, and lease it for `World::GRACE`
+    /// seconds. The ticks do the walking, at the creature's speed or the
+    /// run multiple of it, and the camera settles after the figure.
+    fn walk(&mut self, dir: (i32, i32), run: bool) {
+        let heading = self.cam.heading(self.settings.screen_space(), dir.0, dir.1);
+        self.world.walk_toward(heading, run, self.cam.facing_of(heading));
+        self.settling = true;
     }
 
     /// Light a campfire on the tile at the screen centre.
@@ -314,7 +321,7 @@ fn main() -> std::io::Result<()> {
         let now = Instant::now();
         let dt = (now - last).as_secs_f32();
         last = now;
-        app.world.tick(dt);
+        app.tick(dt);
         let t = start.elapsed().as_secs_f32();
 
         app.frame(term.canvas(), t);

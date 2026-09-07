@@ -158,7 +158,7 @@ Their own properties are:
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| speed | metres per second | 2 | Movement rate. |
+| speed | metres per second | 2 | Walking speed. The player walks at it every tick and runs at `World::RUN` times it (ADR-008); the person's is 1.4. |
 | can_enter | terrain list | land | Terrain it may walk on; swimming and flying widen it. |
 | diet | tag list | [] | Tags it eats; connects to `yields` and `tags`. |
 | behaviour | name | idle | Wander, graze, flee, hunt, patrol. |

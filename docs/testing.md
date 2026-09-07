@@ -31,7 +31,10 @@ is one command.
   views (ADR-007 stage 2): `chase` at the boreal stand's edge, `shoulder`
   over the village, and `firstperson` on the island's river shore, pitched
   five degrees down. Every isometric frame is unchanged to the bit by
-  stage 2, which `GOLDEN_STRICT=1` checks.
+  stage 2, which `GOLDEN_STRICT=1` checks. `stride` (ADR-008) is the
+  yardstick at 1:1 with the person 0.3 s into a walk to the right, on
+  the third of the large tier's four poses; the frames with the player
+  at rest are unchanged to the bit by walking.
 - **Camera** (ADR-007). The general projection gives the old formulas'
   bits: the footprint-era `project` and `unproject` live in the test
   module and a lattice of 441 points by six heights, at every zoom and
@@ -67,7 +70,16 @@ is one command.
   its range, the pitch clamps to its range and an isometric pitch does not
   move, the field-of-view override carries across a mode switch and `None`
   restores the preset's; the compass snap turns to the next diagonal
-  heading.
+  heading. Walking (ADR-008): a screen-space heading is the unit ground
+  vector under the key — the map diagonals at the compass view, away
+  from the eye for `w` in a chase view — and a map-axes heading the axis
+  the key names; facing is the screen-space sign of the heading, right
+  or left, and none straight toward or away from the camera. The camera
+  settles on the figure: inside the middle third of the screen `follow`
+  moves nothing, outside it the offset closes by whole cells over several
+  ticks until the figure is back inside and then rests; a chase view
+  closes `EASE` of the gap to the character each tick and converges, and
+  the first-person eye snaps in one.
 - **Scale** (ADR-004). Each zoom's rows and columns per metre are an exact
   halving of the next (0.75, 1.5, 3, 6 rows and 1.41, 2.83, 5.66, 11.31
   columns), so a 2 m person is 1.5, 3, 6 and 12 rows; heights project
@@ -189,11 +201,29 @@ is one command.
 
 ## Interaction
 
-- **Movement** (ADR-006). A press moves the figure's screen cell by
-  exactly one column or row at every zoom and angle, from the cell
-  boundary a spawn leaves it on, from odd centimetres, at any height and
-  through a run of eight; the first press from a boundary lands within a
-  centimetre of a cell centre; from a cell centre the step is the ground
+- **Walking** (ADR-008). Over ticks of 40 ms with the key renewed each
+  tick, the distance walked is the speed times the seconds to the
+  centimetre, 2.8 m in two seconds at 1.4 m/s, and a run on a diagonal
+  three times that; a tap walks `GRACE` seconds' worth, 14 cm over three
+  ticks, then rests with its distance zeroed; nobody walks nothing. The
+  walk stops at the pond within a step of its edge, by the tile the point
+  would land in, with the key still held, and a diagonal into the shore
+  slides along it. The pose index cycles by distance through a stride of
+  0.7 m, wrapping, two poses holding 0.35 m each, and art with no poses
+  rests. Facing follows the press, keeps when the press is toward or away
+  from the camera, and persists when stopped.
+- **Art poses.** A `# pose` line after the header starts another pose,
+  padded to the common width, round-tripping through `to_text`; a pose
+  of another height is refused on the line it began; a row that starts
+  with `#` is glyphs. A mirrored sprite reverses its rows, swaps the
+  paired glyphs and mirrors its centre, and mirrors back to itself;
+  poses wrap and a sprite with none rests; every loaded sprite and its
+  mirror hold the invariants.
+- **Cell step** (ADR-006). `Camera::cell_step` moves the figure's screen
+  cell by exactly one column or row at every zoom and angle, from the
+  cell boundary a spawn leaves it on, from odd centimetres, at any height
+  and through a run of eight; the first press from a boundary lands within
+  a centimetre of a cell centre; from a cell centre the step is the ground
   under one cell, halving exactly between zooms for columns and with the
   half height for rows; a fractional anchor keeps its tile's depth and the
   centre anchor is the tile anchor.
@@ -219,7 +249,10 @@ is one command.
 - World map: `WorldMap::teleport` lands at the centre of the nearest land
   tile to the cursor.
 - Snapshot: `player_dx` and `player_dy` move the figure and go through the
-  same move the keys make, so a step off the island is refused.
+  same move the keys make, so a step off the island is refused; `walk=`
+  gives the same frame twice, moves the figure into its stride, covers
+  more ground with `run=1`, goes the other way for `a`, and walks nothing
+  in no time.
 
 ## Data
 

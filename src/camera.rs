@@ -25,7 +25,7 @@ use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, SQRT_2};
 
 use crate::map::{Map, SEA, TILE_CM, TILE_METRES};
 use crate::tileset::{ZOOMS, ZOOM_NAMES, ZOOM_RATIOS};
-use crate::world::{Entity, World};
+use crate::world::{Entity, Facing, World};
 
 /// The three numbers an orthographic projection multiplies by: the scale
 /// and the pitch in the form the formulas use.
@@ -980,11 +980,13 @@ impl Camera {
         ((x / m).round() as i32, (y / m).round() as i32)
     }
 
-    /// The centimetre step one keypress makes (ADR-006) for a figure at
-    /// `from` (centimetres) standing at height `z`: one screen cell in the
-    /// pressed direction — a column for left and right, a row for up and
-    /// down — at this zoom, so a press moves the figure one visible cell
-    /// and no more. In screen space the step goes to the centre of the
+    /// The centimetre step of one screen cell (ADR-006) for a figure at
+    /// `from` (centimetres) standing at height `z`: a column for left and
+    /// right, a row for up and down, at this zoom. The keys no longer
+    /// step by cell — a press sets a heading and the figure walks
+    /// (ADR-008, `heading`) — but this is still the camera's account of
+    /// what a cell covers, which the snapshot's `player_dx` and the
+    /// ADR-006 tests use. In screen space the step goes to the centre of the
     /// next cell: the figure is drawn at its point floored to a cell, so
     /// from a cell centre that is the ground under one cell (8.8 cm a
     /// column at 1:1, 71 cm at 1:8), and from the exact boundary a spawn,
@@ -1010,6 +1012,30 @@ impl Camera {
         let (sx, sy) = self.project(from.0 as f32 / TILE_CM as f32, from.1 as f32 / TILE_CM as f32, z);
         let (tx, ty) = self.unproject(sx.floor() + 0.5 + dx as f32, sy.floor() + 0.5 + dy as f32, z);
         (cm(tx) - from.0, cm(ty) - from.1)
+    }
+
+    /// The unit map vector a walk key means (ADR-008): in screen space the
+    /// ground under the pressed screen direction, a diagonal at the
+    /// compass view and forward or sideways from an eye; along the map
+    /// axes, the axis the key names.
+    pub fn heading(&self, screen_space: bool, dx: i32, dy: i32) -> (f32, f32) {
+        let (x, y) = if screen_space { self.ground_vector(dx as f32, dy as f32) } else { (dx as f32, dy as f32) };
+        let len = x.hypot(y).max(1e-6);
+        (x / len, y / len)
+    }
+
+    /// Which way a figure walking along a map heading faces on screen:
+    /// `None` when it walks straight toward or away from the camera, so
+    /// the figure keeps the facing it had.
+    pub fn facing_of(&self, dir: (f32, f32)) -> Option<Facing> {
+        let (sx, _) = self.project_vector(dir, 0.0);
+        if sx.abs() < 1e-3 {
+            None
+        } else if sx > 0.0 {
+            Some(Facing::Right)
+        } else {
+            Some(Facing::Left)
+        }
     }
 
     /// Place a world point at the centre of the screen; a perspective
@@ -1052,38 +1078,82 @@ impl Camera {
         self.oy += (dy * fh) as f32;
     }
 
-    /// Place an entity's point at the centre of the screen, at the drawn
-    /// height of its tile. The chase and shoulder views aim at the middle
-    /// of the creature standing on the ground under it; the first-person
-    /// view puts the eye at the creature's eye, `EYE_HEIGHT` of its height
-    /// over the ground.
-    pub fn look_at_entity(&mut self, e: &Entity, map: &Map, sw: i32, sh: i32) {
+    /// The point this camera aims at to look at an entity: its point at
+    /// the drawn height of its tile in the isometric mode; the middle of
+    /// the creature standing on the ground under it for the chase and
+    /// shoulder views; its eye, `EYE_HEIGHT` of its height over the
+    /// ground, for the first-person view.
+    pub fn entity_point(&self, e: &Entity, map: &Map) -> (f32, f32, f32) {
         let (x, y) = e.pos();
         if self.is_perspective() {
             let creature = &map.assets.creatures[e.kind as usize % map.assets.creatures.len()];
             let up = if self.mode == Mode::FirstPerson { Camera::EYE_HEIGHT } else { 0.5 };
-            self.look_at_point(x, y, map.ground_at(x, y) + up * creature.size[2], sw, sh);
-            return;
+            return (x, y, map.ground_at(x, y) + up * creature.size[2]);
         }
         let z = map.get(e.mx(), e.my()).map(|t| t.draw_z()).unwrap_or(SEA);
-        self.look_at_point(x, y, z as f32, sw, sh);
+        (x, y, z as f32)
     }
 
-    /// Recentre on the player when they leave the middle of the screen; a
-    /// perspective view follows them every frame.
-    pub fn follow(&mut self, world: &World, map: &Map, sw: i32, sh: i32) {
-        let Some(p) = world.player() else { return };
+    /// Place an entity's point (`entity_point`) at the centre of the
+    /// screen in one jump.
+    pub fn look_at_entity(&mut self, e: &Entity, map: &Map, sw: i32, sh: i32) {
+        let (x, y, z) = self.entity_point(e, map);
+        self.look_at_point(x, y, z, sw, sh);
+    }
+
+    /// The fraction of the remaining offset to the figure the camera
+    /// closes each tick of `follow` (ADR-008).
+    pub const EASE: f32 = 0.3;
+
+    /// One tick of following the player (ADR-008): move `EASE` of what is
+    /// left toward them and report whether the view has settled. In the
+    /// isometric mode the figure has a dead zone, the middle third of the
+    /// screen each way, inside which the view does not move; outside it
+    /// the offset eases by whole cells, never less than one while any
+    /// remains, until the figure is back inside. The chase and shoulder
+    /// views ease the aimed point toward the character; the first-person
+    /// view is the character's eye and snaps to it.
+    pub fn follow(&mut self, world: &World, map: &Map, sw: i32, sh: i32) -> bool {
+        let Some(p) = world.player() else { return true };
+        let (x, y, z) = self.entity_point(p, map);
         if self.is_perspective() {
-            self.look_at_entity(p, map, sw, sh);
-            return;
+            let (ax, ay, az) = self.anchor;
+            let (dx, dy, dz) = (x - ax, y - ay, z - az);
+            let left = (dx * TILE_METRES).hypot(dy * TILE_METRES).hypot(dz);
+            if self.mode == Mode::FirstPerson || left < 0.005 {
+                self.look_at_point(x, y, z, sw, sh);
+                return true;
+            }
+            self.look_at_point(ax + dx * Camera::EASE, ay + dy * Camera::EASE, az + dz * Camera::EASE, sw, sh);
+            return false;
         }
-        let z = map.get(p.mx(), p.my()).map(|t| t.draw_z()).unwrap_or(0);
-        let (x, y) = p.pos();
-        let (sx, sy) = self.project(x, y, z as f32);
+        let (sx, sy) = self.project(x, y, z);
         let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
-        if sx < sw / 5 || sx > sw * 4 / 5 || sy < sh / 5 || sy > sh * 4 / 5 {
-            self.look_at_entity(p, map, sw, sh);
+        let need = |s: i32, n: i32| {
+            let (lo, hi) = (n / 3, n - n / 3);
+            if s < lo {
+                lo - s
+            } else if s > hi {
+                hi - s
+            } else {
+                0
+            }
+        };
+        let (nx, ny) = (need(sx, sw), need(sy, sh));
+        if (nx, ny) == (0, 0) {
+            return true;
         }
+        let step = |n: i32| {
+            let s = (n as f32 * Camera::EASE).round() as i32;
+            if s == 0 && n != 0 {
+                n.signum()
+            } else {
+                s
+            }
+        };
+        self.ox += step(nx) as f32;
+        self.oy += step(ny) as f32;
+        false
     }
 
     /// Switch tile size, keeping whatever is at the screen centre there.
@@ -1694,6 +1764,107 @@ mod tests {
         let chase = &perspective_cameras()[0];
         assert!(chase.rows_per_metre() * 2.0 > 6.0 && chase.rows_per_metre() * 2.0 < 12.0, "{}", chase.rows_per_metre() * 2.0);
         assert!(fp.rows_per_metre() > chase.rows_per_metre());
+    }
+
+    #[test]
+    fn a_heading_is_the_ground_under_a_key_and_faces_the_way_it_goes() {
+        use std::f32::consts::FRAC_1_SQRT_2;
+        let cam = Camera::isometric(3);
+        // Screen space at the compass view: right is the map diagonal
+        // (1, -1) and up is (-1, -1), each a unit vector.
+        let (x, y) = cam.heading(true, 1, 0);
+        assert!((x - FRAC_1_SQRT_2).abs() < 1e-5 && (y + FRAC_1_SQRT_2).abs() < 1e-5, "{x}, {y}");
+        let (x, y) = cam.heading(true, 0, -1);
+        assert!((x + FRAC_1_SQRT_2).abs() < 1e-5 && (y + FRAC_1_SQRT_2).abs() < 1e-5, "{x}, {y}");
+        // Along the map axes the key names the axis whatever the yaw.
+        let mut turned = cam;
+        turned.set_angle(1.0);
+        assert_eq!(turned.heading(false, 0, 1), (0.0, 1.0));
+        assert_eq!(turned.heading(false, -1, 0), (-1.0, 0.0));
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (x, y) = turned.heading(true, dx, dy);
+            assert!((x.hypot(y) - 1.0).abs() < 1e-5, "a unit heading for {dx}, {dy}");
+        }
+        // Facing is the screen-space sign of the heading; straight toward
+        // or away from the camera keeps whatever it was.
+        assert_eq!(cam.facing_of(cam.heading(true, 1, 0)), Some(Facing::Right));
+        assert_eq!(cam.facing_of(cam.heading(true, -1, 0)), Some(Facing::Left));
+        assert_eq!(cam.facing_of(cam.heading(true, 0, 1)), None);
+        assert_eq!(cam.facing_of(cam.heading(true, 0, -1)), None);
+        assert_eq!(turned.facing_of((1.0, 0.0)), Some(Facing::Right), "east at a yaw of one radian is still rightward");
+        // From an eye, up walks away from the camera and right faces right.
+        let chase = Camera::chase(FRAC_PI_4);
+        let (fx, fy) = chase.forward();
+        let (x, y) = chase.heading(true, 0, -1);
+        assert!((x + fx).abs() < 1e-4 && (y + fy).abs() < 1e-4, "up is away: {x}, {y} against forward {fx}, {fy}");
+        assert_eq!(chase.facing_of(chase.heading(true, 1, 0)), Some(Facing::Right));
+        assert_eq!(chase.facing_of(chase.heading(true, 0, -1)), None);
+    }
+
+    #[test]
+    fn the_camera_settles_on_the_figure_and_rests_inside_the_dead_zone() {
+        let assets = crate::assets::test_assets();
+        let map = Map::synthetic(64, 64, assets, 0, |_, _| crate::map::Tile::flat(5));
+        let mut world = World::new(1);
+        world.spawn_player(&map, 32, 32);
+        let (sw, sh) = (120, 40);
+        let mut cam = Camera::isometric(3);
+        cam.look_at_entity(world.player().unwrap(), &map, sw, sh);
+        let (ox, oy) = (cam.ox, cam.oy);
+        // A metre to screen-right is eleven columns of a hundred and
+        // twenty: inside the middle third, so the view does not move.
+        assert!(world.try_move(&map, 71, -71));
+        assert!(cam.follow(&world, &map, sw, sh), "settled");
+        assert_eq!((cam.ox, cam.oy), (ox, oy), "the ground did not scroll");
+        // Four tiles that way is off the screen: the view eases after the
+        // figure by whole cells, a fraction of what is left each tick and
+        // never less than one, until the figure is back inside the zone.
+        world.player_mut().unwrap().set_tile(36, 28);
+        let figure = |cam: &Camera| {
+            let (x, y, z) = cam.entity_point(world.player().unwrap(), &map);
+            let (sx, sy) = cam.project(x, y, z);
+            (sx.floor() as i32, sy.floor() as i32)
+        };
+        assert!(figure(&cam).0 > sw, "off the right edge at column {}", figure(&cam).0);
+        let (mut ticks, mut last) = (0, cam.ox);
+        while !cam.follow(&world, &map, sw, sh) {
+            ticks += 1;
+            assert!(cam.ox < last && cam.ox.fract() == 0.0, "whole cells, closing in: {} after {last}", cam.ox);
+            assert_eq!(cam.oy, oy, "no vertical offset to close");
+            last = cam.ox;
+            assert!(ticks < 60, "never settles");
+        }
+        let (sx, sy) = figure(&cam);
+        assert!(sx >= sw / 3 && sx <= sw - sw / 3 && sy >= sh / 3 && sy <= sh - sh / 3, "back inside the zone at {sx}, {sy}");
+        assert!(ticks > 3, "eased over several ticks rather than one jump: {ticks}");
+        assert!(cam.follow(&world, &map, sw, sh) && cam.ox == last, "and rests there");
+        // A chase view closes EASE of the gap to the character each tick
+        // and converges; the first-person eye snaps.
+        let p = *world.player().unwrap();
+        let mut chase = Camera::chase(FRAC_PI_4);
+        chase.look_at_entity(&p, &map, sw, sh);
+        let was = chase.entity_point(&p, &map);
+        assert!(world.try_move(&map, 200, 0));
+        let gap = |cam: &Camera| {
+            let (x, y, z) = cam.entity_point(world.player().unwrap(), &map);
+            let (ax, ay, az) = cam.anchor_point();
+            ((x - ax) * TILE_METRES).hypot((y - ay) * TILE_METRES).hypot(z - az)
+        };
+        let g0 = gap(&chase);
+        let now = chase.entity_point(world.player().unwrap(), &map);
+        let moved = ((now.0 - was.0) * TILE_METRES).hypot((now.1 - was.1) * TILE_METRES).hypot(now.2 - was.2);
+        assert!((g0 - moved).abs() < 1e-3 && g0 >= 2.0, "the whole step behind, two metres and the ground's rise: {g0} of {moved}");
+        assert!(!chase.follow(&world, &map, sw, sh));
+        assert!((gap(&chase) - g0 * (1.0 - Camera::EASE)).abs() < 1e-4, "{} of {g0} left", gap(&chase));
+        let mut n = 0;
+        while !chase.follow(&world, &map, sw, sh) {
+            n += 1;
+            assert!(n < 100, "never converges");
+        }
+        assert!(gap(&chase) < 1e-3 && n > 3, "on the character after {n} more ticks, {} m off", gap(&chase));
+        let mut fp = Camera::first_person(FRAC_PI_4);
+        fp.look_at_entity(&p, &map, sw, sh);
+        assert!(fp.follow(&world, &map, sw, sh) && gap(&fp) < 1e-5, "the eye is the character's in one tick");
     }
 
     #[test]

@@ -65,23 +65,62 @@ pub struct Light {
 /// The creature kind the player is: the first row of `creatures.toml`.
 pub const PLAYER: u8 = 0;
 
+/// Which way a figure faces on screen (ADR-008). `Right` is the art as
+/// drawn; `Left` is its mirror.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Facing {
+    Left,
+    Right,
+}
+
+/// A walk under way (ADR-008): a heading held on a short lease that each
+/// press renews, at a multiple of the creature's speed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Walk {
+    /// Unit heading in map space.
+    pub dir: (f32, f32),
+    /// Seconds left before the walk ends unless a press renews it.
+    pub grace: f32,
+    /// Speed multiplier: 1 walking, `World::RUN` running.
+    pub factor: f32,
+    /// The fraction of a centimetre a tick left over on each axis, owed
+    /// to the next, so the distance walked is the speed times the time.
+    carry: (f32, f32),
+}
+
 /// A creature standing at a point of the map, drawn with its kind's art.
 /// Its position is centimetres (ADR-006); the tile it stands in is
-/// derived, and collision is per tile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// derived, and collision is per tile. It faces left or right and may be
+/// walking (ADR-008).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Entity {
     /// Index into the creature table; the player is 0.
     pub kind: u8,
     pub x_cm: i32,
     pub y_cm: i32,
+    pub facing: Facing,
+    /// Metres walked on the walk under way, which picks the pose; zero at
+    /// rest.
+    pub walked: f32,
+    pub walk: Option<Walk>,
 }
 
 impl Entity {
-    /// A creature standing at the centre of a tile.
+    /// A creature standing at the centre of a tile, facing right, at rest.
     pub fn at_tile(kind: u8, mx: i32, my: i32) -> Entity {
-        let mut e = Entity { kind, x_cm: 0, y_cm: 0 };
+        let mut e = Entity { kind, x_cm: 0, y_cm: 0, facing: Facing::Right, walked: 0.0, walk: None };
         e.set_tile(mx, my);
         e
+    }
+
+    /// The walk-cycle pose to draw, of `n` in the art: `None` at rest,
+    /// else the pose the distance walked reaches through a stride of
+    /// `World::STRIDE` metres, wrapping, so the cadence follows the speed.
+    pub fn pose(&self, n: usize) -> Option<usize> {
+        if self.walk.is_none() || n == 0 {
+            return None;
+        }
+        Some((self.walked / World::STRIDE * n as f32).floor() as usize % n)
     }
 
     /// Put the creature at the centre of a tile.
@@ -497,6 +536,63 @@ impl World {
             _ => false,
         }
     }
+
+    /// The stride of a walk cycle in metres (ADR-008): the art's poses
+    /// share it, so `n` poses each hold `STRIDE / n` metres.
+    pub const STRIDE: f32 = 0.7;
+    /// How many times the creature's speed a run is.
+    pub const RUN: f32 = 3.0;
+    /// Seconds a press keeps the figure walking: two and a half ticks, so
+    /// a held key renewed every repeat interval is a steady walk and a
+    /// release stops the figure within three.
+    pub const GRACE: f32 = 0.1;
+
+    /// Set the player walking along `dir`, a unit map vector, for `GRACE`
+    /// seconds more (ADR-008), at the run speed if `run`, facing `facing`
+    /// when given and as before when not. A press on the same heading
+    /// keeps the centimetre carry; a turn drops it.
+    pub fn walk_toward(&mut self, dir: (f32, f32), run: bool, facing: Option<Facing>) {
+        let Some(p) = self.player_mut() else { return };
+        let factor = if run { World::RUN } else { 1.0 };
+        let carry = match p.walk {
+            Some(w) if w.dir == dir => w.carry,
+            _ => (0.0, 0.0),
+        };
+        p.walk = Some(Walk { dir, grace: World::GRACE, factor, carry });
+        if let Some(f) = facing {
+            p.facing = f;
+        }
+    }
+
+    /// Spend `dt` seconds of the player's walk (ADR-008): advance
+    /// `speed * dt` metres along the heading in whole centimetres, the
+    /// fraction carried, through `try_move`, so the tile the figure may
+    /// not enter stops it — a diagonal refused as a whole slides along
+    /// whichever axis is open. The tick is cut to the grace left, so a
+    /// tap walks exactly `GRACE` seconds' worth. Returns whether the
+    /// figure is still walking afterwards.
+    pub fn step_walk(&mut self, map: &Map, dt: f32) -> bool {
+        let Some(p) = self.player() else { return false };
+        let Some(mut w) = p.walk else { return false };
+        let dt = dt.min(w.grace).max(0.0);
+        let speed = map.assets.creatures[p.kind as usize % map.assets.creatures.len()].speed * w.factor;
+        let cm = speed * dt * 100.0;
+        let want = (w.dir.0 * cm + w.carry.0, w.dir.1 * cm + w.carry.1);
+        let (sx, sy) = (want.0.round() as i32, want.1.round() as i32);
+        let from = (p.x_cm, p.y_cm);
+        let moved = self.try_move(map, sx, sy) || (sx != 0 && sy != 0 && (self.try_move(map, sx, 0) || self.try_move(map, 0, sy)));
+        let p = self.player_mut().expect("the player was there a moment ago");
+        w.carry = if moved { (want.0 - sx as f32, want.1 - sy as f32) } else { (0.0, 0.0) };
+        w.grace -= dt;
+        p.walked += ((p.x_cm - from.0) as f32).hypot((p.y_cm - from.1) as f32) / 100.0;
+        if w.grace <= 1e-6 {
+            p.walk = None;
+            p.walked = 0.0;
+            return false;
+        }
+        p.walk = Some(w);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -579,9 +675,119 @@ mod tests {
         let (x, y) = w.player().unwrap().pos();
         assert!((x - 4.995).abs() < 1e-4 && (y - 4.9).abs() < 1e-4, "the point is fractional in tiles: {x}, {y}");
         // Negative positions still floor to their tile.
-        let e = Entity { kind: 0, x_cm: -1, y_cm: -TILE_CM };
+        let e = Entity { x_cm: -1, y_cm: -TILE_CM, ..Entity::at_tile(0, 0, 0) };
         assert_eq!(e.tile(), (-1, -1));
-        assert_eq!(Entity::at_tile(0, -3, 2), Entity { kind: 0, x_cm: -500, y_cm: 500 });
+        assert_eq!(Entity::at_tile(0, -3, 2), Entity { x_cm: -500, y_cm: 500, ..e });
+    }
+
+    /// A flat plain of grass, sixty-four tiles square.
+    fn plain() -> Map {
+        Map::synthetic(64, 64, test_assets(), 0, |_, _| Tile::flat(5))
+    }
+
+    #[test]
+    fn a_walk_covers_speed_times_seconds_over_ticks_and_a_tap_the_grace() {
+        let map = plain();
+        let speed = map.assets.creatures[PLAYER as usize].speed;
+        assert!((speed - 1.4).abs() < 1e-6, "the person walks at 1.4 m/s");
+        let mut w = World::new(1);
+        w.spawn_player(&map, 32, 32);
+        let start = w.player().unwrap().metres();
+        // A held key renews the lease every tick: two seconds is 2.8 m to
+        // the centimetre, the fractions carried from tick to tick.
+        for _ in 0..50 {
+            w.walk_toward((1.0, 0.0), false, Some(Facing::Right));
+            assert!(w.step_walk(&map, 0.04));
+        }
+        let p = w.player().unwrap();
+        assert!((p.metres().0 - start.0 - 2.8).abs() < 0.0051, "{} m", p.metres().0 - start.0);
+        assert_eq!(p.metres().1, start.1);
+        assert!(p.walk.is_some() && (p.walked - 2.8).abs() < 0.0051, "{:?} after {} m", p.walk, p.walked);
+        // Running is three times as far in the same time, on a diagonal too.
+        let mut r = World::new(1);
+        r.spawn_player(&map, 32, 32);
+        let d = std::f32::consts::FRAC_1_SQRT_2;
+        for _ in 0..25 {
+            r.walk_toward((d, d), true, None);
+            r.step_walk(&map, 0.04);
+        }
+        let (x, y) = r.player().unwrap().metres();
+        let dist = (x - start.0).hypot(y - start.1);
+        assert!((dist - 4.2).abs() < 0.02, "{dist} m");
+        // A tap walks GRACE seconds' worth, 14 cm, over three ticks, then
+        // rests with the distance zeroed.
+        let mut t = World::new(1);
+        t.spawn_player(&map, 32, 32);
+        t.walk_toward((0.0, 1.0), false, None);
+        let mut ticks = 1;
+        while t.step_walk(&map, 0.04) {
+            ticks += 1;
+        }
+        assert_eq!(ticks, 3);
+        let p = t.player().unwrap();
+        assert!((p.metres().1 - start.1 - speed * World::GRACE).abs() < 0.0051, "{} m", p.metres().1 - start.1);
+        assert!(p.walk.is_none() && p.walked == 0.0 && p.pose(4).is_none(), "{p:?}");
+        assert!(!t.step_walk(&map, 0.04), "at rest a tick walks nothing");
+        // Nobody: nothing walks.
+        let mut n = World::new(1);
+        n.walk_toward((1.0, 0.0), false, None);
+        assert!(!n.step_walk(&map, 0.04));
+    }
+
+    #[test]
+    fn a_walk_stops_at_water_by_the_tile_it_would_enter_and_slides_along_the_shore() {
+        // The pond is tile (5, 4): its edge is a metre east of the spawn.
+        let map = pond_map();
+        let mut w = World::new(1);
+        w.spawn_player(&map, 4, 4);
+        for _ in 0..60 {
+            w.walk_toward((1.0, 0.0), false, None);
+            w.step_walk(&map, 0.04);
+        }
+        let p = *w.player().unwrap();
+        assert_eq!(p.tile(), (4, 4), "never in the water");
+        assert!(p.x_cm < 1000 && p.x_cm >= 1000 - 6, "stopped within a step of the edge at {}", p.x_cm);
+        assert!(p.walk.is_some(), "the key is still held; the figure just cannot go");
+        // A diagonal into the pond slides south along its shore.
+        let d = std::f32::consts::FRAC_1_SQRT_2;
+        for _ in 0..25 {
+            w.walk_toward((d, d), false, None);
+            w.step_walk(&map, 0.04);
+        }
+        let q = *w.player().unwrap();
+        assert!(q.x_cm < 1000 && q.x_cm >= p.x_cm, "held at the shore: {}", q.x_cm);
+        assert!(q.y_cm > p.y_cm + 90, "and walking south along it: {} from {}", q.y_cm, p.y_cm);
+        assert!(map.get(q.mx(), q.my()).is_some_and(|t| t.terrain != Terrain::Water));
+    }
+
+    #[test]
+    fn the_pose_cycles_by_distance_through_a_stride_and_rests_at_zero() {
+        let mut e = Entity::at_tile(0, 0, 0);
+        assert_eq!(e.pose(4), None, "at rest");
+        e.walk = Some(Walk { dir: (1.0, 0.0), grace: 1.0, factor: 1.0, carry: (0.0, 0.0) });
+        for (walked, pose) in [(0.0, 0), (0.17, 0), (0.18, 1), (0.36, 2), (0.6, 3), (0.71, 0), (1.05, 2)] {
+            e.walked = walked;
+            assert_eq!(e.pose(4), Some(pose), "{walked} m into a 0.7 m stride of four");
+        }
+        e.walked = 0.4;
+        assert_eq!(e.pose(2), Some(1), "two poses hold 0.35 m each");
+        assert_eq!(e.pose(0), None, "art with no poses rests");
+    }
+
+    #[test]
+    fn facing_follows_the_press_and_persists_when_stopped() {
+        let map = plain();
+        let mut w = World::new(1);
+        w.spawn_player(&map, 32, 32);
+        assert_eq!(w.player().unwrap().facing, Facing::Right, "as the art is drawn");
+        w.walk_toward((-1.0, 0.0), false, Some(Facing::Left));
+        assert_eq!(w.player().unwrap().facing, Facing::Left);
+        w.walk_toward((0.0, 1.0), false, None);
+        assert_eq!(w.player().unwrap().facing, Facing::Left, "toward the camera keeps the facing");
+        while w.step_walk(&map, 0.04) {}
+        assert_eq!(w.player().unwrap().facing, Facing::Left, "and so does stopping");
+        w.walk_toward((1.0, 0.0), true, Some(Facing::Right));
+        assert_eq!(w.player().unwrap().facing, Facing::Right);
     }
 
     #[test]

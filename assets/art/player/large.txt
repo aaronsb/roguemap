@@ -11,3 +11,55 @@
    | |
    | |
   _| |_
+# pose 1: contact, leading leg right
+   ___
+  (o o)
+   \_/
+    |
+  _|=|_
+ / |=| \
+/  |=|  \
+   |=|
+   / \
+  /   \
+ /     \
+ /     \_
+# pose 2: passing, right foot lifted
+   ___
+  (o o)
+   \_/
+    |
+  _|=|_
+ / |=| \
+/  |=|  \
+   |=|
+   | |
+   | '
+   |
+  _|_
+# pose 3: contact, leading leg left
+   ___
+  (o o)
+   \_/
+    |
+  _|=|_
+ / |=| \
+/  |=|  \
+   |=|
+   / \
+  /   \
+ /     \
+_/     \
+# pose 4: passing, left foot lifted
+   ___
+  (o o)
+   \_/
+    |
+  _|=|_
+ / |=| \
+/  |=|  \
+   |=|
+   | |
+   ' |
+     |
+    _|_

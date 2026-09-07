@@ -885,6 +885,8 @@ impl Tier {
 }
 
 /// A parsed art file: the header fields and the rows padded to one width.
+/// `rows` is the figure at rest; `poses` are the walk cycle after it
+/// (ADR-008), each the same height, all padded to one width.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArtFile {
     pub name: String,
@@ -895,13 +897,19 @@ pub struct ArtFile {
     pub center: i32,
     pub base_rows: usize,
     pub rows: Vec<String>,
+    pub poses: Vec<Vec<String>>,
 }
 
 impl ArtFile {
     /// Parse the format: a `#` header of `key=value` pairs (`name`, `tier`,
-    /// optional `center`, `base_rows`, `min_zoom`), then rows. Spaces are
-    /// transparent, tabs an error, trailing blank lines dropped, rows padded
-    /// to the widest. Errors carry a 1-based line number.
+    /// optional `center`, `base_rows`, `min_zoom`), then rows. A later
+    /// line starting with `# pose` begins another pose of the same
+    /// sprite, the walk cycle in order; the rest of that line is a
+    /// comment, and a row that merely starts with `#` is a row of glyphs.
+    /// Spaces are transparent,
+    /// tabs an error, trailing blank lines of a pose dropped, every row
+    /// padded to the widest, and every pose must be the height of the
+    /// first. Errors carry a 1-based line number.
     pub fn parse(text: &str) -> Result<ArtFile, (usize, String)> {
         let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
         let header = lines.next().unwrap_or("");
@@ -928,35 +936,53 @@ impl ArtFile {
         if min_zoom >= crate::tileset::ZOOMS.len() {
             return Err((1, format!("min_zoom {min_zoom} is beyond the last zoom {}", crate::tileset::ZOOMS.len() - 1)));
         }
-        let mut rows: Vec<String> = Vec::new();
+        // Poses: the rows up to each `#` line, with the line each began on.
+        let mut poses: Vec<(usize, Vec<String>)> = vec![(2, Vec::new())];
         for (i, line) in lines.enumerate() {
+            if line.starts_with("# pose") {
+                poses.push((i + 2, Vec::new()));
+                continue;
+            }
             if line.contains('\t') {
                 return Err((i + 2, "tabs are not allowed in art rows".to_string()));
             }
-            rows.push(line.to_string());
+            poses.last_mut().expect("one pose at least").1.push(line.to_string());
         }
-        while rows.last().is_some_and(|r| r.trim().is_empty()) {
-            rows.pop();
+        for (_, rows) in poses.iter_mut() {
+            while rows.last().is_some_and(|r| r.trim().is_empty()) {
+                rows.pop();
+            }
         }
-        if rows.is_empty() {
+        let height = poses[0].1.len();
+        if height == 0 {
             return Err((2, "art has no rows".to_string()));
         }
-        let width = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
-        for r in rows.iter_mut() {
-            let n = r.chars().count();
-            r.extend(std::iter::repeat_n(' ', width - n));
+        for (line, rows) in &poses[1..] {
+            if rows.len() != height {
+                return Err((*line, format!("pose of {} rows in a sprite of {height}", rows.len())));
+            }
+        }
+        let width = poses.iter().flat_map(|(_, rows)| rows.iter().map(|r| r.chars().count())).max().unwrap_or(0);
+        for (_, rows) in poses.iter_mut() {
+            for r in rows.iter_mut() {
+                let n = r.chars().count();
+                r.extend(std::iter::repeat_n(' ', width - n));
+            }
         }
         let center = center.unwrap_or(width as i32 / 2);
         if center < 0 || center >= width as i32 {
             return Err((1, format!("center {center} is outside the {width}-column sprite")));
         }
-        if base_rows > rows.len() {
-            return Err((1, format!("base_rows {base_rows} exceeds the {} rows", rows.len())));
+        if base_rows > height {
+            return Err((1, format!("base_rows {base_rows} exceeds the {height} rows")));
         }
-        Ok(ArtFile { name, tier, min_zoom, center, base_rows, rows })
+        let mut poses: Vec<Vec<String>> = poses.into_iter().map(|(_, rows)| rows).collect();
+        let rows = poses.remove(0);
+        Ok(ArtFile { name, tier, min_zoom, center, base_rows, rows, poses })
     }
 
-    /// The file text for this sprite.
+    /// The file text for this sprite: the header, the rest pose, then
+    /// each walk pose under a `# pose N` line.
     pub fn to_text(&self) -> String {
         let mut s = format!("# name={} tier={} center={} base_rows={}", self.name, self.tier.name(), self.center, self.base_rows);
         if self.min_zoom != self.tier.min_zoom() {
@@ -966,6 +992,13 @@ impl ArtFile {
         for r in &self.rows {
             s.push_str(r);
             s.push('\n');
+        }
+        for (i, pose) in self.poses.iter().enumerate() {
+            s.push_str(&format!("# pose {}\n", i + 1));
+            for r in pose {
+                s.push_str(r);
+                s.push('\n');
+            }
         }
         s
     }
@@ -1234,6 +1267,25 @@ mod tests {
         assert!(b.to_text().contains(" min_zoom=2"));
         assert_eq!(ArtFile::parse(&b.to_text()).unwrap(), b);
         assert!(ArtFile::parse("# name=x tier=large min_zoom=9\nab\n").is_err());
+    }
+
+    #[test]
+    fn art_poses_share_a_height_and_a_width_and_round_trip() {
+        // A `# pose` line after the header starts another pose (ADR-008):
+        // the walk cycle in order, padded to the widest row of any pose. A
+        // row that starts with `#` is glyphs, as a boulder's are.
+        let a = ArtFile::parse("# name=x tier=small\n o\n/|\n\n# pose 1\n o\n/ \\\n\n# pose: stride\n#\n|\n").unwrap();
+        assert_eq!(a.rows, vec![" o ".to_string(), "/| ".to_string()]);
+        assert_eq!(a.poses, vec![vec![" o ".to_string(), "/ \\".to_string()], vec!["#  ".to_string(), "|  ".to_string()]]);
+        assert_eq!(a.center, 1, "the centre is of the common width");
+        assert_eq!(ArtFile::parse(&a.to_text()).unwrap(), a);
+        assert!(a.to_text().contains("# pose 1\n"));
+        // A pose of another height would move the feet; it is refused on
+        // the line it began.
+        assert_eq!(ArtFile::parse("# name=x tier=small\n o\n/|\n# pose\no\n").unwrap_err(), (4, "pose of 1 rows in a sprite of 2".to_string()));
+        assert!(ArtFile::parse("# name=x tier=small\n o\n/|\n# pose\n").is_err(), "an empty pose");
+        // A file with one pose has none to cycle.
+        assert!(ArtFile::parse("# name=x tier=small\no\n").unwrap().poses.is_empty());
     }
 
     #[test]

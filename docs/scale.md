@@ -102,56 +102,86 @@ line reads `chase 12m fov 60 pitch 30`.
 
 The player's position is centimetres, `Entity::x_cm, y_cm`, and the tile
 it stands in is derived from it
-([ADR-006](adr/ADR-006-movement-by-screen-cell.md)). One keypress moves
-the figure one screen cell in the pressed direction at the current zoom:
-a column for `a` and `d`, a row for `w` and `s`. Because the zoom changes
-how much ground a cell covers, the same press is a few centimetres at
-1:1 and most of a metre at 1:8. The binding is `Action::Walk(dx, dy)` on
-`w a s d` and `h j k l`.
+([ADR-006](adr/ADR-006-movement-by-screen-cell.md)). A keypress does not
+move the figure; it sets a heading and the figure walks
+([ADR-008](adr/ADR-008-walking.md)): every 40 ms tick of the event loop
+the figure advances `speed * dt` metres along it, `speed` being the
+creature row's metres per second — the person's 1.4 — in whole
+centimetres with the fraction carried to the next tick, so the distance
+walked is the speed times the time to the centimetre at every zoom. The
+binding is `Action::Walk(dx, dy)` on `w a s d` and `h j k l`; shift with
+an arrow is `Action::Run(dx, dy)`, `World::RUN` = 3 times the speed.
 
-| zoom | one column | one row | run of eight columns |
-|---|---|---|---|
-| close 1:1 | 8.8 cm | 35.4 cm | 71 cm |
-| near 1:2 | 17.7 cm | 70.7 cm | 1.4 m |
-| mid 1:4 | 35.4 cm | 141.4 cm | 2.8 m |
-| far 1:8 | 70.7 cm | 141.4 cm | 5.7 m |
+![stride](screenshots/stride.png)
 
-Those are the ground under a cell, `TILE_CM / (hw * √2)` for a column
-and `TILE_CM / (hh * √2)` for a row; far and mid share a half height of
-one and so a row step. `Camera::cell_step` aims each press at the centre
-of the next cell from wherever the figure stands, so the first press
-after a spawn or a teleport, which leave the figure on a cell boundary,
-is half a cell or one and a half, and every press after that is one cell
-and lands within a centimetre of a cell centre. The figure's feet are
+The yardstick at 1:1 with the person 0.3 s into a walk to the right,
+`make snap OUT=a.png ARGS="scene=scale zoom=3 t=3 tod=12 walk=d,0.3"`:
+`walk=KEY,SECONDS` holds a walk key that long in the game's own ticks,
+with `run=1` for the run speed, so a frame mid-stride is reproducible.
+
+A press leases the heading for `World::GRACE` = 0.1 s and each tick
+spends `dt` of it, the last tick cut to what is left, so a tap walks
+exactly 14 cm and a held key — which a terminal delivers as a press per
+repeat interval, 40 ms on a typical desktop after its repeat delay — is a
+steady walk that stops within three ticks of the release. The pause
+between the first press and the first repeat is the terminal's repeat
+delay and shows as a short hitch; the grace is not stretched over it,
+since that would make every release late.
+
+While the figure walks, its art cycles through the poses the tier
+carries (docs/assets.md): the pose is picked by distance walked on this
+walk through a stride of `World::STRIDE` = 0.7 m, so `n` poses hold
+`0.7 / n` metres each and a run cycles three times faster. Stopping
+returns the figure to its rest pose. The figure faces its direction of
+travel: a press sets `Entity::facing` from the screen-space sign of the
+heading, left or right, keeps the last facing when the heading is
+straight toward or away from the camera, and the facing persists when
+stopped; a figure facing left is the art's mirror. The figure's feet are
 drawn at the exact point, at `Map::ground_at`; on a slope the rise or
-fall of the ground shows on top of the cell stepped.
+fall of the ground shows on top of the distance walked.
 
-Shift with an arrow is `Action::Run(dx, dy)`: eight cells, one press at a
-time, stopping where a step is refused. A plain arrow is `Action::Pan`,
-which slides the view by one tile and leaves the player where they are;
-`c` recentres on the player.
+The camera follows with give: `Camera::follow` runs once a tick and
+closes `Camera::EASE` = 0.3 of what is left toward the figure. In the
+isometric mode the figure has a dead zone, the middle third of the screen
+each way, inside which the view does not move, so a few steps do not
+scroll the ground; outside it the offset eases by whole cells, never less
+than one while any remains, until the figure is back inside, so a long
+walk scrolls the ground steadily with the figure held near the zone's
+edge. The ease runs only while a walk is settling, so a plain arrow,
+`Action::Pan`, still slides the view by one tile and leaves it there; `c`
+recentres on the player in one jump. The chase and shoulder views ease
+the aimed point toward the character; the first-person view is the
+character's eye and snaps.
 
 Collision is per tile: `World::try_move` refuses a step when the tile
 the new point falls in is off the map or not in the creature's
-`can_enter`, so the figure can stand a centimetre from the water's edge
-and no closer.
+`can_enter`, so the walk stops at the pond's edge, within a step of it,
+and a diagonal walk into a shore slides along it, since a step refused
+as a whole is tried along each axis alone.
 
 The `Traversal` setting decides what a direction means. In screen space
-a press moves the figure that way on screen, which is a diagonal in map
-space at the compass view and turns with the camera. Along the map axes
-the step is the cell's ground length along the axis the key names, 9 cm
-sideways and 35 cm up or down at 1:1.
+a press walks the figure that way on screen, `Camera::heading`: a
+diagonal in map space at the compass view, turning with the camera, and
+forward or sideways from an eye. Along the map axes the heading is the
+axis the key names.
 
-In a perspective mode a press moves the ground a cell covers at the
-character's depth, a row counting as two columns, since a cell is twice
-as tall as it is wide: about 8 cm a column in the chase view. Walking by
-heading and creature speed, with a walk cycle and facing, is ADR-007's
-stage 3 and not this rule.
+The ground under a screen cell at each zoom is still the camera's to
+say, `Camera::cell_step`, which the snapshot's `player_dx` and
+`player_dy` (centimetres, through the same `try_move`) and the ADR-006
+tests use:
 
-`make snap OUT=a.png ARGS="scene=scale zoom=3 t=3 tod=12 player_dx=25
-player_dy=25"` renders the yardstick with the person a step from the
-tile centre: `player_dx` and `player_dy` are centimetres and go through
-the same move the keys make.
+| zoom | one column | one row |
+|---|---|---|
+| close 1:1 | 8.8 cm | 35.4 cm |
+| near 1:2 | 17.7 cm | 70.7 cm |
+| mid 1:4 | 35.4 cm | 141.4 cm |
+| far 1:8 | 70.7 cm | 141.4 cm |
+
+Those are `TILE_CM / (hw * √2)` for a column and `TILE_CM / (hh * √2)`
+for a row; far and mid share a half height of one and so a row. At 1:1
+the figure walks about two thirds of a column a tick and at 1:8 two
+columns a second, so the same walk is a stride on screen up close and a
+crawl across the overview.
 
 ## Sprites at each scale
 

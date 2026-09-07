@@ -11,10 +11,10 @@ pub enum Action {
     /// `assets/ui.toml` carries the same key, which a test checks.
     Toggle(&'static str),
     Quit,
-    /// Move the player by a screen (or map) direction, one tile per press
-    /// at every zoom.
+    /// Set the player walking in a screen (or map) direction at the
+    /// creature's speed for a short grace, renewed by each press (ADR-008).
     Walk(i32, i32),
-    /// Move the player eight screen cells that way: a stride at any zoom.
+    /// The same at the run speed.
     Run(i32, i32),
     /// Slide the view by whole tiles.
     Pan(i32, i32),

@@ -108,6 +108,7 @@ screenshots: build ## Render the documentation screenshots into docs/screenshots
 	./snap.sh $(SHOTS)/scale-zmid.png scene=scale zoom=1 t=3 tod=12
 	./snap.sh $(SHOTS)/scale-znear.png scene=scale zoom=2 t=3 tod=12
 	./snap.sh $(SHOTS)/scale-zclose.png scene=scale zoom=3 t=3 tod=12
+	./snap.sh $(SHOTS)/stride.png scene=scale zoom=3 t=3 tod=12 walk=d,0.3
 	./snap.sh $(SHOTS)/chase.png fill=1 camera=chase cx=470 cy=-300 t=3 tod=12 deg=-45
 	./snap.sh $(SHOTS)/shoulder.png fill=1 camera=shoulder cx=130 cy=-8 t=3 tod=12 deg=90
 	./snap.sh $(SHOTS)/first-person.png camera=first-person cx=3 cy=23 t=3 tod=12 deg=180 pitch=5

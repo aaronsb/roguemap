@@ -21,6 +21,7 @@ shot worldmap      fill=1 worldmap=1 scale=2 cx=0 cy=0
 shot settings      popover=1 zoom=0
 shot ascii         zoom=1 fill=1 cx=0 cy=0 t=3 tod=12 glyphs=ascii
 shot scale         scene=scale zoom=3 t=3 tod=12
+shot stride        scene=scale zoom=3 t=3 tod=12 walk=d,0.3
 shot props         fill=1 zoom=3 cx=0 cy=0 t=3 tod=15
 shot chase         fill=1 camera=chase cx=470 cy=-300 t=3 tod=12 deg=-45
 shot shoulder      fill=1 camera=shoulder cx=130 cy=-8 t=3 tod=12 deg=90

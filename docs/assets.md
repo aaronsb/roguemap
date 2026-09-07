@@ -39,7 +39,8 @@ assets/
     petscii.toml    glyph roles and sprite vocabulary for the PETSCII set
     ascii.toml      the same for the ASCII set
   art/
-    player/*.txt    hand-drawn sprites, one file per tier
+    player/*.txt    hand-drawn sprites, one file per tier, with the
+                    walk poses after the rest pose in the same file
     props/<name>/*.txt
     tiny/<tileset>/*.txt   one-glyph trees per glyph set
 ```
@@ -115,6 +116,35 @@ over the tile centre, `width / 2` by default; `base_rows` counts rows drawn
 in the base colour (trunk, walls) rather than the top colour (canopy,
 roof), 0 by default. Spaces are transparent, tabs are an error, trailing
 blank lines are dropped and rows are padded to one width on load.
+
+A file may hold more than one pose
+([ADR-008](adr/ADR-008-walking.md)): a line starting with `# pose` after
+the header begins another, the rest of that line a comment. The rows
+before the first such line are the figure at rest; the poses after it
+are its walk cycle in order, drawn by distance walked while it moves.
+Every pose must be the height of the first, so the feet stay put; all
+are padded to one width and share the header's `center` and
+`base_rows`. A row that merely starts with `#` is a row of glyphs, as a
+boulder's are. The player's large tier carries four poses and its medium
+tier two; a sprite that does not walk has none. The editor's grid edits
+the rest pose and writes the others back untouched.
+
+```
+# name=player tier=medium center=2 base_rows=0
+  _
+ (o)
+/|=|\
+ |=|
+ | |
+_| |_
+# pose 1: contact
+  _
+ (o)
+ |=|
+/|=|\
+ / \
+/   \
+```
 
 Tiers are `tiny`, `small`, `medium` and `large`, drawn from zooms 0, 2, 4
 and 6 by default; `min_zoom=N` in the header overrides a tier's first zoom.

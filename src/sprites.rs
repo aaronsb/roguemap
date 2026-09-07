@@ -8,6 +8,7 @@ use crate::map::{Flora, Terrain, Tile, SEA};
 use crate::noise::hash;
 use crate::render::{GCell, Renderer, Scene, FACE_TOP};
 use crate::sprite::Sprite;
+use crate::world::{Entity, Facing};
 
 /// Background and glyph colour of one part of a sprite.
 #[derive(Clone, Copy)]
@@ -55,13 +56,15 @@ pub(crate) fn scatter(sc: &Scene, mx: i32, my: i32, tile: &Tile, mut f: impl FnM
 /// Something standing on a tile that draws as a billboard.
 enum SpriteItem {
     Tree(Flora),
-    /// A creature, by kind.
-    Entity(u8),
+    /// A creature: its kind, facing and walk pick the art (ADR-008).
+    Entity(Entity),
 }
 
 /// A sprite item resolved against the scene: what to draw and how.
 struct Resolved<'a> {
     sprite: &'a Sprite,
+    /// The walk-cycle pose, or `None` at rest.
+    pose: Option<usize>,
     colors: SpriteColors,
     /// Added to the tile depth so creatures stand in front of what they share
     /// a tile with.
@@ -87,6 +90,7 @@ impl SpriteItem {
                 let snow = world.snow_at(tile.temp as f32) * 0.7;
                 Resolved {
                     sprite: ts.tree(sp.form),
+                    pose: None,
                     colors: SpriteColors {
                         top: Tint { bg: crate::biome::seasonal(&sp.canopy, world.season).lerp(pal.snow(), snow), fg: crate::biome::seasonal(&sp.canopy_glyph, world.season).lerp(pal.snow_glyph(), snow * 0.5) },
                         base: Tint { bg: pal.trunk, fg: pal.trunk_glyph },
@@ -94,10 +98,11 @@ impl SpriteItem {
                     depth_bias: 0.0,
                 }
             }
-            SpriteItem::Entity(kind) => {
-                let creature = &assets.creatures[kind as usize % assets.creatures.len()];
+            SpriteItem::Entity(e) => {
+                let creature = &assets.creatures[e.kind as usize % assets.creatures.len()];
                 let tint = Tint { bg: creature.color, fg: creature.glyph };
-                Resolved { sprite: assets.art.for_rows(&creature.art, creature.size[2] * rows_per_metre).expect("creature art was checked at load"), colors: SpriteColors { top: tint, base: tint }, depth_bias: 0.01 }
+                let sprite = assets.art.for_rows_facing(&creature.art, creature.size[2] * rows_per_metre, e.facing == Facing::Left).expect("creature art was checked at load");
+                Resolved { sprite, pose: e.pose(sprite.poses.len()), colors: SpriteColors { top: tint, base: tint }, depth_bias: 0.01 }
             }
         }
     }
@@ -136,7 +141,7 @@ impl Renderer {
             }
             let Some(tile) = self.tile_at(sc, mx, my) else { continue };
             let (x, y) = e.pos();
-            items.push((cam.tile_depth(mx, my), x, y, tile, SpriteItem::Entity(e.kind)));
+            items.push((cam.tile_depth(mx, my), x, y, tile, SpriteItem::Entity(*e)));
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (_, x, y, tile, item) in items {
@@ -152,19 +157,21 @@ impl Renderer {
     fn draw_item(&mut self, sc: &Scene, item: &SpriteItem, tile: &Tile, a: &Anchor, rows_per_metre: f32) {
         let r = item.resolve(sc, tile, rows_per_metre);
         let anchor = Anchor { depth: a.depth + r.depth_bias, ..*a };
-        self.sprite(r.sprite, &anchor, &r.colors, rows_per_metre);
+        self.sprite(r.sprite, r.pose, &anchor, &r.colors, rows_per_metre);
     }
 
-    /// Draw a billboard anchored so its feet sit on the tile's centre row,
-    /// whatever tier the art came from. Cells already holding nearer
-    /// terrain, geometry or sprites are left alone.
-    fn sprite(&mut self, sp: &Sprite, a: &Anchor, col: &SpriteColors, rows_per_metre: f32) {
-        let n = sp.rows.len() as i32;
-        for (r, row) in sp.rows.iter().enumerate() {
+    /// Draw a billboard, in the given walk pose or at rest, anchored so
+    /// its feet sit on the tile's centre row, whatever tier the art came
+    /// from. Cells already holding nearer terrain, geometry or sprites are
+    /// left alone.
+    fn sprite(&mut self, sp: &Sprite, pose: Option<usize>, a: &Anchor, col: &SpriteColors, rows_per_metre: f32) {
+        let rows = sp.pose(pose);
+        let n = rows.len() as i32;
+        for (r, row) in rows.iter().enumerate() {
             let r = r as i32;
             let height = n - 1 - r;
             let y = a.sy - height;
-            let base = r as usize >= sp.rows.len() - sp.base_rows;
+            let base = r as usize >= rows.len() - sp.base_rows;
             let tint = if base { col.base } else { col.top };
             for (c, ch) in row.chars().enumerate() {
                 if ch == ' ' {

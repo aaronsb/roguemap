@@ -83,12 +83,14 @@ impl From<AssetError> for io::Error {
     }
 }
 
-/// One hand-drawn sprite with where it was loaded from.
+/// One hand-drawn sprite with where it was loaded from, and its mirror
+/// for a figure facing the other way (ADR-008), built once here.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArtEntry {
     pub path: String,
     pub file: ArtFile,
     pub sprite: Sprite,
+    pub mirrored: Sprite,
 }
 
 /// Hand-drawn sprites indexed by (name, tier), picked per zoom by each
@@ -112,10 +114,11 @@ impl ArtIndex {
                 return Err(AssetError::file(path, format!("art {:?} tier {} starts at zoom {} like tier {} in {}", file.name, file.tier.name(), file.min_zoom, other.file.tier.name(), other.path)));
             }
         }
-        let sprite = Sprite { rows: file.rows.clone(), center: file.center, base_rows: file.base_rows };
+        let sprite = Sprite { rows: file.rows.clone(), poses: file.poses.clone(), center: file.center, base_rows: file.base_rows };
+        let mirrored = sprite.mirrored();
         let at = slots.iter().position(|&i| self.entries[i].file.min_zoom > file.min_zoom).unwrap_or(slots.len());
         slots.insert(at, self.entries.len());
-        self.entries.push(ArtEntry { path: path.to_string(), file, sprite });
+        self.entries.push(ArtEntry { path: path.to_string(), file, sprite, mirrored });
         Ok(())
     }
 
@@ -138,13 +141,20 @@ impl ArtIndex {
 
     /// The sprite for a thing that stands `rows` rows tall at this zoom:
     /// the tier whose own row count is nearest, so a 2 m person picks the
-    /// nine-row figure at 1:1 and the one-glyph one at 1:8 (ADR-004). The
-    /// sprite is drawn at the tier's size with its feet on the ground.
+    /// twelve-row figure at 1:1 and the one-glyph one at 1:8 (ADR-004).
+    /// The sprite is drawn at the tier's size with its feet on the ground.
     pub fn for_rows(&self, name: &str, rows: f32) -> Option<&Sprite> {
+        self.for_rows_facing(name, rows, false)
+    }
+
+    /// `for_rows` for a figure facing left, which is the art's mirror
+    /// (ADR-008).
+    pub fn for_rows_facing(&self, name: &str, rows: f32, left: bool) -> Option<&Sprite> {
         let slots = self.by_name.get(name)?;
         let distance = |i: usize| (self.entries[i].sprite.rows.len() as f32 - rows).abs();
         let best = slots.iter().copied().reduce(|a, b| if distance(b) < distance(a) { b } else { a })?;
-        Some(&self.entries[best].sprite)
+        let e = &self.entries[best];
+        Some(if left { &e.mirrored } else { &e.sprite })
     }
 
     /// Every art name, sorted.
