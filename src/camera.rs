@@ -175,6 +175,10 @@ pub struct Camera {
     /// Rows a metre draws as at the floor tilt: the basis's `rise` there,
     /// and the same number at every tilt (`detail_rows`).
     detail: f32,
+    /// The cells a tile spans (`footprint`), kept with the basis: the
+    /// ground texture hashes on it once a shaded cell, so it is two
+    /// integers rather than a table basis per call.
+    foot: (i32, i32),
     /// Field of view in radians across the screen; zero is an orthographic
     /// view, and every isometric preset is one.
     pub fov: f32,
@@ -314,6 +318,7 @@ impl Camera {
             tilt: Camera::TILT_RANGE.0,
             relief: Camera::RELIEF,
             detail: 1.0,
+            foot: (1, 1),
             fov: 0.0,
             ox: 0.0,
             oy: 0.0,
@@ -347,6 +352,7 @@ impl Camera {
         cam.pitch = tilt;
         cam.basis = Camera::table_basis(columns, tilt, relief);
         cam.detail = detail;
+        cam.foot = Camera::cells_of(&cam.basis);
         cam
     }
 
@@ -572,6 +578,7 @@ impl Camera {
         let columns = ZOOMS[self.zoom];
         self.basis = Camera::table_basis(columns, self.tilt, self.relief);
         self.detail = Camera::table_basis(columns, Camera::TILT_RANGE.0, self.relief).rise;
+        self.foot = Camera::cells_of(&self.basis);
         self.pitch = self.tilt;
     }
 
@@ -641,6 +648,7 @@ impl Camera {
         self.basis = Basis { cols: self.focal / depth * TILE_METRES, rows: rows * sp * TILE_METRES, rise: rows * cp };
         self.detail = self.basis.rise;
         self.zoom = Camera::nearest_zoom(self.detail);
+        self.foot = Camera::cells_of(&Camera::table_basis(ZOOMS[self.zoom], Camera::TILT_RANGE.0, Camera::RELIEF));
     }
 
     /// The view axes in metres: the direction the eye looks along, screen
@@ -836,15 +844,18 @@ impl Camera {
     /// one cell each: the cells the view slides by on a pan, and the
     /// lattice the ground texture hashes on. Under an eye a tile spans a
     /// different count at every depth, so the footprint there is the
-    /// scale the view is stated at, the carried preset's: one answer per
-    /// frame, quantised, so the ground texture stays put as the character
-    /// moves.
+    /// scale the view is stated at, the carried preset's at the floor
+    /// tilt: one answer per frame, quantised, so the ground texture stays
+    /// put as the character moves. Kept with the basis, since the raster
+    /// asks once a shaded ground cell.
     pub fn footprint(&self) -> (i32, i32) {
-        if self.is_perspective() {
-            return Camera::isometric(self.zoom).footprint();
-        }
+        self.foot
+    }
+
+    /// The cells a basis spans at the compass view.
+    fn cells_of(basis: &Basis) -> (i32, i32) {
         let cells = |n: f32| (n * SQRT_2).round().max(1.0) as i32;
-        (cells(self.basis.cols), cells(self.basis.rows))
+        (cells(basis.cols), cells(basis.rows))
     }
 
     /// The zoom's name and the scale it draws at, for the HUD.
@@ -1620,6 +1631,19 @@ mod tests {
             cam.pan(1, -2);
             assert_eq!((cam.ox - ox, cam.oy - oy), (fw as f32, (-2 * fh) as f32));
         }
+        // Kept with the basis: a tilted table's is its own, and an eye's
+        // is the preset it carries, through aiming, flying and a mode
+        // switch.
+        let mut steep = Camera::isometric(2);
+        steep.set_tilt(70.0 * DEG);
+        assert_eq!(steep.footprint(), ((steep.a() * SQRT_2).round() as i32, (steep.b() * SQRT_2).round() as i32));
+        let mut eye = Camera::chase(FRAC_PI_4);
+        eye.look_at_point(8.5, 8.5, 3.0, 120, 40);
+        assert_eq!(eye.footprint(), Camera::isometric(eye.zoom).footprint());
+        let mut free = eye.in_mode(Camera::MODES.len() - 1);
+        free.fly(80.0, 0.0);
+        assert_eq!(free.footprint(), Camera::isometric(free.zoom).footprint());
+        assert_eq!(free.in_mode(0).footprint(), Camera::isometric(free.zoom).footprint());
     }
 
     #[test]
