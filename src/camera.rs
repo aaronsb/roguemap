@@ -665,6 +665,7 @@ impl Camera {
             cam.table_pitch = cam.pitch;
         }
         if cam.is_orthographic_table() {
+            cam.apply_fov();
             cam.preset(cam.zoom);
             if cam.screen != (0, 0) {
                 let (x, y, z) = cam.anchor;
@@ -706,8 +707,13 @@ impl Camera {
     fn apply_fov(&mut self) {
         // The orthographic table is the one combination that reads no
         // field of view: an orthographic placement turns its distance
-        // into a scale through the focal length (ADR-010).
+        // into a scale through the focal length (ADR-010). It states
+        // neither, as a table built from a zoom preset states neither, so
+        // a trip out to an eye and back leaves no number behind for the
+        // `fov` row to read.
         if self.is_orthographic_table() {
+            self.fov = 0.0;
+            self.focal = 0.0;
             return;
         }
         self.fov = self.fov_override.unwrap_or(self.placement.fov).clamp(10.0 * DEG, 150.0 * DEG);
@@ -2820,6 +2826,13 @@ mod tests {
         assert_eq!(back.basis(), table.basis());
         let ((bx, by), (fx, fy)) = (back.focus(sw, sh), table.focus(sw, sh));
         assert!((bx - fx).abs() < 0.05 && (by - fy).abs() < 0.05, "({bx}, {by}) is not ({fx}, {fy})");
+        // Including the two numbers an orthographic view states as zero,
+        // which the `fov` row and everything keyed by the focal length
+        // read: the eye's field of view is not left behind in the table
+        // it came back to.
+        assert!(eye.fov_degrees() > 0.0 && eye.focal_rows() > 0.0, "the eye has both");
+        assert_eq!((back.fov_degrees(), back.focal_rows()), (0.0, 0.0));
+        assert_eq!((back.fov_degrees(), back.focal_rows()), (table.fov_degrees(), table.focal_rows()));
         // And the angle a vantage was left at survives the trip, as it
         // survives a mode round trip (ADR-009).
         assert_eq!(back.in_mode(1).in_mode(0).pitch_degrees(), 60);
