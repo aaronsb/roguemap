@@ -1,7 +1,7 @@
 //! Key bindings as tables, one per input mode. The help lines are generated
 //! from them, and the README key table is derived from them by hand.
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, MouseEvent, MouseEventKind};
 
 use crate::world::World;
 
@@ -158,6 +158,112 @@ pub fn lookup(table: &[Binding], key: KeyCode, shift: bool) -> Option<Action> {
         _ => None,
     };
     find(true, key).or_else(|| capital.and_then(|k| find(true, k))).or_else(|| capital.and_then(|k| find(false, k))).or_else(|| find(false, key))
+}
+
+/// What the mouse does with the view (ADR-008): the `mouse` settings row.
+/// There is no pointer lock in a terminal, so `free` turns while the
+/// pointer moves and stops when it reaches a screen edge, the way a mouse
+/// stops at the edge of its mousepad — lift it and carry on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MouseMode {
+    /// Turn while a button is held.
+    Drag,
+    /// Turn on any pointer motion.
+    Free,
+    /// Ignore the mouse.
+    Off,
+}
+
+impl MouseMode {
+    /// The values of the settings row, in order; a test keeps the two in
+    /// step.
+    pub const NAMES: [&'static str; 3] = ["drag", "free", "off"];
+
+    pub fn from_index(i: usize) -> MouseMode {
+        match i {
+            1 => MouseMode::Free,
+            2 => MouseMode::Off,
+            _ => MouseMode::Drag,
+        }
+    }
+}
+
+/// What a mouse event asks of the view.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Look {
+    /// Turn by degrees: yaw positive to the right, pitch positive down.
+    Turn(f32, f32),
+    /// One notch of the wheel: 1 in, -1 out.
+    Wheel(i32),
+}
+
+/// The pointer, turning the view (ADR-008). Terminals report the cell the
+/// pointer is in, so a turn is a number of columns and rows moved times
+/// the degrees each is worth.
+#[derive(Default)]
+pub struct Mouse {
+    /// The cell the pointer was last seen in.
+    last: Option<(u16, u16)>,
+    /// Whether a button is down, so a drag turns the view.
+    dragging: bool,
+}
+
+impl Mouse {
+    /// Degrees of yaw a column of pointer movement is worth.
+    pub const YAW_PER_COLUMN: f32 = 2.0;
+    /// Degrees of pitch a row is worth. A cell is twice as tall as it is
+    /// wide, so a row is worth more than a column.
+    pub const PITCH_PER_ROW: f32 = 3.0;
+
+    pub fn new() -> Mouse {
+        Mouse::default()
+    }
+
+    /// Forget where the pointer was, so the next motion is a fresh start
+    /// rather than a jump: after a frame took the screen, or a resize.
+    pub fn forget(&mut self) {
+        self.last = None;
+        self.dragging = false;
+    }
+
+    /// What one mouse event does. Motion turns the view by the cells moved
+    /// since the last one — while a button is down in `drag`, on any
+    /// motion in `free` — and the wheel is passed on for the camera mode
+    /// to read. `off` does nothing at all.
+    pub fn event(&mut self, ev: MouseEvent, mode: MouseMode) -> Option<Look> {
+        if mode == MouseMode::Off {
+            self.forget();
+            return None;
+        }
+        let at = (ev.column, ev.row);
+        match ev.kind {
+            MouseEventKind::Down(_) => {
+                self.dragging = true;
+                self.last = Some(at);
+                None
+            }
+            MouseEventKind::Up(_) => {
+                self.dragging = false;
+                self.last = Some(at);
+                None
+            }
+            MouseEventKind::ScrollUp => Some(Look::Wheel(1)),
+            MouseEventKind::ScrollDown => Some(Look::Wheel(-1)),
+            MouseEventKind::Moved | MouseEventKind::Drag(_) => {
+                let from = self.last.replace(at);
+                if ev.kind == MouseEventKind::Moved {
+                    self.dragging = false;
+                }
+                let turning = mode == MouseMode::Free || self.dragging;
+                let (fx, fy) = from.filter(|_| turning)?;
+                let (dx, dy) = (at.0 as f32 - fx as f32, at.1 as f32 - fy as f32);
+                // Moving right turns right, which is the yaw counting down;
+                // moving down looks down, which is the pitch counting up.
+                (dx != 0.0 || dy != 0.0).then_some(Look::Turn(-dx * Mouse::YAW_PER_COLUMN, dy * Mouse::PITCH_PER_ROW))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// One direction key that is down (ADR-008).
@@ -349,6 +455,71 @@ mod tests {
         assert!(!h.running(), "and its run went with it");
         h.tick(World::GRACE);
         assert!(h.is_empty(), "a lease nothing renews runs out");
+    }
+
+    fn at(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent { kind, column, row, modifiers: crossterm::event::KeyModifiers::NONE }
+    }
+
+    /// A turn is the cells the pointer moved times the degrees each is
+    /// worth, and it starts from where the pointer was, not from the press.
+    #[test]
+    fn the_pointer_turns_the_view_by_the_cells_it_moves() {
+        use crossterm::event::MouseButton::Left;
+        let mut m = Mouse::new();
+        assert_eq!(m.event(at(MouseEventKind::Down(Left), 10, 10), MouseMode::Drag), None, "the press only marks where the drag began");
+        assert_eq!(m.event(at(MouseEventKind::Drag(Left), 14, 10), MouseMode::Drag), Some(Look::Turn(-4.0 * Mouse::YAW_PER_COLUMN, 0.0)));
+        assert_eq!(m.event(at(MouseEventKind::Drag(Left), 14, 13), MouseMode::Drag), Some(Look::Turn(0.0, 3.0 * Mouse::PITCH_PER_ROW)), "and on from there");
+        assert_eq!(m.event(at(MouseEventKind::Drag(Left), 14, 13), MouseMode::Drag), None, "a report from the same cell turns nothing");
+        // In drag, letting the button up ends the turn; motion after it is
+        // only the pointer moving over the scene.
+        m.event(at(MouseEventKind::Up(Left), 14, 13), MouseMode::Drag);
+        assert_eq!(m.event(at(MouseEventKind::Moved, 30, 20), MouseMode::Drag), None);
+        // In free, any motion turns, and the wheel is the wheel in both.
+        let mut f = Mouse::new();
+        assert_eq!(f.event(at(MouseEventKind::Moved, 30, 20), MouseMode::Free), None, "the first sighting is only a place to start from");
+        assert_eq!(f.event(at(MouseEventKind::Moved, 31, 19), MouseMode::Free), Some(Look::Turn(-Mouse::YAW_PER_COLUMN, -Mouse::PITCH_PER_ROW)));
+        assert_eq!(f.event(at(MouseEventKind::ScrollUp, 31, 19), MouseMode::Free), Some(Look::Wheel(1)));
+        assert_eq!(f.event(at(MouseEventKind::ScrollDown, 31, 19), MouseMode::Drag), Some(Look::Wheel(-1)));
+        // Off turns nothing and remembers nothing, whatever arrives.
+        let mut o = Mouse::new();
+        for kind in [MouseEventKind::Down(Left), MouseEventKind::Drag(Left), MouseEventKind::Moved, MouseEventKind::ScrollUp] {
+            assert_eq!(o.event(at(kind, 40, 20), MouseMode::Off), None, "{kind:?} with the mouse off");
+        }
+        assert_eq!(o.event(at(MouseEventKind::Moved, 41, 20), MouseMode::Free), None, "and it starts afresh when it is turned back on");
+    }
+
+    /// Moving the pointer right turns the view right, and a perspective
+    /// pitch stops at the end of its range rather than turning over.
+    #[test]
+    fn a_turn_right_is_a_turn_right_and_the_pitch_clamps() {
+        use crate::camera::Camera;
+        use crossterm::event::MouseButton::Left;
+        let mut m = Mouse::new();
+        m.event(at(MouseEventKind::Down(Left), 10, 10), MouseMode::Drag);
+        // Forty-five columns right is a quarter turn at two degrees each.
+        let Some(Look::Turn(yaw, _)) = m.event(at(MouseEventKind::Drag(Left), 55, 10), MouseMode::Drag) else { panic!("a drag turns") };
+        assert_eq!(yaw, -90.0);
+        let mut cam = Camera::isometric(3);
+        cam.set_angle(0.0);
+        assert_eq!(cam.forward(), (0.0, 1.0), "a yaw of zero looks south");
+        cam.rotate_by(yaw.to_radians(), 120, 40);
+        let (fx, fy) = cam.forward();
+        assert!((fx + 1.0).abs() < 1e-4 && fy.abs() < 1e-4, "looking south and turning right looks west: {fx}, {fy}");
+        // The isometric view has no pitch to turn; a chase view has, and it
+        // stops at the end of its range.
+        let flat = cam.pitch_degrees();
+        cam.pitch_by(30f32.to_radians());
+        assert_eq!(cam.pitch_degrees(), flat, "the isometric pitch is the footprint's");
+        let mut chase = Camera::chase(std::f32::consts::FRAC_PI_4);
+        for _ in 0..40 {
+            chase.pitch_by((10.0 * Mouse::PITCH_PER_ROW).to_radians());
+        }
+        assert_eq!(chase.pitch_degrees(), 85, "however far the pointer is dragged down");
+        for _ in 0..80 {
+            chase.pitch_by((-10.0 * Mouse::PITCH_PER_ROW).to_radians());
+        }
+        assert_eq!(chase.pitch_degrees(), -80, "and up");
     }
 
     #[test]

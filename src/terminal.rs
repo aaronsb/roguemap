@@ -4,7 +4,7 @@ use std::io::{self, Stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
 use crossterm::style::{Color, Print, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
@@ -69,6 +69,16 @@ impl Terminal {
     /// to be held rather than guessed at from its repeats (ADR-008).
     pub fn key_release(&self) -> bool {
         self.key_release
+    }
+
+    /// Report the mouse, so it can turn the view (ADR-008). Motion with no
+    /// button held is a mode of its own that Konsole and kitty report and
+    /// others do not; where it is not reported, dragging still is. The
+    /// terminal's own selection needs shift while this is on.
+    pub fn capture_mouse(&mut self) -> io::Result<()> {
+        execute!(self.out, EnableMouseCapture)?;
+        CAPTURING.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     pub fn width(&self) -> i32 {
@@ -141,14 +151,20 @@ impl Drop for Terminal {
 /// restore knows to pop them. A process has one terminal.
 static PUSHED: AtomicBool = AtomicBool::new(false);
 
+/// Whether the mouse is being reported, so the restore turns it off.
+static CAPTURING: AtomicBool = AtomicBool::new(false);
+
 /// Put the terminal back as it was found: pop the keyboard enhancement
-/// flags if they were pushed, show the cursor, leave the alternate screen
-/// and drop raw mode. Idempotent, so the drop and the panic hook may both
-/// run it.
+/// flags if they were pushed, stop reporting the mouse, show the cursor,
+/// leave the alternate screen and drop raw mode. Idempotent, so the drop
+/// and the panic hook may both run it.
 fn restore() {
     let mut out = io::stdout();
     if PUSHED.swap(false, Ordering::SeqCst) {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
+    if CAPTURING.swap(false, Ordering::SeqCst) {
+        let _ = execute!(out, DisableMouseCapture);
     }
     let _ = execute!(out, Show, LeaveAlternateScreen);
     let _ = disable_raw_mode();

@@ -184,3 +184,34 @@ The event loop treats a repeat as a press, which is what a repeat has
 always been, and a release lifts a direction key whatever modifiers it
 comes back with and whatever frame has focus, so a walk never outlives
 its key.
+
+## Consequences of looking with the mouse
+
+The owner, on the perspective views: "maybe we should use mouse input for
+lookaround (typical fps mouse)."
+
+The game captures the mouse, `Terminal::capture_mouse`, and the restore
+turns the reporting off with everything else. `input::Mouse` turns cells
+of pointer movement into a `Look`: `Turn` by the cells moved times
+`YAW_PER_COLUMN` = 2 degrees and `PITCH_PER_ROW` = 3 degrees, moving
+right turning right and moving down looking down, or `Wheel`, which the
+event loop reads as the field of view in a perspective mode and the zoom
+in the isometric one. `Camera::pitch_by` already clamps to the mode's
+range and does nothing to an isometric view, so rows turn nothing there.
+Nothing is added to the camera.
+
+The `mouse` settings row is `drag`, `free` or `off`. A terminal has no
+pointer lock, so `free` turns while the pointer moves and stops at the
+screen edge, the way a mouse stops at the edge of a mousepad; and motion
+with no button held is a reporting mode not every terminal sends, which
+is why `drag` is the default. The mouse does not turn the view while a
+frame has focus, and the pointer's last place is forgotten then, so the
+first motion afterwards is a fresh start rather than a jump. No frame
+takes clicks.
+
+The walk needs nothing for the first-person view: a screen-space heading
+comes from the camera's own axes, so `w` already walks away from the eye
+at whatever yaw the mouse has turned to.
+
+Adding the row grows the settings popover by a line, which is the one
+golden frame the mouse changes.

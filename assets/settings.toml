@@ -6,6 +6,13 @@ values = ["screen space", "map axes"]
 default = 0
 
 [[setting]]
+key = "mouse"
+description = "What the mouse does with the view (ADR-008): drag turns it while a button is held, free turns it on any pointer motion (a terminal has no pointer lock, so the turn stops at the screen edge and you lift the mouse as you would at the edge of a mousepad), off ignores it. The wheel zooms the isometric view and narrows or widens a perspective one either way."
+label = "Mouse"
+values = ["drag", "free", "off"]
+default = 0
+
+[[setting]]
 key = "camera"
 description = "How the world maps to the screen (ADR-007): the isometric mode is the orthographic view at the pitch the four footprints imply; chase, shoulder and first-person are perspective views from an eye placed from the character."
 label = "Camera"

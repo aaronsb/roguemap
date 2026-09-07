@@ -4,6 +4,7 @@
 
 use crate::assets::Assets;
 use crate::camera::Camera;
+use crate::input::MouseMode;
 use crate::map::Map;
 use crate::properties::Identity;
 use crate::render::{FogMode, RenderOptions};
@@ -24,7 +25,7 @@ pub struct SettingItem {
 }
 
 /// Keys the engine reads; loading fails if one is missing.
-pub const REQUIRED_SETTINGS: [&str; 14] = ["traversal", "camera", "fov", "fog", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
+pub const REQUIRED_SETTINGS: [&str; 15] = ["traversal", "mouse", "camera", "fov", "fog", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
 
 pub struct Settings {
     pub items: Vec<SettingItem>,
@@ -86,6 +87,11 @@ impl Settings {
 
     pub fn screen_space(&self) -> bool {
         self.get("traversal") == 0
+    }
+
+    /// What the mouse does with the view (ADR-008).
+    pub fn mouse_mode(&self) -> MouseMode {
+        MouseMode::from_index(self.get("mouse"))
     }
 
     pub fn filled(&self) -> bool {
@@ -164,6 +170,16 @@ mod tests {
         // The fog row's values are the renderer's fog modes, and the field
         // of view row is `preset` then whole degrees, rising.
         assert_eq!(a.setting("fog").unwrap().values, FogMode::NAMES);
+        // The mouse row's values are the modes the pointer has (ADR-008),
+        // and each of them is what the setting reads back.
+        let mouse = a.setting("mouse").unwrap();
+        assert_eq!(mouse.values, MouseMode::NAMES);
+        assert_eq!(mouse.values[mouse.default as usize], "drag");
+        let mut s = Settings::new(&a);
+        for (i, mode) in [MouseMode::Drag, MouseMode::Free, MouseMode::Off].into_iter().enumerate() {
+            s.set("mouse", i);
+            assert_eq!(s.mouse_mode(), mode, "{}", MouseMode::NAMES[i]);
+        }
         let fov = a.setting("fov").unwrap();
         assert_eq!(fov.values[fov.default as usize], "preset");
         let degrees: Vec<f32> = fov.values[1..].iter().map(|v| v.parse::<f32>().expect("a whole number of degrees")).collect();

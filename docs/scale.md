@@ -159,6 +159,34 @@ first repeat is the terminal's repeat delay and shows as a short hitch;
 the lease is not stretched over it, since that would make every release
 late.
 
+### The mouse
+
+The game captures the mouse, and the `Mouse` settings row says what the
+pointer does: `drag`, the default, turns the view while a button is held;
+`free` turns it on any motion, which is the first-person feel the owner
+asked for; `off` ignores it. A terminal reports the cell the pointer is
+in, so a turn is the cells moved times `Mouse::YAW_PER_COLUMN` = 2
+degrees of yaw a column and `Mouse::PITCH_PER_ROW` = 3 degrees of pitch a
+row — a row is worth more because a cell is twice as tall as it is wide.
+Moving right turns right and moving down looks down, through
+`Camera::rotate_by` and `Camera::pitch_by`; the isometric view has no
+pitch of its own, so rows do nothing there. The wheel narrows and widens
+a perspective view's field of view and steps the isometric zoom.
+
+A terminal has no pointer lock, so in `free` the turn stops when the
+pointer reaches the edge of the screen: lift the mouse and put it back
+down in the middle, as at the edge of a mousepad. Motion with no button
+held is its own reporting mode (1003) that Konsole and kitty send and
+some terminals do not; where it is missing, `drag` still works. While a
+frame has focus the pointer does not turn the view, and where it was is
+forgotten, so the first motion after the frame closes is a fresh start
+and not a jump. The terminal's own selection needs shift while the game
+is running.
+
+In a first-person or chase view the walk keys already follow the view: a
+screen-space heading is taken from the camera's own axes, so `w` walks
+away from the eye along whatever yaw the mouse has turned to.
+
 While the figure walks, its art cycles through the poses the tier
 carries (docs/assets.md): the pose is picked by distance walked on this
 walk through a stride of `World::STRIDE` = 0.7 m, so `n` poses hold

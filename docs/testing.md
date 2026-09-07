@@ -216,6 +216,17 @@ is one command.
   lease as its grace, and stopping ends it on the tick with the stride
   rested. A help entry added to the binding table falls past the 120
   columns the golden frames pin.
+- **The mouse** (ADR-008). A drag turns the view by the cells the pointer
+  moved times the degrees each is worth, on from where it was last seen
+  and not from the press, and a report from the same cell turns nothing;
+  the press only marks where the drag began, and after the button is up a
+  plain motion turns nothing in `drag` while any motion turns in `free`;
+  the wheel is a notch either way in both. `off` turns nothing whatever
+  arrives and forgets where the pointer was. Moving the pointer right
+  turns the view right — looking south and turning a quarter looks west —
+  the isometric pitch does not move, and a perspective pitch stops at the
+  ends of its range however far the pointer is dragged. The `mouse` row's
+  values are `MouseMode::NAMES` and each reads back as its mode.
 - **Walking** (ADR-008). Over ticks of 40 ms with the key renewed each
   tick, the distance walked is the speed times the seconds to the
   centimetre, 2.8 m in two seconds at 1.4 m/s, and a run on a diagonal

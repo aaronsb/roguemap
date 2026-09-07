@@ -152,6 +152,7 @@ shortcut and the binding table in step.
 | Setting | Values | Shortcut |
 |---|---|---|
 | Traversal | screen space, map axes | |
+| Mouse | drag, free, off | |
 | Camera | isometric, chase, shoulder, first-person | |
 | Field of view | preset, 30, 40, 50, 60, 70, 80, 90, 100, 110 | `<` `>` |
 | Fog | perspective, always, never | |

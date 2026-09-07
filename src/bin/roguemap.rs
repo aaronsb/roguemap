@@ -4,13 +4,13 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 
 use roguemap::assets::Assets;
 use roguemap::camera::Camera;
 use roguemap::canvas::Canvas;
 use roguemap::frame::{Flow, FrameCtx, Frames, Item, List};
-use roguemap::input::{self, Action, Held};
+use roguemap::input::{self, Action, Held, Look, Mouse};
 use roguemap::map::Map;
 use roguemap::render::{Renderer, Scene};
 use roguemap::settings::Settings;
@@ -50,6 +50,8 @@ struct App {
     /// The direction keys down (ADR-008); their sum is the heading each
     /// tick, so two of them walk a diagonal.
     held: Held,
+    /// The pointer, which turns the view (ADR-008).
+    mouse: Mouse,
     /// Screen size in cells.
     sw: i32,
     sh: i32,
@@ -68,7 +70,23 @@ impl App {
         cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
         let inset_corner = settings.get("inset").max(1);
-        App { map, world, cam, settings, inset_corner, settling: false, walking: false, held: Held::new(key_release), wmap: WorldMap::new(), frames, renderer: Renderer::new(sw, sh), tilesets, sw, sh }
+        App {
+            map,
+            world,
+            cam,
+            settings,
+            inset_corner,
+            settling: false,
+            walking: false,
+            held: Held::new(key_release),
+            mouse: Mouse::new(),
+            wmap: WorldMap::new(),
+            frames,
+            renderer: Renderer::new(sw, sh),
+            tilesets,
+            sw,
+            sh,
+        }
     }
 
     /// One tick of time (ADR-008): the clock and the weather, the heading
@@ -112,6 +130,29 @@ impl App {
         self.sw = w;
         self.sh = h;
         self.renderer.resize(w, h);
+        self.mouse.forget();
+    }
+
+    /// Turn the view with the pointer (ADR-008). A focused frame owns the
+    /// screen, so the mouse does nothing under one and forgets where it
+    /// was, and the next motion after it closes is a fresh start rather
+    /// than a jump. The wheel narrows and widens a perspective view's
+    /// field of view and steps the isometric zoom.
+    fn mouse_event(&mut self, m: MouseEvent) {
+        if self.frames.focus().is_some() {
+            self.mouse.forget();
+            return;
+        }
+        let Some(look) = self.mouse.event(m, self.settings.mouse_mode()) else { return };
+        match look {
+            Look::Turn(yaw, pitch) => {
+                self.cam.rotate_by(yaw.to_radians(), self.sw, self.sh);
+                // An isometric view has no pitch of its own to turn.
+                self.cam.pitch_by(pitch.to_radians());
+            }
+            Look::Wheel(dir) if self.cam.is_perspective() => self.settings.step_fov(-dir, self.cam.fov_degrees()),
+            Look::Wheel(dir) => self.cam.zoom_by(dir, self.sw, self.sh),
+        }
     }
 
     /// Draw the scene and every open frame into `cv` at animation time
@@ -330,6 +371,7 @@ fn main() -> std::io::Result<()> {
     // raw, enhanced keyboard behind it.
     terminal::install_panic_hook();
     let mut term = terminal::Terminal::with_key_release()?;
+    term.capture_mouse()?;
     let mut app = App::new(assets, seed, size, term.width(), term.height(), term.key_release());
 
     let start = Instant::now();
@@ -360,6 +402,7 @@ fn main() -> std::io::Result<()> {
                 // comes back with, and whatever frame has focus, so a walk
                 // never outlives the key that started it (ADR-008).
                 Event::Key(k) if k.kind == KeyEventKind::Release => app.held.release(k.code),
+                Event::Mouse(m) => app.mouse_event(m),
                 Event::Resize(w, h) => {
                     term.resize(w, h);
                     app.resize(w as i32, h as i32);

@@ -87,6 +87,7 @@ help line at the bottom of the screen.
 | `Tab` or `o` | the settings frame: the camera mode (isometric, chase, shoulder, first-person), the field of view, the fog and the rest |
 | `m` | the world map |
 | `x` | the inset view at the other end of the zoom scale |
+| mouse | turns the view: drag with a button, or any motion under the `Mouse` setting's `free`; the wheel zooms the isometric view and narrows or widens a perspective one |
 | `i`, `I`, `L`, `C` | inventory, stats, history, conversation |
 | `H` | hide the HUD |
 | `q` or `Esc` | quit |
