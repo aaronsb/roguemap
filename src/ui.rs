@@ -99,7 +99,7 @@ impl Content for Hud {
         let s = world.season.rem_euclid(4.0);
         let here = world
             .player()
-            .and_then(|e| ctx.map.get(e.mx, e.my))
+            .and_then(|e| ctx.map.get(e.mx(), e.my()))
             .map(|t| {
                 let b = t.biome(&ctx.map.assets);
                 format!("{} ({}) {}C z{}", b.name, b.koppen, t.temp, t.z)
@@ -198,7 +198,7 @@ pub struct WorldMapView;
 
 impl Content for WorldMapView {
     fn draw(&self, cv: &mut Canvas, rect: Rect, ctx: &FrameCtx) {
-        ctx.wmap.draw(cv, rect, ctx.map, ctx.world, ctx.world.player().map(|e| (e.mx, e.my)));
+        ctx.wmap.draw(cv, rect, ctx.map, ctx.world, ctx.world.player().map(|e| e.tile()));
     }
 
     fn focusable(&self) -> bool {
@@ -260,10 +260,15 @@ impl Content for Inset {
         let (w, h) = (*w, *h);
         cam.angle = ctx.cam.angle;
         cam.set_zoom(Camera::inset_zoom(ctx.cam.zoom), w, h);
-        // The inset follows the player wherever they are; with nobody in
+        // The inset follows the player wherever they stand; with nobody in
         // the world it keeps the main view's centre.
-        let (mx, my) = ctx.world.player().map(|p| (p.mx, p.my)).unwrap_or_else(|| ctx.cam.center_tile(ctx.map, cv.w, cv.h));
-        cam.look_at(mx, my, ctx.map, w, h);
+        match ctx.world.player() {
+            Some(p) => cam.look_at_entity(p, ctx.map, w, h),
+            None => {
+                let (mx, my) = ctx.cam.center_tile(ctx.map, cv.w, cv.h);
+                cam.look_at(mx, my, ctx.map, w, h);
+            }
+        }
         let scene = Scene::new(ctx.map, ctx.ts, ctx.world, cam, ctx.t);
         renderer.draw(canvas, &scene, &RenderOptions { aa: false, clouds: false });
         cv.blit(canvas, rect.x, rect.y);
@@ -282,8 +287,12 @@ impl Content for Inset {
 fn stats_items(ctx: &FrameCtx) -> Vec<Item> {
     let world = ctx.world;
     let player = world.player();
-    let mut items = vec![Item::detailed("position", player.map(|e| format!("{}, {}", e.mx, e.my)).unwrap_or_else(|| "unplaced".to_string()))];
-    if let Some(t) = player.and_then(|e| ctx.map.get(e.mx, e.my)) {
+    let position = player.map(|e| {
+        let (x, y) = e.metres();
+        format!("{x:.2}, {y:.2} m  tile {}, {}", e.mx(), e.my())
+    });
+    let mut items = vec![Item::detailed("position", position.unwrap_or_else(|| "unplaced".to_string()))];
+    if let Some(t) = player.and_then(|e| ctx.map.get(e.mx(), e.my())) {
         let b = t.biome(&ctx.map.assets);
         items.push(Item::detailed("biome", format!("{} ({})", b.name, b.koppen)));
         items.push(Item::detailed("temperature", format!("{} C", t.temp)));
@@ -445,10 +454,15 @@ mod tests {
         fx.cam.pan(3, 3);
         assert_eq!(inset_cells(&inset, &fx, 24, 10), here, "panning the main view does not move the inset");
 
-        // Walking does move it.
+        // Walking does move it, by a step short of a tile as much as by tiles.
         let p = fx.world.player_mut().expect("the player was spawned");
-        p.mx += 4;
-        p.my += 4;
+        let (mx, my) = p.tile();
+        p.x_cm += 60;
+        p.y_cm += 60;
+        assert_eq!(p.tile(), (mx, my), "still in the same tile");
+        assert_ne!(inset_cells(&inset, &fx, 24, 10), here, "the inset followed the player within the tile");
+        let p = fx.world.player_mut().expect("the player was spawned");
+        p.set_tile(mx + 4, my + 4);
         assert_ne!(inset_cells(&inset, &fx, 24, 10), here, "the inset followed the player");
 
         // The title is the row's plus the ratio, which is the far end of

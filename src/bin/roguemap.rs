@@ -19,7 +19,7 @@ use roguemap::world::World;
 use roguemap::worldmap::WorldMap;
 use roguemap::{lsystem, snapshot, terminal, ui};
 
-/// Tiles a shift-arrow stride covers.
+/// Screen cells a shift-arrow stride covers (ADR-006).
 const STRIDE: i32 = 8;
 
 /// Whether the main loop goes on after a key.
@@ -110,7 +110,7 @@ impl App {
             return;
         }
         if self.frames.toggle(name) && name == "worldmap" {
-            self.wmap.cursor = self.world.player().map(|e| (e.mx, e.my)).unwrap_or((0, 0));
+            self.wmap.cursor = self.world.player().map(|e| e.tile()).unwrap_or((0, 0));
         }
     }
 
@@ -162,7 +162,7 @@ impl App {
             Action::Pan(dx, dy) => self.cam.pan(dx, dy),
             Action::Centre => {
                 if let Some(p) = self.world.player() {
-                    self.cam.look_at(p.mx, p.my, &self.map, sw, sh);
+                    self.cam.look_at_entity(p, &self.map, sw, sh);
                 }
             }
             Action::RotateQuarter(steps) => self.cam.rotate(steps, sw, sh),
@@ -211,24 +211,28 @@ impl App {
         }
     }
 
-    /// Move the player `tiles` steps and keep the camera on them. One
-    /// keypress is one tile at every zoom (ADR-004), so a step is a whole
-    /// block at 1:1 and an eighth of one at 1:8. In screen space a key moves
-    /// the figure that way on screen, which is a diagonal in map space; in
-    /// map-axes mode keys follow the map's own north and east. A stride
-    /// stops where a step is refused.
-    fn walk(&mut self, dir: (i32, i32), tiles: i32) {
-        let (dx, dy) = self.cam.walk_step(self.settings.screen_space(), dir.0, dir.1);
+    /// Move the player `cells` screen cells and keep the camera on them.
+    /// One keypress is one screen cell at the current zoom (ADR-006): the
+    /// ground under a column or a row, about 9 cm sideways at 1:1 and 71
+    /// at 1:8, each press aimed at the centre of the next cell from where
+    /// the figure then stands. In screen space a key moves the figure that
+    /// way on screen, which is a diagonal in map space; in map-axes mode
+    /// keys follow the map's own north and east by the same length. A
+    /// stride stops where a step is refused.
+    fn walk(&mut self, dir: (i32, i32), cells: i32) {
         let mut moved = false;
-        for _ in 0..tiles {
+        for _ in 0..cells {
+            let Some(p) = self.world.player() else { break };
+            let (x, y) = p.pos();
+            let (dx, dy) = self.cam.cell_step(self.settings.screen_space(), dir.0, dir.1, (p.x_cm, p.y_cm), self.map.ground_at(x, y));
             if !self.world.try_move(&self.map, dx, dy) {
                 break;
             }
             moved = true;
         }
         if moved {
-            if let Some((mx, my)) = self.world.player().map(|p| (p.mx, p.my)) {
-                self.log(format!("walked to {mx}, {my}"));
+            if let Some((x, y)) = self.world.player().map(|p| p.metres()) {
+                self.log(format!("walked to {x:.2}, {y:.2} m"));
             }
         }
         self.cam.follow(&self.world, &self.map, self.sw, self.sh);

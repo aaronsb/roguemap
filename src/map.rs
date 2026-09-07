@@ -51,6 +51,9 @@ const LAPSE: f32 = 26.4;
 /// Side of a tile in metres. Every size in the tables is in metres, and a
 /// metre draws as `Camera::rows_per_metre` rows (ADR-004).
 pub const TILE_METRES: f32 = 2.0;
+/// The same side in centimetres, the unit entity positions are held in
+/// (ADR-006); the tile a position falls in is `cm.div_euclid(TILE_CM)`.
+pub const TILE_CM: i32 = (TILE_METRES * 100.0) as i32;
 /// How far inland a beach reaches: sand at sea level needs water within
 /// this many tiles, so a low plain away from any water is grass.
 const SHORE_TILES: i32 = 3;
@@ -536,6 +539,23 @@ impl Map {
     /// Tile height: the smooth field floored at the tile centre.
     pub fn height(&self, x: i32, y: i32) -> i32 {
         self.height_smooth(x as f32 + 0.5, y as f32 + 0.5).floor() as i32
+    }
+
+    /// Height a figure stands at over a point of the map (ADR-006): the
+    /// smooth field between tile centres, the bilinear of the four nearest
+    /// tiles' `hf`, never below sea level. At a tile's centre it is the
+    /// tile's own `hf`; past the map's edge the nearest tile's. The
+    /// sub-tile detail the walk adds to the drawn surface is not applied.
+    pub fn ground_at(&self, x: f32, y: f32) -> f32 {
+        let (gx, gy) = (x - 0.5, y - 0.5);
+        let (ix, iy) = (gx.floor() as i32, gy.floor() as i32);
+        let (fx, fy) = (gx - ix as f32, gy - iy as f32);
+        let corners = [(ix, iy), (ix + 1, iy), (ix, iy + 1), (ix + 1, iy + 1)].map(|(mx, my)| self.get(mx, my).map(|t| t.hf));
+        let fallback = corners.iter().flatten().next().copied().unwrap_or(SEA as f32);
+        let [a, b, c, d] = corners.map(|h| h.unwrap_or(fallback));
+        let top = a + (b - a) * fx;
+        let bot = c + (d - c) * fx;
+        (top + (bot - top) * fy).max(SEA as f32)
     }
 
     /// Whether a tile is the site of its own neighbourhood: no tile within

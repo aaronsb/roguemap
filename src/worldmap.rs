@@ -49,13 +49,12 @@ impl WorldMap {
         self.scale = (self.scale as i32 + dir).rem_euclid(n) as usize;
     }
 
-    /// Put the player on the nearest land to the cursor and return that
-    /// tile.
+    /// Put the player at the centre of the nearest land tile to the cursor
+    /// and return that tile.
     pub fn teleport(&self, map: &Map, world: &mut World) -> (i32, i32) {
         let (tx, ty) = map.nearest_land(self.cursor.0, self.cursor.1);
         if let Some(p) = world.player_mut() {
-            p.mx = tx;
-            p.my = ty;
+            p.set_tile(tx, ty);
         }
         (tx, ty)
     }
@@ -197,11 +196,15 @@ mod tests {
         let mut wm = WorldMap::new();
         wm.cursor = (9, 12);
         assert_eq!(map.get(9, 12).unwrap().terrain, Terrain::Water);
+        // The player starts a step off the centre of their tile; teleport
+        // lands them at the centre of the destination.
+        world.player_mut().unwrap().x_cm += 37;
         assert_eq!(wm.teleport(&map, &mut world), (4, 10));
-        assert_eq!(world.player().map(|p| (p.mx, p.my)), Some((4, 10)));
+        assert_eq!(world.player().map(|p| (p.x_cm, p.y_cm)), Some((900, 2100)), "the centre of tile (4, 10)");
+        assert_eq!(world.player().map(|p| p.tile()), Some((4, 10)));
         wm.cursor = (20, 10);
         assert_eq!(wm.teleport(&map, &mut world), (20, 10), "a land cursor is the destination itself");
-        assert_eq!(world.player().map(|p| (p.mx, p.my)), Some((20, 10)));
+        assert_eq!(world.player().map(|p| p.tile()), Some((20, 10)));
         // The map's own extents and cursor stride.
         assert_eq!(wm.stride(), (4, 8));
         wm.move_cursor(1, -1);

@@ -53,7 +53,9 @@ impl SnapArgs {
 /// Keys: seed, t, tod, season, cover, wind, precip (0..1), simdays (run a
 /// storm that many days first), glyphs (petscii|ascii), rot, deg, zoom,
 /// size, fill (1 for an unbounded world), cx, cy (tile to centre on),
-/// popover (1), fire (1 to place a campfire at centre), player (1), hud
+/// popover (1), fire (1 to place a campfire at centre), player (1) with
+/// player_dx, player_dy (centimetres to walk them from the tile centre,
+/// through the same move the keys make, so water refuses it), hud
 /// (0|1), inset (0 off, 1..4 the corner of the inset view), worldmap (1)
 /// with scale, open (frame names of ui.toml, comma separated), frames (N,
 /// to time rendering), scene (`scale` for the yardstick of ADR-004: a
@@ -142,6 +144,12 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     } else if a.flag("player") {
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
     }
+    // player_dx / player_dy walk the player from the spawn, in centimetres,
+    // the way a run of keypresses would, so a stepped figure is reproducible.
+    let (pdx, pdy) = (a.num("player_dx", 0.0) as i32, a.num("player_dy", 0.0) as i32);
+    if (pdx, pdy) != (0, 0) {
+        world.try_move(&map, pdx, pdy);
+    }
     if a.flag("fire") {
         let (mx, my) = cam.center_tile(&map, sw, sh);
         world.light_campfire(&map, mx, my);
@@ -210,5 +218,22 @@ mod tests {
         let top = hud.lines().next().expect("a frame has rows");
         assert!(top.contains("45deg  1:1 close  "), "{top}");
         assert!(!top.contains("zoom "), "{top}");
+    }
+
+    #[test]
+    fn a_centimetre_step_moves_the_figure_and_water_refuses_it() {
+        // On the flat yardstick scene the player is the only twelve-row
+        // figure; a step of a few cells moves it and nothing else.
+        let base = glyphs(&render(test_assets(), 120, 40, &["scene=scale", "zoom=3", "t=3", "tod=12", "hud=0"]));
+        let moved = glyphs(&render(test_assets(), 120, 40, &["scene=scale", "zoom=3", "t=3", "tod=12", "hud=0", "player_dx=25", "player_dy=25"]));
+        assert_ne!(base, moved, "a 25 cm step is a visible row at 1:1");
+        let world_of = |extra: &[&str]| {
+            let mut args = vec!["player=1", "zoom=0", "t=3", "tod=12"];
+            args.extend_from_slice(extra);
+            render(test_assets(), 20, 8, &args)
+        };
+        // The argument goes through try_move: a step that lands off the island
+        // is refused and the frame is the spawn's.
+        assert_eq!(glyphs(&world_of(&[])), glyphs(&world_of(&["player_dx=-9999999"])));
     }
 }

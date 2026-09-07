@@ -109,31 +109,36 @@ impl Renderer {
         let (world, cam) = (sc.world, sc.cam);
         let tiny_trees = tree_billboards(cam);
         let (x0, y0, x1, y1) = self.tile_bounds(cam);
-        let mut items: Vec<(f32, i32, i32, Tile)> = Vec::new();
-        for my in y0..=y1 {
-            for mx in x0..=x1 {
-                let Some(tile) = self.tile_at(sc, mx, my) else { continue };
-                let has_entity = world.entities.iter().any(|e| e.mx == mx && e.my == my);
-                if !(tiny_trees && tile.tree.is_some()) && !has_entity {
-                    continue;
+        // Each item at its point of the map: a tree at its tile's centre, a
+        // creature wherever it stands (ADR-006). Depth is the tile's, so a
+        // figure anywhere in a tile sorts in front of that tile's ground.
+        let mut items: Vec<(f32, f32, f32, Tile, SpriteItem)> = Vec::new();
+        if tiny_trees {
+            for my in y0..=y1 {
+                for mx in x0..=x1 {
+                    let Some(tile) = self.tile_at(sc, mx, my) else { continue };
+                    if let Some(flora) = tile.tree {
+                        items.push((cam.tile_depth(mx, my), mx as f32 + 0.5, my as f32 + 0.5, tile, SpriteItem::Tree(flora)));
+                    }
                 }
-                items.push((cam.tile_depth(mx, my), mx, my, tile));
             }
         }
+        for e in &world.entities {
+            let (mx, my) = e.tile();
+            if mx < x0 || mx > x1 || my < y0 || my > y1 {
+                continue;
+            }
+            let Some(tile) = self.tile_at(sc, mx, my) else { continue };
+            let (x, y) = e.pos();
+            items.push((cam.tile_depth(mx, my), x, y, tile, SpriteItem::Entity(e.kind)));
+        }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        for (_, mx, my, tile) in items {
-            let a = cam.anchor_f(mx, my, tile.hf.max(SEA as f32));
+        for (_, x, y, tile, item) in items {
+            let a = cam.anchor_at(x, y, sc.map.ground_at(x, y));
             if a.sx < -40 || a.sx > self.w + 40 || a.sy < -40 || a.sy > self.h + 40 {
                 continue;
             }
-            if tiny_trees {
-                if let Some(flora) = tile.tree {
-                    self.draw_item(sc, &SpriteItem::Tree(flora), &tile, &a);
-                }
-            }
-            for e in world.entities.iter().filter(|e| e.mx == mx && e.my == my) {
-                self.draw_item(sc, &SpriteItem::Entity(e.kind), &tile, &a);
-            }
+            self.draw_item(sc, &item, &tile, &a);
         }
     }
 

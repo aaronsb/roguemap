@@ -212,7 +212,7 @@ pub fn build(assets: &Rc<Assets>, subject: Subject, s: &PreviewSettings) -> Fixt
             caption = format!("showing four {} on the centre tile", assets.props[subject.row].name);
         }
         TableKind::Creatures if subject.row < assets.creatures.len() => {
-            world.entities.push(Entity { kind: subject.row as u8, mx: cx, my: cy });
+            world.entities.push(Entity::at_tile(subject.row as u8, cx, cy));
             top = assets.creatures[subject.row].size[2];
             caption = format!("showing {} standing on {} ground", assets.creatures[subject.row].name, assets.biomes[biome].name);
         }

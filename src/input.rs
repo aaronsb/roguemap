@@ -14,7 +14,7 @@ pub enum Action {
     /// Move the player by a screen (or map) direction, one tile per press
     /// at every zoom.
     Walk(i32, i32),
-    /// Move the player eight tiles that way: a stride at any zoom.
+    /// Move the player eight screen cells that way: a stride at any zoom.
     Run(i32, i32),
     /// Slide the view by whole tiles.
     Pan(i32, i32),

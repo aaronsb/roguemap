@@ -8,7 +8,7 @@
 
 use crate::biome::seasonal_temp;
 use crate::canvas::Rgb;
-use crate::map::{Map, Terrain};
+use crate::map::{Map, Terrain, TILE_CM};
 use crate::noise::{fbm, smoothstep, value, FbmCache};
 use crate::properties::Identity;
 
@@ -65,13 +65,53 @@ pub struct Light {
 /// The creature kind the player is: the first row of `creatures.toml`.
 pub const PLAYER: u8 = 0;
 
-/// A creature standing on a tile, drawn with its kind's art.
-#[derive(Clone, Copy, Debug)]
+/// A creature standing at a point of the map, drawn with its kind's art.
+/// Its position is centimetres (ADR-006); the tile it stands in is
+/// derived, and collision is per tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entity {
     /// Index into the creature table; the player is 0.
     pub kind: u8,
-    pub mx: i32,
-    pub my: i32,
+    pub x_cm: i32,
+    pub y_cm: i32,
+}
+
+impl Entity {
+    /// A creature standing at the centre of a tile.
+    pub fn at_tile(kind: u8, mx: i32, my: i32) -> Entity {
+        let mut e = Entity { kind, x_cm: 0, y_cm: 0 };
+        e.set_tile(mx, my);
+        e
+    }
+
+    /// Put the creature at the centre of a tile.
+    pub fn set_tile(&mut self, mx: i32, my: i32) {
+        self.x_cm = mx * TILE_CM + TILE_CM / 2;
+        self.y_cm = my * TILE_CM + TILE_CM / 2;
+    }
+
+    /// The tile the creature stands in.
+    pub fn mx(&self) -> i32 {
+        self.x_cm.div_euclid(TILE_CM)
+    }
+
+    pub fn my(&self) -> i32 {
+        self.y_cm.div_euclid(TILE_CM)
+    }
+
+    pub fn tile(&self) -> (i32, i32) {
+        (self.mx(), self.my())
+    }
+
+    /// The position in tiles, fractional, as the camera projects it.
+    pub fn pos(&self) -> (f32, f32) {
+        (self.x_cm as f32 / TILE_CM as f32, self.y_cm as f32 / TILE_CM as f32)
+    }
+
+    /// The position in metres, for a readout.
+    pub fn metres(&self) -> (f32, f32) {
+        (self.x_cm as f32 / 100.0, self.y_cm as f32 / 100.0)
+    }
 }
 
 /// A ground prop placed by hand rather than by the hashed scatter, at a
@@ -417,7 +457,7 @@ impl World {
     /// Put the player on the nearest land to a position.
     pub fn spawn_player(&mut self, map: &Map, mx: i32, my: i32) {
         let (mx, my) = map.nearest_land(mx, my);
-        self.entities.push(Entity { kind: PLAYER, mx, my });
+        self.entities.push(Entity::at_tile(PLAYER, mx, my));
     }
 
     /// The player is the first entity, by convention.
@@ -429,16 +469,16 @@ impl World {
         self.entities.first_mut()
     }
 
-    /// Move the player one step, refusing terrain its kind cannot enter
-    /// and the map edge. Returns whether it moved.
-    pub fn try_move(&mut self, map: &Map, dx: i32, dy: i32) -> bool {
+    /// Move the player by a centimetre delta (ADR-006), refusing the move
+    /// when the tile the new point falls in is off the map or terrain its
+    /// kind cannot enter. Returns whether it moved.
+    pub fn try_move(&mut self, map: &Map, dx_cm: i32, dy_cm: i32) -> bool {
         let Some(p) = self.player_mut() else { return false };
-        let (nx, ny) = (p.mx + dx, p.my + dy);
+        let next = Entity { x_cm: p.x_cm + dx_cm, y_cm: p.y_cm + dy_cm, ..*p };
         let kind = &map.assets.creatures[p.kind as usize % map.assets.creatures.len()];
-        match map.get(nx, ny) {
+        match map.get(next.mx(), next.my()) {
             Some(t) if kind.can_enter.contains(&t.terrain) => {
-                p.mx = nx;
-                p.my = ny;
+                *p = next;
                 true
             }
             _ => false,
@@ -489,21 +529,46 @@ mod tests {
         let map = pond_map();
         let mut w = World::new(1);
         w.spawn_player(&map, 4, 4);
-        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((4, 4)));
-        assert!(!w.try_move(&map, 1, 0), "into the pond");
-        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((4, 4)), "a refused move leaves the player put");
-        assert!(w.try_move(&map, 0, 1), "onto grass");
-        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((4, 5)));
-        assert!(w.try_move(&map, -1, -1), "diagonals are steps too");
-        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((3, 4)));
-        let p = w.player_mut().unwrap();
-        (p.mx, p.my) = (7, 0);
-        assert!(!w.try_move(&map, 1, 0), "off the east edge");
-        assert!(!w.try_move(&map, 0, -1), "off the north edge");
-        assert_eq!(w.player().map(|p| (p.mx, p.my)), Some((7, 0)));
-        assert!(w.try_move(&map, -1, 0));
+        assert_eq!(w.player().map(|p| p.tile()), Some((4, 4)));
+        assert_eq!(w.player().map(|p| (p.x_cm, p.y_cm)), Some((900, 900)), "the spawn is the tile's centre");
+        assert!(!w.try_move(&map, TILE_CM, 0), "a whole tile into the pond");
+        assert_eq!(w.player().map(|p| (p.x_cm, p.y_cm)), Some((900, 900)), "a refused move leaves the player put");
+        assert!(w.try_move(&map, 0, TILE_CM), "onto grass");
+        assert_eq!(w.player().map(|p| p.tile()), Some((4, 5)));
+        assert!(w.try_move(&map, -TILE_CM, -TILE_CM), "diagonals are steps too");
+        assert_eq!(w.player().map(|p| p.tile()), Some((3, 4)));
+        w.player_mut().unwrap().set_tile(7, 0);
+        assert!(!w.try_move(&map, TILE_CM, 0), "off the east edge");
+        assert!(!w.try_move(&map, 0, -TILE_CM), "off the north edge");
+        assert!(!w.try_move(&map, 0, -101), "a centimetre over the north edge is off it too");
+        assert_eq!(w.player().map(|p| p.tile()), Some((7, 0)));
+        assert!(w.try_move(&map, -TILE_CM, 0));
         let mut nobody = World::new(1);
-        assert!(!nobody.try_move(&map, 1, 0), "no player, no move");
+        assert!(!nobody.try_move(&map, TILE_CM, 0), "no player, no move");
+    }
+
+    #[test]
+    fn a_move_is_refused_by_the_tile_its_point_lands_in() {
+        // The pond is tile (5, 4); from the centre of (4, 4) the water's
+        // edge is a metre east. Steps that stay inside the tile are taken,
+        // the centimetre that crosses the edge is not, and the point ends
+        // anywhere in its tile rather than at the centre.
+        let map = pond_map();
+        let mut w = World::new(1);
+        w.spawn_player(&map, 4, 4);
+        assert!(w.try_move(&map, 60, 0));
+        assert!(w.try_move(&map, 39, 0));
+        assert_eq!(w.player().map(|p| (p.x_cm, p.tile())), Some((999, (4, 4))), "a centimetre short of the pond");
+        assert!(!w.try_move(&map, 1, 0), "the next centimetre is in the water");
+        assert_eq!(w.player().map(|p| p.x_cm), Some(999));
+        assert!(w.try_move(&map, 0, 80), "along the shore is fine");
+        assert_eq!(w.player().map(|p| p.tile()), Some((4, 4)));
+        let (x, y) = w.player().unwrap().pos();
+        assert!((x - 4.995).abs() < 1e-4 && (y - 4.9).abs() < 1e-4, "the point is fractional in tiles: {x}, {y}");
+        // Negative positions still floor to their tile.
+        let e = Entity { kind: 0, x_cm: -1, y_cm: -TILE_CM };
+        assert_eq!(e.tile(), (-1, -1));
+        assert_eq!(Entity::at_tile(0, -3, 2), Entity { kind: 0, x_cm: -500, y_cm: 500 });
     }
 
     #[test]
@@ -644,11 +709,11 @@ mod tests {
         let mut w = World::new(7);
         w.spawn_player(&map, 16, 16);
         let p = *w.player().unwrap();
-        assert_ne!(map.get(p.mx, p.my).unwrap().terrain, Terrain::Water);
-        for _ in 0..200 {
-            w.try_move(&map, 1, 0);
+        assert_ne!(map.get(p.mx(), p.my()).unwrap().terrain, Terrain::Water);
+        for _ in 0..600 {
+            w.try_move(&map, 37, 0);
         }
         let p = *w.player().unwrap();
-        assert!(map.get(p.mx, p.my).is_some_and(|t| t.terrain != Terrain::Water));
+        assert!(map.get(p.mx(), p.my()).is_some_and(|t| t.terrain != Terrain::Water));
     }
 }
