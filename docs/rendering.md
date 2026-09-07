@@ -142,7 +142,7 @@ that needs a camera quantity asks for it rather than deriving it:
 | `in_mode(i)`, `hides_player()`, `addresses_character()`, `view_label()` | the mode switch, whether the character is the eye, whether the keys address the character, the status line | the settings row, the sprite pass, the tick, the HUD |
 | `forward()`, `right()`, `depth(x, y)`, `tile_depth` | the map-space view axes and the depth sort | face shading, the sprite and prop sort, crown seams |
 | `project_vector(run, rise)` | a world displacement in cells | stroke directions for bare branches and furrows |
-| `footprint()` | the cells a tile spans | the ground texture lattice, door and window widths, `pan` |
+| `footprint()` | the cells a tile spans | door and window widths, `pan` |
 | `rows_per_metre()`, `columns_per_metre()` | the scale, height and ground | the projection, the screen-extent culls |
 | `tilt()`, `set_tilt()`, `pitch_by()` | the table's angle and the keys that change it | `{` and `}`, the mouse's rows, the snapshot's `tilt=` |
 | `cloud_view(w, h)` | the cloud plane's parallax | the cloud layer |
@@ -206,6 +206,32 @@ A terrain hit takes its face from the gradient. Below `CLIFF = 1.5`
 (three metres of rise per two of run) it is a top face; above it the
 steeper axis picks a left or right wall and the drop is drawn as one to
 six rows of cliff.
+
+### The scatter lattice
+
+The specks a top face is textured with — gravel, scree, sand, tufts,
+waves, roof tiles, leaves — are a grid fixed in the world at the
+surface's `grain_metres` (surfaces.toml), hashed at the point the ray
+met. Nothing about the camera enters it and nothing is stored: a speck is
+a pure function of where it is, at the same place at every zoom, tilt,
+heading and distance. A stone worth picking up is a placed object with
+its own identity, and gathering from scree makes one, so the procedural
+field stays inexhaustible scenery and the two never have to reconcile
+(#35).
+
+A grid that fine is finer than a distant cell can resolve, and sampling
+it at one point per cell is aliasing: a fraction of a cell of camera
+movement walks a raking cell's hit point across several lattice cells and
+the glyph flips. So the lattice steps up by powers of two until a step
+covers about the ground the cell does — `Hit::span`, the cell's own
+footprint at that point's depth with what the surface's lean adds along
+the view. The steps nest, so a coarse step's speck is one the fine grid
+holds in the same place, and distance drops the specks between.
+
+`Hit::span` is capped at a few times the ground a cell covers across the
+view. The ground along the view runs away without bound as a surface
+turns edge-on, and a lattice step that long lays one speck along a run of
+cells and empties the ground between, which reads as streaks.
 
 ## Blocks
 

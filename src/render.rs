@@ -82,6 +82,15 @@ pub struct Scene<'a> {
     /// or `None` for no fog: the far field is faded in a perspective view
     /// and, when the `fog` settings row asks, in the isometric one too.
     pub fog: Option<f32>,
+    /// Metres of level ground one cell covers at the depth the scale is
+    /// stated at, across the view and along it. The ground is
+    /// foreshortened, so the second is several times the first; the ground
+    /// texture is computed at the resolution the two imply (`Hit::span`).
+    pub(crate) span: (f32, f32),
+    /// The view's ground direction scaled by the cotangent of its tilt.
+    /// A surface whose gradient meets this at one is edge-on, where a cell
+    /// covers unbounded ground.
+    pub(crate) lean: (f32, f32),
     /// `World::snow_at` by annual temperature, `temp + 128` as the index:
     /// a tile's temperature is a whole degree, and every hit asks.
     snow: [f32; 256],
@@ -98,7 +107,12 @@ impl<'a> Scene<'a> {
         }
         let far = world.visibility() * cam.visibility_scale();
         let fog = cam.is_perspective().then_some(far);
-        Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness(), daylight: world.daylight(), far, fog, snow }
+        let b = cam.basis();
+        let tm = crate::map::TILE_METRES;
+        let span = (tm / b.cols.max(1e-3), tm / b.rows.max(1e-3));
+        let (s, c) = cam.forward();
+        let cot = b.rise * tm / b.rows.max(1e-3);
+        Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness(), daylight: world.daylight(), far, fog, span, lean: (s * cot, c * cot), snow }
     }
 
     /// The same scene with the fog where a setting puts it: in perspective
@@ -204,6 +218,10 @@ pub(crate) struct Hit {
     /// Screen-horizontal component of the surface normal, for outline
     /// glyphs on crowns.
     pub nsx: f32,
+    /// Metres of ground the cell covers here: `Scene::span` at this
+    /// point's depth, stretched by how far the surface leans away from
+    /// the view. The scatter lattice coarsens to it.
+    pub span: f32,
 }
 
 pub struct Renderer {

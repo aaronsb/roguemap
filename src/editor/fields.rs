@@ -164,6 +164,9 @@ pub const GROUNDS: [&str; 4] = ["none", "flatten", "pave", "till"];
 
 const UNIT: Kind = Kind::F32 { min: 0.0, max: 1.0 };
 const NON_NEG: Kind = Kind::F32 { min: 0.0, max: f32::INFINITY };
+/// Metres between the specks of a surface's grain, from a sand grain to a
+/// boulder.
+const GRAIN: Kind = Kind::F32 { min: 0.001, max: 4.0 };
 const ANY_F: Kind = Kind::F32 { min: f32::NEG_INFINITY, max: f32::INFINITY };
 
 const IDENTITY: [Field; 3] = [opt("description", Kind::Text), opt("category", Kind::Str), opt("aliases", Kind::StrList)];
@@ -296,9 +299,9 @@ const SEASON: [Field; 14] = [
     req("water_glyph", Kind::Rgb),
 ];
 
-const SURFACE: [Field; 3] = [req("name", Kind::Str), req("texture_density", UNIT), req("relief", Kind::Bool)];
+const SURFACE: [Field; 4] = [req("name", Kind::Str), req("texture_density", UNIT), req("grain_metres", GRAIN), req("relief", Kind::Bool)];
 
-const DENSITY: [Field; 3] = [req("grass_base", UNIT), req("grass_per_level", UNIT), req("cattail", UNIT)];
+const DENSITY: [Field; 4] = [req("grain_metres", GRAIN), req("grass_base", UNIT), req("grass_per_level", UNIT), req("cattail", UNIT)];
 
 const LIGHT: [Field; 7] = [
     req("name", Kind::Str),

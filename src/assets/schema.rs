@@ -648,6 +648,8 @@ pub struct SurfaceRow {
     pub identity: IdentityRow,
     /// Fraction of ground cells carrying a texture glyph.
     pub texture_density: f32,
+    /// Metres between the specks of this surface's grain.
+    pub grain_metres: f32,
     /// Whether height lifts and wetness darkens the colour; snow stays flat.
     pub relief: bool,
     #[serde(flatten)]
@@ -657,6 +659,9 @@ pub struct SurfaceRow {
 /// Glyph densities of the surfaces with bespoke rules.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DensityRow {
+    /// Metres between the specks of the grain the bespoke rules scatter:
+    /// tufts, waves, reeds, roof tiles and leaves.
+    pub grain_metres: f32,
     /// Grass tuft chance per cell at tuft level 0, plus this much per level.
     pub grass_base: f32,
     pub grass_per_level: f32,

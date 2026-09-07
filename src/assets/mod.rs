@@ -972,8 +972,18 @@ impl Assets {
                 return Err(ctx.row(i, &s.name, format!("surface {i} must be {:?}", SURFACE_NAMES[i])));
             }
             unit(&ctx, i, &s.name, "texture_density", Some(s.texture_density))?;
+            if !(0.001..=4.0).contains(&s.grain_metres) {
+                return Err(ctx.row(i, &s.name, format!("grain_metres {} is outside 0.001..4", s.grain_metres)));
+            }
             check_conditions(&ctx, i, &s.name, &s.conditions)?;
-            surface.push(Surface { name: s.name.clone(), identity: Identity::from_row(&s.identity, "surfaces"), texture_density: s.texture_density, relief: s.relief, conditions: Conditions::from_row(&s.conditions) });
+            surface.push(Surface {
+                name: s.name.clone(),
+                identity: Identity::from_row(&s.identity, "surfaces"),
+                texture_density: s.texture_density,
+                grain_metres: s.grain_metres,
+                relief: s.relief,
+                conditions: Conditions::from_row(&s.conditions),
+            });
         }
         let d = &sf.density;
         for (f, v) in [("grass_base", d.grass_base), ("grass_per_level", d.grass_per_level), ("cattail", d.cattail)] {
@@ -981,10 +991,13 @@ impl Assets {
                 return Err(AssetError::file(ctx.file, format!("density.{f} {v} is outside 0..1")));
             }
         }
+        if !(0.001..=4.0).contains(&d.grain_metres) {
+            return Err(AssetError::file(ctx.file, format!("density.grain_metres {} is outside 0.001..4", d.grain_metres)));
+        }
         let surfaces = Surfaces {
             seasons: seasons.try_into().expect("four seasons"),
             surface: surface.try_into().expect("four surfaces"),
-            density: Density { grass_base: d.grass_base, grass_per_level: d.grass_per_level, cattail: d.cattail },
+            density: Density { grain_metres: d.grain_metres, grass_base: d.grass_base, grass_per_level: d.grass_per_level, cattail: d.cattail },
         };
 
         // settings
