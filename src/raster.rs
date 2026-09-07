@@ -339,13 +339,36 @@ impl Renderer {
 
     /// Test one segment of the ray, `z` in `[lo, hi]`, against the volumes
     /// registered on the sample's tile and the columns of the tiles the
-    /// segment can cross, keeping the highest crossing.
+    /// segment can cross, keeping the nearest crossing: the highest for a
+    /// ray walking down, the lowest for one climbing (`up`), which only a
+    /// perspective eye casts. In perspective (`P`) the solvers are handed
+    /// heights less `shift` and the ground point `p0` at that height: a
+    /// perspective ray near level has a drift of hundreds of tiles per
+    /// metre of height, and its quadratics only keep their digits with the
+    /// segment's own foot as the zero. The isometric walk is the other
+    /// instantiation, with neither the shift nor the direction in it.
     #[allow(clippy::too_many_arguments)]
-    fn geometry(&self, sc: &Scene, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32, cur: (i32, i32, &Geo), prev: Option<(i32, i32, &Geo)>, lod: Lod, scan: &mut Scan) -> Option<Candidate> {
+    fn geometry<const P: bool>(
+        &self,
+        sc: &Scene,
+        p0: (f32, f32),
+        d: (f32, f32),
+        lo: f32,
+        hi: f32,
+        cur: (i32, i32, &Geo),
+        prev: Option<(i32, i32, &Geo)>,
+        lod: Lod,
+        scan: &mut Scan,
+        up: bool,
+        shift: f32,
+    ) -> Option<Candidate> {
         let grid = self.grid();
+        let up = P && up;
+        let lower = |z: f32| if P { z - shift } else { z };
+        let raise = |z: f32| if P { z + shift } else { z };
         let mut best: Option<Candidate> = None;
         let mut consider = |c: Candidate| {
-            if best.as_ref().is_none_or(|b| c.z > b.z) {
+            if best.as_ref().is_none_or(|b| if P && up { c.z < b.z } else { c.z > b.z }) {
                 best = Some(c);
             }
         };
@@ -361,8 +384,9 @@ impl Renderer {
             // from a circle around it: at the mid zoom a step runs a whole
             // tile of ground, and a circle that wide would pass most of a
             // stand to the solver.
-            let mid = (p0.0 + d.0 * (lo + hi) * 0.5, p0.1 + d.1 * (lo + hi) * 0.5);
-            let hv = (d.0 * 0.5 * (hi - lo), d.1 * 0.5 * (hi - lo));
+            let (slo, shi) = (lower(lo), lower(hi));
+            let mid = (p0.0 + d.0 * (slo + shi) * 0.5, p0.1 + d.1 * (slo + shi) * 0.5);
+            let hv = (d.0 * 0.5 * (shi - slo), d.1 * 0.5 * (shi - slo));
             let hh = hv.0 * hv.0 + hv.1 * hv.1;
             // The distance test multiplies by the reciprocal, which can put
             // an entry a few ulps either side of where dividing would; the
@@ -372,7 +396,7 @@ impl Renderer {
             const SLOP: f32 = 1.0 + 1e-5;
             let list = grid.buckets(geo);
             let cut = hi + geo.vspan + grid.slack();
-            let mut from = if scan.mx == mx && scan.my == my { scan.at } else { list.partition_point(|b| b.top > cut) };
+            let mut from = if !up && scan.mx == mx && scan.my == my { scan.at } else { list.partition_point(|b| b.top > cut) };
             while from < list.len() && list[from].top > cut {
                 from += 1;
             }
@@ -394,7 +418,29 @@ impl Renderer {
                 // stand of grown trees is tens of thousands of them, and
                 // reading each one the walk rejects is what a forest cannot
                 // afford. The volume is read only for what was met.
-                let h = if b.cluster { crate::volume::ellipsoid_hit((p0.0 - b.cx, p0.1 - b.cy), d, b.r2, b.h0, b.top - b.h0, lo.max(b.h0), hi.min(b.top)) } else { grid.volume(b.v).hit(p0, d, lo, hi, lod.close) };
+                let h = if b.cluster {
+                    let a = (p0.0 - b.cx, p0.1 - b.cy);
+                    let (h0, top) = (lower(b.h0), lower(b.top));
+                    if up {
+                        crate::volume::ellipsoid_hit_along::<true>(a, d, b.r2, h0, b.top - b.h0, slo.max(h0), shi.min(top))
+                    } else {
+                        crate::volume::ellipsoid_hit_along::<false>(a, d, b.r2, h0, b.top - b.h0, slo.max(h0), shi.min(top))
+                    }
+                } else {
+                    let v = grid.volume(b.v);
+                    let lowered;
+                    let v = if P {
+                        lowered = v.lowered(shift);
+                        &lowered
+                    } else {
+                        v
+                    };
+                    if up {
+                        v.hit_along::<true>(p0, d, slo, shi, lod.close)
+                    } else {
+                        v.hit_along::<false>(p0, d, slo, shi, lod.close)
+                    }
+                };
                 let Some(h) = h else { continue };
                 let (vi, v) = (b.v, grid.volume(b.v));
                 // A stand-in crown is not solid: a sample inside one meets
@@ -405,12 +451,12 @@ impl Renderer {
                 // clusters, so each cluster is solid.
                 if h.part == Part::Canopy && !v.dead && !b.cluster {
                     let density = sc.assets.species[v.species as usize % sc.assets.species.len()].leaf_density;
-                    if !crate::volume::foliage_at(p0.0 + d.0 * h.z, p0.1 + d.1 * h.z, h.z, density) {
+                    if !crate::volume::foliage_at(p0.0 + d.0 * h.z, p0.1 + d.1 * h.z, raise(h.z), density) {
                         continue;
                     }
                 }
                 let kind = if h.part == Part::Canopy { HitKind::Canopy } else { HitKind::Trunk };
-                consider(Candidate { z: h.z, kind, normal: h.normal, which: vi, mx: v.mx, my: v.my });
+                consider(Candidate { z: raise(h.z), kind, normal: h.normal, which: vi, mx: v.mx, my: v.my });
             }
         }
         let mut column = |tx: i32, ty: i32, g: &Geo| {
@@ -419,17 +465,19 @@ impl Renderer {
                 return;
             }
             let col = grid.column(g, tx, ty, Self::profile(sc, st.kind, lod));
-            if let Some(h) = col.hit(p0, d, lo, hi, lod.bisections) {
+            let col = if P { crate::blocks::Column { zs: col.zs - shift, ..col } } else { col };
+            let hit = if up { col.hit_along::<true>(p0, d, lower(lo), lower(hi), lod.bisections) } else { col.hit_along::<false>(p0, d, lower(lo), lower(hi), lod.bisections) };
+            if let Some(h) = hit {
                 if h.face != NO_FACE {
                     // Walls run into the ground; below the surface the
                     // terrain is what shows.
                     let (x, y) = (p0.0 + d.0 * h.z, p0.1 + d.1 * h.z);
-                    if h.z < self.surface_height(sc, x, y) {
+                    if raise(h.z) < self.surface_height(sc, x, y) {
                         return;
                     }
                 }
                 let kind = if h.face == NO_FACE { HitKind::Roof } else { HitKind::Wall };
-                consider(Candidate { z: h.z, kind, normal: h.normal, which: h.face as u32, mx: tx, my: ty });
+                consider(Candidate { z: raise(h.z), kind, normal: h.normal, which: h.face as u32, mx: tx, my: ty });
             }
         };
         column(mx, my, geo);
@@ -457,11 +505,18 @@ impl Renderer {
     /// samples; steep slopes shade as cliffs, with the face chosen by the
     /// gradient's direction.
     fn ray(&self, sc: &Scene, sx: f32, sy: f32) -> Option<Hit> {
+        if sc.cam.is_perspective() {
+            return self.ray_march(sc, sx, sy, 0.0);
+        }
         self.ray_from(sc, sx, sy, TOP_CAP)
     }
 
-    /// The walk from no higher than `start`.
+    /// The walk from no higher than `start`; for a perspective eye, from
+    /// no nearer than `start` metres along the ray.
     fn ray_from(&self, sc: &Scene, sx: f32, sy: f32, start: f32) -> Option<Hit> {
+        if sc.cam.is_perspective() {
+            return self.ray_march(sc, sx, sy, start);
+        }
         let cam = sc.cam;
         let grid = self.grid();
         let lod = lod(cam);
@@ -523,8 +578,8 @@ impl Renderer {
                 continue;
             };
             if zf <= geo.top || prev.is_some_and(|(px, py, pg)| (px, py) != (mx, my) && zf <= pg.top) {
-                if let Some(cand) = self.geometry(sc, p0, d, zf, z_prev, (mx, my, geo), prev, lod, &mut scan) {
-                    return self.geometry_hit(sc, p0, d, cand);
+                if let Some(cand) = self.geometry::<false>(sc, p0, d, zf, z_prev, (mx, my, geo), prev, lod, &mut scan, false, 0.0) {
+                    return self.geometry_hit(sc, p0, d, cand, 0.0);
                 }
             }
             if zf <= geo.hmax {
@@ -537,6 +592,121 @@ impl Renderer {
             }
             prev = Some((mx, my, geo));
             z_prev = zf;
+        }
+        None
+    }
+
+    /// The perspective walk: march the eye's ray through a cell by
+    /// distance, from `start` metres out to the fog distance, the edge of
+    /// the grid, the sea bed or the sky over the tallest thing in view.
+    /// The step grows with the depth so it stays about two screen rows of
+    /// travel, between `MIN_STEP` and `MAX_STEP` metres; each segment is
+    /// tested against the geometry in its height form, `p(z) = p0 + d z`,
+    /// climbing or descending as the ray does, then the far sample against
+    /// the field, and a terrain crossing is bisected along the ray. High
+    /// over a block's ceiling the walk skips to where the ray leaves the
+    /// block or comes down to it, so the sky costs nothing.
+    fn ray_march(&self, sc: &Scene, sx: f32, sy: f32, start: f32) -> Option<Hit> {
+        /// Metres a step may shrink to near the eye and grow to far off.
+        const MIN_STEP: f32 = 0.25;
+        const MAX_STEP: f32 = 4.0;
+        let cam = sc.cam;
+        let grid = self.grid();
+        let lod = lod(cam);
+        let ray = cam.eye_ray(sx, sy);
+        let (ex, ey, ez) = ray.eye;
+        let gd = ray.drift();
+        let dz = ray.dir.2;
+        // The height form the geometry tests take: a whisker of tilt keeps
+        // a level ray's drift finite, and the segments are handed over in
+        // that form's own heights, so their ground strokes are the ray's
+        // and only their heights are off, by the whisker. Each segment is
+        // solved with its own foot as the zero of height and the ground
+        // point there as `p0`, which is what keeps the arithmetic sound
+        // when the drift is hundreds of tiles per metre.
+        let dzg = Camera::level_guard(dz);
+        let up = dzg > 0.0;
+        let d = (gd.0 / dzg, gd.1 / dzg);
+        let zg = |t: f32| ez + dzg * t;
+        let (s, c) = cam.forward();
+        let (t0, mut t1) = grid.t_span((ex, ey), gd)?;
+        let t0 = t0.max(start).max(0.0);
+        t1 = t1.min(sc.far);
+        if dz < 0.0 {
+            t1 = t1.min((FLOOR - ez) / dz);
+        } else if dz > 0.0 {
+            t1 = t1.min((grid.max_top - ez) / dz);
+        } else if ez > grid.max_top {
+            return None;
+        }
+        if t0 >= t1 {
+            return None;
+        }
+        let rows = cam.focal_rows();
+        let mut t = t0;
+        let mut z_prev = zg(t);
+        let mut prev: Option<(i32, i32, &Geo)> = None;
+        let mut scan = Scan { mx: i32::MIN, my: i32::MIN, at: 0 };
+        while t < t1 {
+            let step = (2.0 * t / rows).clamp(MIN_STEP, MAX_STEP);
+            let tn = (t + step).min(t1);
+            let (x, y) = ray.ground(tn);
+            let z = zg(tn);
+            let (mx, my) = (ifloor(x), ifloor(y));
+            let geo = grid.geo(mx, my);
+            let ceiling = match geo {
+                Some(g) => g.ceiling,
+                None => grid.block_top(mx, my),
+            };
+            let (lo, hi) = if up { (z_prev, z) } else { (z, z_prev) };
+            if lo > ceiling {
+                let mut jump = grid.block_exit_t((ex, ey), gd, mx, my);
+                if dz < 0.0 {
+                    jump = jump.min((ceiling - ez) / dz);
+                }
+                if jump > tn {
+                    t = jump.min(t1);
+                    z_prev = zg(t);
+                    prev = None;
+                    continue;
+                }
+            }
+            let Some(geo) = geo else {
+                prev = None;
+                z_prev = z;
+                t = tn;
+                continue;
+            };
+            if lo <= geo.top || prev.is_some_and(|(px, py, pg)| (px, py) != (mx, my) && lo <= pg.top) {
+                let foot = ray.ground(if up { t } else { tn });
+                if let Some(cand) = self.geometry::<true>(sc, foot, d, lo, hi, (mx, my, geo), prev, lod, &mut scan, up, lo) {
+                    return self.geometry_hit(sc, foot, d, cand, lo);
+                }
+            }
+            if lo <= geo.hmax && self.surface_height(sc, x, y) >= ray.height(tn) {
+                // Under the surface: the crossing lies between the two
+                // samples, and six halvings put it within a few
+                // centimetres.
+                let (mut above, mut below) = (t, tn);
+                for _ in 0..6 {
+                    let mid = 0.5 * (above + below);
+                    let (px, py) = ray.ground(mid);
+                    if self.surface_height(sc, px, py) >= ray.height(mid) {
+                        below = mid;
+                    } else {
+                        above = mid;
+                    }
+                }
+                let (hx, hy) = ray.ground(below);
+                let (hmx, hmy) = (ifloor(hx), ifloor(hy));
+                let bed = self.bed_height(sc, hx, hy);
+                let h = bed.max(SEA as f32);
+                let tile = *grid.tile(hmx, hmy).or_else(|| grid.tile(mx, my))?;
+                return Some(self.terrain_hit(sc, tile, hmx, hmy, hx, hy, h, bed, s, c));
+            }
+            prev = Some((mx, my, geo));
+            z_prev = z;
+            t = tn;
         }
         None
     }
@@ -567,11 +737,13 @@ impl Renderer {
     }
 
     /// A geometry crossing as a hit: walls take the screen side their face
-    /// points to, everything else is a top.
-    fn geometry_hit(&self, sc: &Scene, p0: (f32, f32), d: (f32, f32), cand: Candidate) -> Option<Hit> {
+    /// points to, everything else is a top. `p0` is the ground point at
+    /// height `shift`, as `geometry` was given it.
+    fn geometry_hit(&self, sc: &Scene, p0: (f32, f32), d: (f32, f32), cand: Candidate, shift: f32) -> Option<Hit> {
         let grid = self.grid();
         let tile = *grid.tile(cand.mx, cand.my)?;
-        let (x, y) = (p0.0 + d.0 * cand.z, p0.1 + d.1 * cand.z);
+        let zl = cand.z - shift;
+        let (x, y) = (p0.0 + d.0 * zl, p0.1 + d.1 * zl);
         let face = if cand.kind == HitKind::Wall {
             if screen_x_of(cand.normal, sc.cam) > 0.0 {
                 FACE_RIGHT
@@ -868,9 +1040,16 @@ impl Renderer {
     /// would otherwise supersample most of the screen.
     fn antialias_edges(&mut self, sc: &Scene, hits: &[Option<Hit>]) {
         let (w, h) = (self.w, self.h);
-        let lod = lod(sc.cam);
+        let cam = sc.cam;
+        let lod = lod(cam);
         let (canopy_aa, grown) = (lod.canopy_aa, lod.model);
         let is_crown = |id: u64| HitKind::from_id(id).is_some_and(HitKind::is_tree);
+        // Where the sub-rays start: in perspective no nearer than a couple
+        // of metres before the nearest hit around the cell, and otherwise
+        // no higher than a few metres over the highest.
+        let perspective = cam.is_perspective();
+        let eye = cam.eye();
+        let near = |hh: &Hit| cam.fog_depth(eye, hh.x, hh.y, hh.h);
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) as usize;
@@ -882,7 +1061,12 @@ impl Renderer {
                 // supersampling; seams inside a meadow are not. The sub-rays
                 // need not start above what the cell and its neighbours met.
                 let here = self.g[i].albedo;
-                let mut start = hits[i].map(|hh| hh.h).unwrap_or(0.0);
+                let mut start = match hits[i] {
+                    Some(hh) if perspective => near(&hh),
+                    Some(hh) => hh.h,
+                    None if perspective => f32::MAX,
+                    None => 0.0,
+                };
                 let mut edge = false;
                 for &(dx, dy) in &[(1, 0), (-1, 0), (0, 1), (0, -1)] {
                     let (nx, ny) = (x + dx, y + dy);
@@ -891,7 +1075,7 @@ impl Renderer {
                     }
                     let n = (ny * w + nx) as usize;
                     if let Some(hh) = hits[n] {
-                        start = start.max(hh.h);
+                        start = if perspective { start.min(near(&hh)) } else { start.max(hh.h) };
                     }
                     // Two crowns meeting is not a boundary worth six rays
                     // once trees are grown geometry: the branches and leaf
@@ -907,7 +1091,8 @@ impl Renderer {
                 if !edge {
                     continue;
                 }
-                let Some((hh, cols)) = self.supersample(sc, x, y, start + 4.0) else { continue };
+                let from = if perspective { (start - 2.0).max(0.0) } else { start + 4.0 };
+                let Some((hh, cols)) = self.supersample(sc, x, y, from) else { continue };
                 // A cell whose centre missed but whose edge touches terrain
                 // takes that terrain's position and lighting.
                 if self.g[i].depth == SKY_DEPTH {
@@ -925,7 +1110,7 @@ impl Renderer {
 
     /// Six unlit colours from a 2x3 grid of rays through one cell, plus the
     /// first hit; `None` when no ray met anything. The rays start no
-    /// higher than `start`.
+    /// higher than `start`, or in perspective no nearer than it.
     fn supersample(&self, sc: &Scene, x: i32, y: i32, start: f32) -> Option<(Hit, [Rgb; 6])> {
         let mut cols = [Rgb(0, 0, 0); 6];
         let mut first: Option<Hit> = None;

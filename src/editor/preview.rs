@@ -8,7 +8,7 @@ use crate::assets::Tier;
 use crate::camera::Camera;
 use crate::canvas::Canvas;
 use crate::frame::Rect;
-use crate::render::{RenderOptions, Renderer, Scene};
+use crate::render::{FogMode, RenderOptions, Renderer, Scene};
 use crate::tileset::Tileset;
 
 /// Full-size pane interiors per tier, columns by rows.
@@ -117,7 +117,7 @@ impl Preview {
 
     /// Draw the fixture into every pane at animation time `t`.
     pub fn render(&mut self, fx: &Fixture, ts: &Tileset, angle: f32, t: f32) {
-        let opts = RenderOptions { aa: true, clouds: false };
+        let opts = RenderOptions { aa: true, clouds: false, fog: FogMode::Never };
         let hf = fx.map.get(fx.cx, fx.cy).map(|t| t.hf).unwrap_or(0.0);
         let fit = self.fit;
         for p in &mut self.panes {

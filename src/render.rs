@@ -24,6 +24,30 @@ use crate::shadow::ShadowMask;
 use crate::tileset::Tileset;
 use crate::world::{Light, World};
 
+/// Where the `fog` settings row puts the fade to the sky colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FogMode {
+    /// Perspective views only, where the far field must end somewhere.
+    #[default]
+    Perspective,
+    /// The isometric view too, by depth past the screen centre.
+    Always,
+    Never,
+}
+
+impl FogMode {
+    /// The row's values, in order.
+    pub const NAMES: [&'static str; 3] = ["perspective", "always", "never"];
+
+    pub fn from_index(i: usize) -> FogMode {
+        match i % 3 {
+            0 => FogMode::Perspective,
+            1 => FogMode::Always,
+            _ => FogMode::Never,
+        }
+    }
+}
+
 /// What the renderer needs to know from the settings.
 #[derive(Clone, Copy, Debug)]
 pub struct RenderOptions {
@@ -31,6 +55,8 @@ pub struct RenderOptions {
     pub aa: bool,
     /// Draw the cloud layer at the smallest zooms.
     pub clouds: bool,
+    /// Where the fog fades the far field.
+    pub fog: FogMode,
 }
 
 /// Everything one frame is drawn from, built once per frame and passed to
@@ -49,6 +75,13 @@ pub struct Scene<'a> {
     pub chop: f32,
     /// `World::daylight` for this frame, asked for at every hit.
     pub daylight: f32,
+    /// How far the frame looks, in metres: the weather's visibility scaled
+    /// by the camera's mode (#21). A perspective walk stops here.
+    pub far: f32,
+    /// The distance the light pass fades the scene to the sky colour over,
+    /// or `None` for no fog: the far field is faded in a perspective view
+    /// and, when the `fog` settings row asks, in the isometric one too.
+    pub fog: Option<f32>,
     /// `World::snow_at` by annual temperature, `temp + 128` as the index:
     /// a tile's temperature is a whole degree, and every hit asks.
     snow: [f32; 256],
@@ -63,7 +96,20 @@ impl<'a> Scene<'a> {
         for (i, s) in snow.iter_mut().enumerate() {
             *s = world.snow_at((i as i32 - 128) as f32);
         }
-        Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness(), daylight: world.daylight(), snow }
+        let far = world.visibility() * cam.visibility_scale();
+        let fog = cam.is_perspective().then_some(far);
+        Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness(), daylight: world.daylight(), far, fog, snow }
+    }
+
+    /// The same scene with the fog where a setting puts it: in perspective
+    /// views only, everywhere, or nowhere. The far distance stands.
+    pub fn with_fog(mut self, mode: FogMode) -> Scene<'a> {
+        self.fog = match mode {
+            FogMode::Perspective => self.cam.is_perspective().then_some(self.far),
+            FogMode::Always => Some(self.far),
+            FogMode::Never => None,
+        };
+        self
     }
 
     /// `World::snow_at` for a tile's annual temperature.
@@ -219,7 +265,7 @@ impl Renderer {
     pub fn draw(&mut self, cv: &mut Canvas, sc: &Scene, opts: &RenderOptions) {
         self.frame_lights.clear();
         self.sky_pass(sc);
-        let (x0, y0, x1, y1) = self.visible_bounds(sc.cam, self.view_ceiling(sc));
+        let (x0, y0, x1, y1) = self.bounds_to(sc.cam, self.view_ceiling(sc), sc.far);
         let grid = HeightGrid::build(sc, x0, y0, x1, y1, self.w, self.h, &mut self.models);
         self.shadow = ShadowMask::build(sc, &grid);
         self.colors.clear();
@@ -265,8 +311,19 @@ impl Renderer {
     /// `MAX_DEPTH`, past which a range hundreds of metres up is left out
     /// rather than made to cost a frame.
     pub(crate) fn visible_bounds(&self, cam: &Camera, top: f32) -> (i32, i32, i32, i32) {
+        self.bounds_to(cam, top, cam.far_reach())
+    }
+
+    /// `visible_bounds` for a perspective view looking `far` metres: the
+    /// ground under the frustum out to the fog, which bounds the walk, and
+    /// the same margin for what leans in from beyond.
+    pub(crate) fn bounds_to(&self, cam: &Camera, top: f32, far: f32) -> (i32, i32, i32, i32) {
         /// Tiles the box may stretch beyond the ground the screen covers.
         const MAX_DEPTH: f32 = 24.0;
+        if let Some((x0, y0, x1, y1)) = cam.reach(self.w, far) {
+            let m = ((16.0 / cam.a()).ceil() as i32 + 2).max(5);
+            return (x0.floor() as i32 - m, y0.floor() as i32 - m, x1.ceil() as i32 + m, y1.ceil() as i32 + m);
+        }
         let corners = [(0.0, 0.0), (self.w as f32, 0.0), (0.0, self.h as f32), (self.w as f32, self.h as f32)];
         let ground = corners.map(|(sx, sy)| cam.unproject(sx, sy, 0.0));
         let fold = |f: fn(f32, f32) -> f32, pick: fn((f32, f32)) -> f32, ps: &[(f32, f32)]| ps.iter().fold(pick(ps[0]), |a, &p| f(a, pick(p)));

@@ -13,7 +13,7 @@ use crate::canvas::{Canvas, Rgb};
 use crate::frame::{pad, Anchor, Content, FrameCtx, Frames, Item, List, Rect, Text};
 use crate::input::{self, SCENE, SETTINGS};
 use crate::palette::{season_blend, SEASON_NAMES};
-use crate::render::{RenderOptions, Renderer, Scene};
+use crate::render::{FogMode, RenderOptions, Renderer, Scene};
 use crate::settings::Settings;
 
 /// Colours of the text chrome.
@@ -107,12 +107,10 @@ impl Content for Hud {
             .unwrap_or_default();
         let wx = &world.weather;
         let weather = format!("cloud {:.0}% wind {:.0}% precip {:.0}%", wx.cover * 100.0, wx.wind * 100.0, wx.precip * 100.0);
-        let (zoom_name, ratio) = ctx.cam.zoom_name();
         let line = format!(
-            " roguemap  {}deg  {} {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
+            " roguemap  {}deg  {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
             ctx.cam.degrees(),
-            ratio,
-            zoom_name,
+            ctx.cam.view_label(),
             SEASON_NAMES[season_blend(world.season).0],
             s,
             world.tod.floor() as i32,
@@ -269,7 +267,7 @@ impl Content for Inset {
             }
         }
         let scene = Scene::new(ctx.map, ctx.ts, ctx.world, cam, ctx.t);
-        renderer.draw(canvas, &scene, &RenderOptions { aa: false, clouds: false });
+        renderer.draw(canvas, &scene, &RenderOptions { aa: false, clouds: false, fog: FogMode::Perspective });
         cv.blit(canvas, rect.x, rect.y);
     }
 

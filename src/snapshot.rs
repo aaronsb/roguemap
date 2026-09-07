@@ -99,7 +99,18 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     let mut cv = Canvas::new(w, h);
     let mut renderer = Renderer::new(sw, sh);
     let zoom = a.kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| Camera::fitting_zoom(&map, sw, sh));
-    let mut cam = Camera::isometric(zoom);
+    // camera=isometric|chase|shoulder|first-person picks the mode (ADR-007);
+    // a perspective mode takes pitch= and fov= in degrees.
+    let mode = a.text("camera").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).unwrap_or(0);
+    let mut cam = Camera::isometric(zoom).in_mode(mode);
+    if cam.is_perspective() {
+        if let Some(fov) = a.kv.get("fov").and_then(|v| v.parse::<f32>().ok()) {
+            cam.set_fov_override(Some(fov));
+        }
+        if let Some(pitch) = a.kv.get("pitch").and_then(|v| v.parse::<f32>().ok()) {
+            cam.pitch_by(pitch.to_radians() - cam.pitch);
+        }
+    }
     cam.set_angle(std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians());
     let (cx, cy) = (a.num("cx", map.w as f32 / 2.0) as i32, a.num("cy", map.h as f32 / 2.0) as i32);
     cam.look_at(cx, cy, &map, sw, sh);
@@ -140,8 +151,11 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
             }
         }
         world.spawn_player(&map, mx, my);
-    } else if a.flag("player") {
-        world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
+    } else if a.flag("player") || cam.is_perspective() {
+        // A perspective view is placed from the character, so it always
+        // has one, standing at the view centre; px, py put them elsewhere.
+        let (px, py) = if cam.is_perspective() { (cx, cy) } else { (map.w as i32 / 2, map.h as i32 / 2) };
+        world.spawn_player(&map, a.num("px", px as f32) as i32, a.num("py", py as f32) as i32);
     }
     // player_dx / player_dy walk the player from the spawn, in centimetres,
     // the way a run of keypresses would, so a stepped figure is reproducible.
@@ -152,6 +166,10 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     if a.flag("fire") {
         let (mx, my) = cam.center_tile(&map, sw, sh);
         world.light_campfire(&map, mx, my);
+    }
+    // A perspective view is placed from the character.
+    if cam.is_perspective() {
+        cam.follow(&world, &map, sw, sh);
     }
     let t = a.num("t", 0.0);
     let mut wmap = WorldMap::new();
@@ -165,7 +183,18 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     let one = |cv: &mut Canvas, renderer: &mut Renderer, frames: &mut Frames, t: f32| {
         let mut lights = 0;
         if !frames.is_open("worldmap") {
-            renderer.draw(cv, &Scene::new(base.map, base.ts, base.world, base.cam, t), &opts);
+            // fog=N sets the visibility in metres for this frame; fog=0
+            // leaves the far field unfaded.
+            let mut scene = Scene::new(base.map, base.ts, base.world, base.cam, t).with_fog(opts.fog);
+            if let Some(fog) = a.kv.get("fog").and_then(|v| v.parse::<f32>().ok()) {
+                if fog > 0.0 {
+                    scene.far = fog;
+                    scene.fog = scene.fog.map(|_| fog);
+                } else {
+                    scene.fog = None;
+                }
+            }
+            renderer.draw(cv, &scene, &opts);
             lights = base.world.lights.len() + renderer.frame_light_count();
         }
         let ctx = FrameCtx { lights, t, ..base };

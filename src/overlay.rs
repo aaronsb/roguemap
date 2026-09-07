@@ -4,14 +4,16 @@
 use crate::canvas::{Canvas, Rgb};
 use crate::noise::{hash, smoothstep};
 use crate::raster::lod_of;
-use crate::render::{Renderer, Scene};
+use crate::render::{Renderer, Scene, SKY_DEPTH};
 
 impl Renderer {
-    /// Cloud layer seen from above at the overview; see `Camera::cloud_view`
-    /// for where each cell samples the field.
+    /// Cloud layer seen from above at the overview, and from a perspective
+    /// eye in the sky over the horizon; see `Camera::cloud_view` for where
+    /// each cell samples the field.
     pub(crate) fn cloud_pass(&self, cv: &mut Canvas, sc: &Scene) {
         let (ts, world, cam) = (sc.ts, sc.world, sc.cam);
-        if !lod_of(cam.rows_per_metre()).cloud_layer {
+        let perspective = cam.is_perspective();
+        if !perspective && !lod_of(cam.rows_per_metre()).cloud_layer {
             return;
         }
         let cover = world.weather.cover;
@@ -28,7 +30,13 @@ impl Renderer {
         let shaded = Rgb(190, 196, 212).scale(light);
         for y in 0..self.h {
             for x in 0..self.w {
-                let (wx, wy) = view.sample(cam, x as f32 + 0.5, y as f32);
+                let i = (y * self.w + x) as usize;
+                // From an eye the clouds are in the sky, behind everything
+                // the walk met.
+                if perspective && self.g[i].depth != SKY_DEPTH {
+                    continue;
+                }
+                let Some((wx, wy)) = view.sample(cam, x as f32 + 0.5, y as f32) else { continue };
                 let d = world.cloud_density(wx, wy);
                 let a = smoothstep(th, th + 0.16, d) * strength;
                 if a < 0.08 {
@@ -37,7 +45,6 @@ impl Renderer {
                 // Thick centres are bright; edges take the shaded tone.
                 let core = smoothstep(th + 0.1, th + 0.3, d);
                 let col = shaded.lerp(sunlit, core);
-                let i = (y * self.w + x) as usize;
                 let cell = cv.cells[i];
                 if a > 0.6 {
                     cv.put(x, y, ' ', col, cell.bg.lerp(col, a));

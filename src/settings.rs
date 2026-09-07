@@ -5,7 +5,7 @@
 use crate::assets::Assets;
 use crate::map::Map;
 use crate::properties::Identity;
-use crate::render::RenderOptions;
+use crate::render::{FogMode, RenderOptions};
 use crate::world::{self, World};
 
 /// One row of the settings table: a stable key for saved files and code,
@@ -99,7 +99,7 @@ impl Settings {
         world.weather_preset = self.get("weather").checked_sub(1);
         world.wind_preset = self.get("wind").checked_sub(1);
         world.day_secs = world::DAY_LENGTHS[self.get("day_length")];
-        RenderOptions { aa: self.get("antialias") == 0, clouds: self.get("clouds") == 0 }
+        RenderOptions { aa: self.get("antialias") == 0, clouds: self.get("clouds") == 0, fog: FogMode::default() }
     }
 }
 

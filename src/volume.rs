@@ -224,10 +224,26 @@ fn largest_root(a: f32, b: f32, c: f32, lo: f32, hi: f32) -> Option<f32> {
     roots(a, b, c, lo, hi).next()
 }
 
+/// The root nearest the walk within `[lo, hi]`: the largest for a ray
+/// walking down, the smallest for one climbing.
+fn nearest_root<const UP: bool>(a: f32, b: f32, c: f32, lo: f32, hi: f32) -> Option<f32> {
+    if UP {
+        roots(a, b, c, lo, hi).last()
+    } else {
+        largest_root(a, b, c, lo, hi)
+    }
+}
+
 impl Volume {
     /// Top of the canopy.
     pub fn top(&self) -> f32 {
         self.h0 + self.height
+    }
+
+    /// The same volume with every height `by` metres lower: what a
+    /// perspective segment tests, with its own foot as the zero of height.
+    pub fn lowered(&self, by: f32) -> Volume {
+        Volume { ground: self.ground - by, h0: self.h0 - by, crown: (self.crown.0 - by, self.crown.1), ..*self }
     }
 
     /// The smallest ground circle holding the volume: its centre in tiles
@@ -260,13 +276,21 @@ impl Volume {
     /// the canopy and the trunk, returning the nearest (highest) crossing.
     /// `arms` adds the cactus arms.
     pub fn hit(&self, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32, arms: bool) -> Option<VolumeHit> {
+        self.hit_along::<false>(p0, d, lo, hi, arms)
+    }
+
+    /// The same test for a ray walking either way: `UP` for one climbing,
+    /// whose nearest crossing is the lowest, as a perspective eye's rays
+    /// above the horizon do. The direction is a constant so the walk down
+    /// carries no branch for it.
+    pub fn hit_along<const UP: bool>(&self, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32, arms: bool) -> Option<VolumeHit> {
         // Cheap rejects first: the segment is below the ground or above the
         // crown, or its ground path stays clear of the widest part.
         if hi < self.ground || lo > self.h0 + self.height {
             return None;
         }
         if self.shape == Shape::Branch {
-            return self.branch_hit(p0, d, lo, hi);
+            return self.branch_hit::<UP>(p0, d, lo, hi);
         }
         let widest = if arms && self.shape == Shape::Cactus { self.radius * 2.8 } else { self.radius };
         let reach = widest + self.shear.0.abs().max(self.shear.1.abs()) + 0.5 * (d.0.abs() + d.1.abs()) * (hi - lo);
@@ -278,7 +302,7 @@ impl Volume {
         let mut best: Option<VolumeHit> = None;
         let mut consider = |h: Option<VolumeHit>| {
             if let Some(h) = h {
-                if best.is_none_or(|b| h.z > b.z) {
+                if best.is_none_or(|b| if UP { h.z < b.z } else { h.z > b.z }) {
                     best = Some(h);
                 }
             }
@@ -297,13 +321,14 @@ impl Volume {
             // A ray that entered a crown through one of its holes is inside
             // it, and every sample it takes on the way down is another
             // chance to meet foliage (docs/structures.md, "Porous
-            // canopies"). So a segment with no crossing whose top lies
-            // inside the shape counts as a hit at that top.
-            let crossing = |qa: f32, qb: f32, qc: f32| -> Option<f32> { largest_root(qa, qb, qc, clo, chi).or_else(|| (qa * chi * chi + qb * chi + qc < 0.0).then_some(chi)) };
+            // canopies"). So a segment with no crossing whose near end
+            // lies inside the shape counts as a hit at that end.
+            let near = if UP { clo } else { chi };
+            let crossing = |qa: f32, qb: f32, qc: f32| -> Option<f32> { nearest_root::<UP>(qa, qb, qc, clo, chi).or_else(|| (qa * near * near + qb * near + qc < 0.0).then_some(near)) };
             match self.shape {
                 // A branch was answered above; the rest are quadrics.
                 Shape::Branch => {}
-                Shape::Ellipsoid | Shape::Lsystem | Shape::Cluster => consider(ellipsoid_hit(a, b, r2, h0, hh, clo, chi)),
+                Shape::Ellipsoid | Shape::Lsystem | Shape::Cluster => consider(ellipsoid_hit_along::<UP>(a, b, r2, h0, hh, clo, chi)),
                 Shape::Dome => {
                     let v2 = hh * hh;
                     let z = crossing(bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * h0 / v2, aa / r2 + h0 * h0 / v2 - 1.0);
@@ -321,7 +346,7 @@ impl Volume {
                     }));
                 }
                 Shape::Cactus => {
-                    consider(cylinder(a, b, aa, ab, bb, self.radius, clo, chi, h0 + hh, Part::Canopy));
+                    consider(cylinder::<UP>(a, b, aa, ab, bb, self.radius, clo, chi, h0 + hh, Part::Canopy));
                     if arms {
                         let r = self.radius * 0.6;
                         for (side, at, len) in [(-1.0, 0.45, 0.35), (1.0, 0.6, 0.25)] {
@@ -331,10 +356,10 @@ impl Volume {
                             let aa2 = (a.0 - off, a.1);
                             let dot = aa2.0 * aa2.0 + aa2.1 * aa2.1;
                             let ab2 = aa2.0 * b.0 + aa2.1 * b.1;
-                            consider(cylinder(aa2, b, dot, ab2, bb, r, clo.max(z0), chi.min(z1), z1, Part::Canopy));
+                            consider(cylinder::<UP>(aa2, b, dot, ab2, bb, r, clo.max(z0), chi.min(z1), z1, Part::Canopy));
                             // The elbow: a box from the trunk to the arm.
                             let (bx0, bx1) = if side < 0.0 { (off, 0.0) } else { (0.0, off) };
-                            consider(slab_box(a, b, bx0, bx1, -r, r, z0, z0 + 2.0 * r, clo, chi));
+                            consider(slab_box::<UP>(a, b, bx0, bx1, -r, r, z0, z0 + 2.0 * r, clo, chi));
                         }
                     }
                 }
@@ -347,7 +372,7 @@ impl Volume {
             if tlo <= thi {
                 let a = (p0.0 - self.cx, p0.1 - self.cy);
                 let (aa, ab, bb) = (a.0 * a.0 + a.1 * a.1, a.0 * d.0 + a.1 * d.1, d.0 * d.0 + d.1 * d.1);
-                consider(cylinder(a, d, aa, ab, bb, self.trunk_radius, tlo, thi, f32::INFINITY, Part::Trunk));
+                consider(cylinder::<UP>(a, d, aa, ab, bb, self.trunk_radius, tlo, thi, f32::INFINITY, Part::Trunk));
             }
         }
         best
@@ -360,7 +385,7 @@ impl Volume {
     /// metres across. The ends are flat and pushed out by the radius rather
     /// than capped with spheres, which is a capsule to within a twig's
     /// thickness and two quadratics cheaper.
-    fn branch_hit(&self, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32) -> Option<VolumeHit> {
+    fn branch_hit<const UP: bool>(&self, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32) -> Option<VolumeHit> {
         let t = TILE_METRES;
         let r = self.radius * t;
         // Axis from the lower end, and the ray as a point plus a direction
@@ -387,7 +412,7 @@ impl Volume {
         let mut best: Option<f32> = None;
         for z in roots(qa, qb, qc, lo, hi) {
             let s = along(z);
-            if s >= t0 && s <= t1 && best.is_none_or(|b| z > b) {
+            if s >= t0 && s <= t1 && best.is_none_or(|b| if UP { z < b } else { z > b }) {
                 best = Some(z);
             }
         }
@@ -425,12 +450,15 @@ fn q(a: (f32, f32), b: (f32, f32), z: f32) -> (f32, f32) {
 
 /// The ray's path `a + b z`, relative to the axis, against an ellipsoid of
 /// squared ground radius `r2` standing from `h0` to `h0 + hh`, over the
-/// heights `clo..=chi`: the highest crossing, or, for a segment whose top
-/// is already inside, that top (see `Volume::hit`). The walk calls this
-/// straight from a tile's index for a leaf cluster, since the index holds
-/// everything a cluster needs and the cluster itself need not be read.
+/// heights `clo..=chi`: the nearest crossing, or, for a segment whose
+/// near end is already inside, that end (see `Volume::hit`). Walking down
+/// the nearest crossing is the highest and the near end the top; climbing
+/// (`UP`) the lowest and the foot. The walk calls this straight from a
+/// tile's index for a leaf cluster, since the index holds everything a
+/// cluster needs and the cluster itself need not be read.
 #[inline]
-pub(crate) fn ellipsoid_hit(a: (f32, f32), b: (f32, f32), r2: f32, h0: f32, hh: f32, clo: f32, chi: f32) -> Option<VolumeHit> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ellipsoid_hit_along<const UP: bool>(a: (f32, f32), b: (f32, f32), r2: f32, h0: f32, hh: f32, clo: f32, chi: f32) -> Option<VolumeHit> {
     if clo > chi {
         return None;
     }
@@ -438,40 +466,44 @@ pub(crate) fn ellipsoid_hit(a: (f32, f32), b: (f32, f32), r2: f32, h0: f32, hh: 
     let zc = h0 + 0.5 * hh;
     let v2 = (0.25 * hh * hh).max(1e-6);
     let (qa, qb, qc) = (bb / r2 + 1.0 / v2, 2.0 * ab / r2 - 2.0 * zc / v2, aa / r2 + zc * zc / v2 - 1.0);
-    let z = largest_root(qa, qb, qc, clo, chi).or_else(|| (qa * chi * chi + qb * chi + qc < 0.0).then_some(chi))?;
+    let near = if UP { clo } else { chi };
+    let z = nearest_root::<UP>(qa, qb, qc, clo, chi).or_else(|| (qa * near * near + qb * near + qc < 0.0).then_some(near))?;
     let qq = q(a, b, z);
     Some(VolumeHit { z, part: Part::Canopy, normal: (qq.0 / r2, qq.1 / r2, (z - zc) / v2) })
 }
 
 /// A vertical cylinder of radius `r` on `[lo, hi]` with a flat cap at
-/// `cap` when the segment reaches it.
+/// `cap` when a descending segment reaches it; a climbing ray (`UP`)
+/// meets the side only, since it would leave through the cap.
 #[allow(clippy::too_many_arguments)]
-fn cylinder(a: (f32, f32), b: (f32, f32), aa: f32, ab: f32, bb: f32, r: f32, lo: f32, hi: f32, cap: f32, part: Part) -> Option<VolumeHit> {
+fn cylinder<const UP: bool>(a: (f32, f32), b: (f32, f32), aa: f32, ab: f32, bb: f32, r: f32, lo: f32, hi: f32, cap: f32, part: Part) -> Option<VolumeHit> {
     if lo > hi {
         return None;
     }
     // A path parallel to the axis is inside or outside for good: inside, it
     // meets the column where the segment starts.
     if bb < 1e-9 {
-        return (aa <= r * r).then_some(VolumeHit { z: hi, part, normal: (0.0, 0.0, 1.0) });
+        return (aa <= r * r).then_some(VolumeHit { z: if UP { lo } else { hi }, part, normal: (0.0, 0.0, 1.0) });
     }
     // The cap first: the segment crosses the top plane inside the disc.
-    if cap <= hi && cap >= lo {
+    if !UP && cap <= hi && cap >= lo {
         let qq = q(a, b, cap);
         if qq.0 * qq.0 + qq.1 * qq.1 <= r * r {
             return Some(VolumeHit { z: cap, part, normal: (0.0, 0.0, 1.0) });
         }
     }
-    let z = largest_root(bb, 2.0 * ab, aa - r * r, lo, hi)?;
+    let z = nearest_root::<UP>(bb, 2.0 * ab, aa - r * r, lo, hi)?;
     let qq = q(a, b, z);
     Some(VolumeHit { z, part, normal: (qq.0, qq.1, 0.0) })
 }
 
-/// An axis-aligned box relative to the axis, entered at its highest z.
+/// An axis-aligned box relative to the axis, entered at its highest z, or
+/// for a climbing ray (`UP`) at its lowest.
 #[allow(clippy::too_many_arguments)]
-fn slab_box(a: (f32, f32), b: (f32, f32), x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32, lo: f32, hi: f32) -> Option<VolumeHit> {
+fn slab_box<const UP: bool>(a: (f32, f32), b: (f32, f32), x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32, lo: f32, hi: f32) -> Option<VolumeHit> {
     let (mut za, mut zb) = (lo.max(z0), hi.min(z1));
     let mut normal = (0.0, 0.0, 1.0);
+    let mut low_normal = (0.0, 0.0, -1.0);
     for (v0, dv, m0, m1, n) in [(a.0, b.0, x0, x1, (1.0, 0.0)), (a.1, b.1, y0, y1, (0.0, 1.0))] {
         if dv.abs() < 1e-6 {
             if v0 < m0 || v0 > m1 {
@@ -481,13 +513,19 @@ fn slab_box(a: (f32, f32), b: (f32, f32), x0: f32, x1: f32, y0: f32, y1: f32, z0
         }
         let (t1, t2) = ((m0 - v0) / dv, (m1 - v0) / dv);
         let (ta, tb) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
-        za = za.max(ta);
+        if ta > za {
+            za = ta;
+            low_normal = if dv > 0.0 { (-n.0, -n.1, 0.0) } else { (n.0, n.1, 0.0) };
+        }
         if tb < zb {
             zb = tb;
             normal = if dv > 0.0 { (n.0, n.1, 0.0) } else { (-n.0, -n.1, 0.0) };
         }
     }
-    (za <= zb).then_some(VolumeHit { z: zb, part: Part::Canopy, normal })
+    if za > zb {
+        return None;
+    }
+    Some(if UP { VolumeHit { z: za, part: Part::Canopy, normal: low_normal } } else { VolumeHit { z: zb, part: Part::Canopy, normal } })
 }
 
 #[cfg(test)]

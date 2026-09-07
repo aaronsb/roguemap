@@ -639,6 +639,32 @@ impl HeightGrid {
         lo
     }
 
+    /// The metres along a perspective ray whose ground point lies inside
+    /// the grid, for the path `p(t) = e + gd t` from the eye; `None` when
+    /// it never enters. What lies behind the eye is not walked.
+    pub(crate) fn t_span(&self, e: (f32, f32), gd: (f32, f32)) -> Option<(f32, f32)> {
+        let (lo, hi) = self.z_span(e, gd)?;
+        let lo = lo.max(0.0);
+        (lo <= hi).then_some((lo, hi))
+    }
+
+    /// The metres along a perspective ray's ground path `e + gd t` at
+    /// which it leaves the block holding `(x, y)`: until then the block's
+    /// ceiling bounds everything the ray can meet.
+    pub(crate) fn block_exit_t(&self, e: (f32, f32), gd: (f32, f32), x: i32, y: i32) -> f32 {
+        let bx = (x - self.x0).div_euclid(BLOCK) * BLOCK + self.x0;
+        let by = (y - self.y0).div_euclid(BLOCK) * BLOCK + self.y0;
+        let mut out = f32::MAX;
+        for (v0, dv, m0) in [(e.0, gd.0, bx as f32), (e.1, gd.1, by as f32)] {
+            if dv.abs() < 1e-9 {
+                continue;
+            }
+            let edge = if dv > 0.0 { m0 + BLOCK as f32 } else { m0 };
+            out = out.min((edge - v0) / dv);
+        }
+        out
+    }
+
     /// The heights whose ground point lies inside the grid, for a ray's
     /// path `p(z) = p0 + d z`; `None` when the path never enters it. The
     /// walk has nothing to meet outside this span, so a range hundreds of

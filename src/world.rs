@@ -200,6 +200,19 @@ impl World {
     /// Cloud base altitude in metres over the ground.
     pub const CLOUD_ALTITUDE: f32 = 20.0;
 
+    /// How far a clear noon lets a view see, in metres (#21).
+    pub const CLEAR_VISIBILITY: f32 = 120.0;
+
+    /// How far the air lets a view see, in metres: the clear-day distance
+    /// cut by cloud cover and precipitation, and halved by full night, so
+    /// a storm at dusk closes in to a few tens of metres. Never under
+    /// fifteen, so a scene is always something.
+    pub fn visibility(&self) -> f32 {
+        let weather = (1.0 - 0.4 * self.weather.cover) * (1.0 - 0.6 * self.weather.precip);
+        let light = 0.5 + 0.5 * self.skylight();
+        (Self::CLEAR_VISIBILITY * weather * light).max(15.0)
+    }
+
     /// Tiles of shadow per metre of height: the cotangent of the sun's
     /// elevation over the tile's own size, capped so dawn and dusk stretch
     /// shadows without covering the map. Cloud and cast shadows both use it.
@@ -596,7 +609,7 @@ mod tests {
         cam.look_at(8, 8, map, w, h);
         let mut r = Renderer::new(w, h);
         let mut cv = Canvas::new(w as u16, h as u16);
-        r.draw(&mut cv, &Scene::new(map, ts, world, &cam, 0.0), &RenderOptions { aa: true, clouds: true });
+        r.draw(&mut cv, &Scene::new(map, ts, world, &cam, 0.0), &RenderOptions { aa: true, clouds: true, fog: crate::render::FogMode::Perspective });
         (world.lights.len(), r.frame_light_count())
     }
 

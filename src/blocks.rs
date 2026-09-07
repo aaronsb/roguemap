@@ -155,9 +155,16 @@ impl Column {
     /// footprint the hit is a wall on the face entered, otherwise the roof
     /// crossing is found by `bisections` halvings.
     pub fn hit(&self, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32, bisections: u32) -> Option<ColumnHit> {
+        self.hit_along::<false>(p0, d, lo, hi, bisections)
+    }
+
+    /// The same test for a ray walking either way: `UP` for one climbing,
+    /// which enters the footprint at the low end of its path, as a
+    /// perspective eye's rays above the horizon do.
+    pub fn hit_along<const UP: bool>(&self, p0: (f32, f32), d: (f32, f32), lo: f32, hi: f32, bisections: u32) -> Option<ColumnHit> {
         let (mut za, mut zb) = (lo, hi);
         let mut entry = NO_FACE;
-        let mut entry_z = f32::INFINITY;
+        let mut entry_z = if UP { f32::NEG_INFINITY } else { f32::INFINITY };
         for (axis, x0, dx, m) in [(0, p0.0, d.0, self.mx as f32), (1, p0.1, d.1, self.my as f32)] {
             if dx.abs() < 1e-6 {
                 if x0 < m || x0 >= m + 1.0 {
@@ -169,10 +176,22 @@ impl Column {
             let t2 = (m + 1.0 - x0) / dx;
             let (ta, tb) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
             za = za.max(ta);
-            if tb < entry_z {
+            // The near end is the larger z (walking down) or the smaller
+            // (climbing); the path moves toward +axis with z when dx > 0,
+            // so walking down it enters through the +axis face and
+            // climbing through the -axis face.
+            if UP {
+                if ta > entry_z {
+                    entry_z = ta;
+                    entry = match (axis, dx > 0.0) {
+                        (0, true) => FACE_NX,
+                        (0, false) => FACE_PX,
+                        (1, true) => FACE_NY,
+                        _ => FACE_PY,
+                    };
+                }
+            } else if tb < entry_z {
                 entry_z = tb;
-                // The near end is the larger z; the path moves toward +axis
-                // with z when dx > 0, so it enters through the +axis face.
                 entry = match (axis, dx > 0.0) {
                     (0, true) => FACE_PX,
                     (0, false) => FACE_NX,
@@ -186,19 +205,20 @@ impl Column {
             return None;
         }
         let f = |z: f32| z - self.surface(p0.0 + d.0 * z, p0.1 + d.1 * z);
-        if f(zb) <= 0.0 {
+        let (near, far) = if UP { (za, zb) } else { (zb, za) };
+        if f(near) <= 0.0 {
             // Under the roof where the path comes in: a wall if that is a
             // footprint edge, else the roof itself (only when the walk
             // started inside the column).
-            let face = if (zb - entry_z).abs() < 1e-5 { entry } else { NO_FACE };
+            let face = if (near - entry_z).abs() < 1e-5 { entry } else { NO_FACE };
             let (nx, ny) = if face == NO_FACE { (0.0, 0.0) } else { face_normal(face) };
-            let normal = if face == NO_FACE { self.normal(p0.0 + d.0 * zb, p0.1 + d.1 * zb) } else { (nx, ny, 0.0) };
-            return Some(ColumnHit { z: zb, face, normal });
+            let normal = if face == NO_FACE { self.normal(p0.0 + d.0 * near, p0.1 + d.1 * near) } else { (nx, ny, 0.0) };
+            return Some(ColumnHit { z: near, face, normal });
         }
-        if f(za) > 0.0 {
+        if f(far) > 0.0 {
             return None;
         }
-        let (mut above, mut below) = (zb, za);
+        let (mut above, mut below) = (near, far);
         for _ in 0..bisections {
             let mid = 0.5 * (above + below);
             if f(mid) > 0.0 {
