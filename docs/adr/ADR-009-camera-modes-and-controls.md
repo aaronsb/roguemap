@@ -164,29 +164,55 @@ The `coupling` row is whether the body turns with the view:
 
 | value | what a walk key means | what the mouse turns |
 |---|---|---|
-| `body-turns` | the direction the view faces, every tick | the view and the walk with it |
-| `view-only` | the direction the view faced when the key went down | the view alone |
+| `body-turns` | a screen direction, read against the view every tick | the view and the walk with it |
+| `view-only` | a direction against the body's own yaw | the view alone |
 
-Under `body-turns` the mouse yaw steers a walk in progress, which is
+The two are two control schemes, and each is the one its coupling makes
+sense of.
+
+Under `body-turns` the mouse yaw steers a walk in progress and the four
+keys are the four screen directions, so `a` and `d` strafe. This is
 Minecraft's arrangement and is what the game does today: the event loop
-calls `Camera::held_heading` on the current camera each tick. Under
-`view-only` the heading is taken when the held set changes and then held
-in map space, so the view can swing while the figure keeps walking north,
-and the next press takes the yaw the view has then.
+calls `Camera::held_heading` on the current camera each tick, and nothing
+about it changes.
+
+Under `view-only` the body carries a yaw of its own. `w` and `s` walk
+forward and back along it, `a` and `d` turn it, and the mouse turns the
+view alone. The owner: "if one is walking and uses w for forward, then a
+and s to turn the body left and right, the mouse looks around?" Holding
+`w` with `a` walks a curve, which is the held-key set of ADR-008 summing
+as it already does — `w` and `s` contribute to the pace, `a` and `d` to
+the turn. A frozen heading was the alternative, and it is worse: the only
+way to change direction would be a fresh press taking the view's yaw, so
+turning while looking elsewhere would mean looking where you are going
+first. A steerable body yaw is what makes the coupling worth having.
+
+**The body's yaw and its turn rate.** `Entity` gains `yaw`, its facing in
+map space, initialised to the view's yaw and thereafter the body's own.
+It turns at the creature's own rate: `turn` in `creatures.toml`, degrees
+per second, beside the `speed` that ADR-008 reads — a person 180, a brisk
+turn on the spot. A rate rather than a step per press, so a turn under
+the held-key set is smooth for the same reason a walk is, and a press
+spends the same `GRACE` lease. Where the terminal reports no key up
+(ADR-008's per-key leases) a held turn arrives as repeats and steps
+rather than sweeps, which is the same degradation the walk already has.
 
 `Camera::heading` and `Camera::held_heading` do not change: they answer
-what a screen direction means on the ground, which is the same question
-under either coupling. `Entity::facing` does not change either: it is
+what a screen direction means on the ground, which is the question
+`body-turns` asks. `view-only` asks a different one and answers it from
+`Entity::yaw` without the camera. `Entity::facing` does not change: it is
 left or right for the mirror of the art (ADR-008), taken from the screen
-sign of the heading, and it follows the walk under both. The body's yaw
-is not drawn — the art has a front view and its mirror, and ADR-008 left
-the back view out — so coupling shows in where the figure walks and
-nowhere else.
+sign of the heading, and it follows the walk under both couplings. The
+body's yaw is not drawn — the art has a front view and its mirror, and
+ADR-008 left the back view out — so a body turned away from the view
+reads as the figure it already is.
 
-`traversal` stays and is not subsumed. It says what frame a walk key
-names, the view or the map axes; `coupling` says whether the view's yaw
-reaches the walk at all. Under `map axes` a key already names a compass
-direction, so both couplings walk the same way and the row has no effect.
+`traversal` stays under `body-turns`, saying what frame a walk key names,
+the view or the map axes. Under `view-only` the body's yaw is the frame
+and the row has no effect, as it has none under `map axes` today. The
+diagonal keys `y u b n` are screen diagonals and mean nothing against a
+body yaw; under `view-only` they turn the body to the diagonal they name
+and walk it, so a key that walked a diagonal still walks one.
 
 **A third axis: what a key addresses.** `camera` is where the eye sits
 and `coupling` is whether the body turns with the view. What a walk key
@@ -311,10 +337,15 @@ rebinds a key.
   names to five, and `Settings::apply` maps the fifth to `Mode::Free`.
   The popover grows a line, which is the `settings` frame's second
   re-record; at 80 by 25 the sixteen rows and the border still fit.
-- `src/bin/roguemap.rs`'s tick is where coupling lands: the walk heading
-  is recomputed each tick under `body-turns` and latched under
-  `view-only`, and `free` skips `follow` and `step_walk` and flies the
-  eye instead. The `follow` guard at line 107 stops asking whether the
+- `src/bin/roguemap.rs`'s tick is where coupling lands: under
+  `body-turns` the walk heading is recomputed from the camera each tick,
+  under `view-only` the tick spends the turn keys into `Entity::yaw` and
+  the walk heading is that yaw, and `free` skips `follow` and `step_walk`
+  and flies the eye instead.
+- `Entity` gains `yaw`, and `creatures.toml` gains `turn` in degrees per
+  second on every row, read the way ADR-008 made `speed` read. The
+  property joins docs/properties.md's catalogue. `World::step_walk` gains
+  the turn alongside the step, spending the same lease. The `follow` guard at line 107 stops asking whether the
   view is perspective and asks whether the controls are addressing the
   character, which is the predicate a planner mode reuses.
 - The snapshot gains `tilt=` in degrees, defaulting to the floor, so
@@ -332,11 +363,14 @@ rebinds a key.
   move with the tilt; the cloud sample moves by C/(C − H) per tile of pan
   at both ends of the range; the tilt clamps at both ends and survives a
   zoom step and a mode round trip; under `body-turns` a walk in progress
-  turns with the yaw and under `view-only` it holds its map heading while
-  a fresh press takes the new one, and under `map axes` both walk the
-  same way; the free camera's eye moves while the player's position does
-  not, and leaving it restores the previous mode; the settings rows'
-  values are `Camera::MODES` and `Coupling::NAMES`.
+  turns with the yaw, and under `view-only` it walks along `Entity::yaw`
+  while the view turns away from it; a turn key spends the creature's
+  `turn` in degrees per second and a tap turns the grace's worth, the
+  angular reading of the walk's own distance test; `w` held with `a`
+  walks a curve of radius `speed / turn`; under `map axes` both couplings
+  walk the same way; the free camera's eye moves while the player's
+  position does not, and leaving it restores the previous mode; the
+  settings rows' values are `Camera::MODES` and `Coupling::NAMES`.
 - `input::SCENE` gains `V` at the end of the table, and `Action::Toggle`
   does not fit it: the free camera is a value of a settings row rather
   than a frame, and returning to the mode it was entered from is state no
@@ -384,8 +418,9 @@ Stage 3, the tilt in play:
 
 Stage 4, coupling:
 
-6. The `coupling` row and `Coupling`; the tick's two paths; the tests
-   above. The `settings` frame re-recorded for the row.
+6. The `coupling` row and `Coupling`; `Entity::yaw` and `creatures.toml`'s
+   `turn`; the tick's two paths and the turn spent in `step_walk`; the
+   diagonal keys turning the body under `view-only`; the tests above. The `settings` frame re-recorded for the row.
 
 Stage 5, the free camera:
 
@@ -401,6 +436,9 @@ Stage 6, docs:
    [scale.md](../scale.md), replacing 25.24 and 43.31 with the tilt and
    the exaggeration; the corrected far row in scale.md's step table; the
    two rows in [frames.md](../frames.md); the tests in
-   [testing.md](../testing.md); `V` and `{` `}` in the README key table.
+   [testing.md](../testing.md); the `turn` row in
+   [properties.md](../properties.md); the two control schemes in
+   scale.md's movement section; `V` and `{` `}` in the README key
+   table.
    [index.md](../index.md)'s decision table lists ADR-001 to ADR-007 and
    needs lines for ADR-008 and this one.
