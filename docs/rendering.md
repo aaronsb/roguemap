@@ -10,6 +10,58 @@ the lit cell.
 A boreal stand at 1:1. Every trunk, whorl and porous crown in that frame
 is geometry met by the walk; nothing is a sprite.
 
+## What the medium is
+
+A cell carries a glyph and two colours: roughly eight bits of shape against
+forty-eight of colour, and both are flat over the cell. So the medium's
+native output is regions of flat colour meeting at hard edges, in discrete
+tonal steps. A photograph's soft gradients fight that. A faceted painting,
+or Frontier's banded sky over flat polygon clouds, is what it does without
+being asked.
+
+**The viewer finishes the picture.** A glyph of grass is not a poor drawing
+of grass; it is a mark that says texture is here, and the reader supplies
+the rest. The owner: "it gives the human viewing it a chance to fill in
+with their mind the missing pixels." That is why the scene still reads at
+80 by 25, where 2,000 cells carry six times more world each than at 168 by
+71 — what survives compression is structure, and structure is what the eye
+completes from.
+
+**The geometry is physical; the surface is suggested.** A horizon comes
+from a real curvature, a crown from a grown tree, a shadow from a swept
+sun. The rendering of them is impressionistic, and it can be because the
+thing underneath is coherent. A viewer completes toward something. Fake the
+geometry as well and there is nothing to complete toward, and the same
+glyphs read as noise.
+
+**Motion is what carries it.** The owner again: "when motion comes into
+play, it is the thing that gives the human mind the substance to color in
+the gaps." A still frame is ambiguous where a moving one is not — parallax
+resolves depth, a walk cycle resolves a figure, drifting cloud resolves the
+plane it sits on. The unit of legibility is the sequence, not the frame, so
+a snapshot may look sparser than the game does.
+
+Two things follow, and they are the constraints this page's passes are
+judged against.
+
+**A mark must hold still.** Suggestion needs somewhere to settle: a greeble
+that moves is not texture, it is noise, and it spends the channel motion
+was going to complete the picture through. A scatter anchored to the camera
+rather than the world sparkles for exactly this reason, and a still frame
+cannot show it — the golden frames are blind to the failure that matters
+most, which is why a temporal test measures cell churn between two frames a
+fraction of a cell apart.
+
+**An edge must move smoothly.** Sextant antialiasing places a boundary to a
+third of a row, so an edge glides as the view turns instead of snapping
+from row to row. Sub-cell precision buys temporal smoothness, and that is
+most of what it is for.
+
+**The range to hold.** Low cloud, closed in, dark and rainy at one end;
+brilliant white puffs against deep azure over golden fields to the horizon
+at the other. Both rendered with physicality and with the texture of
+glyphs. A change that serves one and breaks the other has not landed.
+
 ## The frame
 
 `Scene` is the per-frame context: the map, the asset tables, the tileset,
