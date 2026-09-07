@@ -23,7 +23,7 @@ pub struct SettingItem {
 }
 
 /// Keys the engine reads; loading fails if one is missing.
-pub const REQUIRED_SETTINGS: [&str; 11] = ["traversal", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
+pub const REQUIRED_SETTINGS: [&str; 12] = ["traversal", "camera", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
 
 pub struct Settings {
     pub items: Vec<SettingItem>,
@@ -107,6 +107,7 @@ impl Settings {
 mod tests {
     use super::*;
     use crate::assets::test_assets;
+    use crate::camera::Camera;
     use crate::input::{self, Action, SCENE};
     use crate::world::{DAY_LENGTHS, WEATHER_PRESETS, WIND_PRESETS};
     use crossterm::event::KeyCode;
@@ -122,6 +123,9 @@ mod tests {
         assert_eq!(a.setting("day_length").unwrap().values.len(), DAY_LENGTHS.len());
         assert_eq!(weather.values[0], "auto");
         assert_eq!(wind.values[0], "auto");
+        // The camera row's values are the camera's own modes (ADR-007).
+        assert_eq!(a.setting("camera").unwrap().values, Camera::MODES);
+        assert_eq!(a.setting("camera").unwrap().values[a.setting("camera").unwrap().default as usize], "isometric");
     }
 
     #[test]

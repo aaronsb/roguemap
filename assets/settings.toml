@@ -6,6 +6,13 @@ values = ["screen space", "map axes"]
 default = 0
 
 [[setting]]
+key = "camera"
+description = "How the world maps to the screen (ADR-007): the isometric mode is the orthographic view at the pitch the four footprints imply; a perspective mode follows."
+label = "Camera"
+values = ["isometric"]
+default = 0
+
+[[setting]]
 key = "view"
 description = "A bounded island floating in the sky, or terrain in every direction."
 label = "World view"
