@@ -231,6 +231,27 @@ rivers, through the same `powf(1.15)` and `relief`. `control_height`
 (`map.rs:512`) is already the seam, and its comment already says an
 authored control grid can replace it.
 
+**The sphere is the world's shape, not the projection.** The owner: "we
+want to be able to project to quasi-ortho for game play reasons, zooming
+in and out is traditional 3d since spherical projection looks strange".
+
+Every view stays rectilinear — ADR-010's orthographic and perspective, and
+nothing else. A round world does not imply a curvilinear projection, and
+adopting one would bend straight edges, curve the horizon on the screen
+and read as a fisheye rather than as distance. The curvature reaches the
+picture through the height field alone, so a wall stays straight and the
+horizon is a straight row.
+
+Gameplay is the quasi-orthographic table of ADR-009 and ADR-010, and the
+zoom from a person to a planet is ordinary projection throughout. At
+full-planet zoom the planet is a disc drawn rectilinearly, not a texture
+mapped onto a sphere.
+
+The cost of keeping it rectilinear is at wide fields of view, where the
+projection stretches by `1 / cos(fov/2)` at the edge: 1.15 at 60 degrees,
+1.74 at the `fov` row's widest 110. A curvilinear projection would hold
+those flat, and it is the one thing this decision gives up.
+
 **What the sphere is not.** No spherical mesh, no new coordinate system, no
 floating origin, no wrap, no poles, no seams. `HeightGrid` stays a box of
 tiles and `Map` a rectangle. The sandbox is a rectangle on a tangent plane
