@@ -75,14 +75,14 @@ struct Resolved<'a> {
 /// perspective view builds a volume for every tree in reach, a stand-in
 /// where the tree is too far for its model, so it never draws them.
 pub(crate) fn tree_billboards(cam: &crate::camera::Camera) -> bool {
-    !cam.is_perspective() && !crate::raster::lod_of(cam.rows_per_metre()).volumes
+    !cam.is_perspective() && !crate::raster::lod_of(cam.detail_rows()).volumes
 }
 
 impl SpriteItem {
     /// The item's art and colours, its tier picked from the rows a metre
     /// is worth where it stands: the camera's scale in an orthographic
     /// view, the scale at its own depth in a perspective one.
-    fn resolve<'a>(&self, sc: &Scene<'a>, tile: &Tile, rows_per_metre: f32) -> Resolved<'a> {
+    fn resolve<'a>(&self, sc: &Scene<'a>, tile: &Tile, detail_rows: f32) -> Resolved<'a> {
         let (assets, ts, pal, world) = (sc.assets, sc.ts, &sc.pal, sc.world);
         match *self {
             SpriteItem::Tree(flora) => {
@@ -101,7 +101,7 @@ impl SpriteItem {
             SpriteItem::Entity(e) => {
                 let creature = &assets.creatures[e.kind as usize % assets.creatures.len()];
                 let tint = Tint { bg: creature.color, fg: creature.glyph };
-                let sprite = assets.art.for_rows_facing(&creature.art, creature.size[2] * rows_per_metre, e.facing == Facing::Left).expect("creature art was checked at load");
+                let sprite = assets.art.for_rows_facing(&creature.art, creature.size[2] * detail_rows, e.facing == Facing::Left).expect("creature art was checked at load");
                 Resolved { sprite, pose: e.pose(sprite.poses.len()), colors: SpriteColors { top: tint, base: tint }, depth_bias: 0.01 }
             }
         }
@@ -150,21 +150,21 @@ impl Renderer {
             if a.sx < -40 || a.sx > self.w + 40 || a.sy < -40 || a.sy > self.h + 40 {
                 continue;
             }
-            self.draw_item(sc, &item, &tile, &a, cam.rows_per_metre_at(x, y, ground));
+            self.draw_item(sc, &item, &tile, &a, cam.detail_rows_at(x, y, ground));
         }
     }
 
-    fn draw_item(&mut self, sc: &Scene, item: &SpriteItem, tile: &Tile, a: &Anchor, rows_per_metre: f32) {
-        let r = item.resolve(sc, tile, rows_per_metre);
+    fn draw_item(&mut self, sc: &Scene, item: &SpriteItem, tile: &Tile, a: &Anchor, detail_rows: f32) {
+        let r = item.resolve(sc, tile, detail_rows);
         let anchor = Anchor { depth: a.depth + r.depth_bias, ..*a };
-        self.sprite(r.sprite, r.pose, &anchor, &r.colors, rows_per_metre);
+        self.sprite(r.sprite, r.pose, &anchor, &r.colors, detail_rows);
     }
 
     /// Draw a billboard, in the given walk pose or at rest, anchored so
     /// its feet sit on the tile's centre row, whatever tier the art came
     /// from. Cells already holding nearer terrain, geometry or sprites are
     /// left alone.
-    fn sprite(&mut self, sp: &Sprite, pose: Option<usize>, a: &Anchor, col: &SpriteColors, rows_per_metre: f32) {
+    fn sprite(&mut self, sp: &Sprite, pose: Option<usize>, a: &Anchor, col: &SpriteColors, detail_rows: f32) {
         let rows = sp.pose(pose);
         let n = rows.len() as i32;
         for (r, row) in rows.iter().enumerate() {
@@ -178,7 +178,7 @@ impl Renderer {
                     continue;
                 }
                 let x = a.sx + c as i32 - sp.center;
-                let wz = a.z + height as f32 / rows_per_metre;
+                let wz = a.z + height as f32 / detail_rows;
                 if let Some(cell) = self.cell(x, y) {
                     if cell.depth > a.depth {
                         continue;
@@ -221,8 +221,8 @@ impl Renderer {
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (depth, x, y, z, pi) in items {
             let p = &props[pi];
-            let rows_per_metre = cam.rows_per_metre_at(x, y, z);
-            let Some(sprite) = assets.art.for_rows(&p.art, p.size[2] * rows_per_metre) else { continue };
+            let detail_rows = cam.detail_rows_at(x, y, z);
+            let Some(sprite) = assets.art.for_rows(&p.art, p.size[2] * detail_rows) else { continue };
             let (sx, sy) = cam.project(x, y, z);
             let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
             let n = sprite.rows.len() as i32;
@@ -242,7 +242,7 @@ impl Renderer {
                         let solid = p.color != Rgb(0, 0, 0);
                         let bg = if solid { p.color.lerp(Rgb(228, 232, 240), snow * 0.8) } else { cell.albedo };
                         let fg = p.glyph.lerp(Rgb(235, 238, 245), snow * 0.6);
-                        *cell = GCell { albedo: bg, ch, glyph: fg, wx: x, wy: y, wz: z + (n - 1 - r as i32) as f32 / rows_per_metre, face: FACE_TOP, lit: true, depth };
+                        *cell = GCell { albedo: bg, ch, glyph: fg, wx: x, wy: y, wz: z + (n - 1 - r as i32) as f32 / detail_rows, face: FACE_TOP, lit: true, depth };
                     }
                 }
             }

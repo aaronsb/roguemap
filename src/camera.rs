@@ -7,13 +7,14 @@
 //! A field of view of zero is an orthographic view, which projects through
 //! a basis of three numbers: columns per tile across the screen, rows per
 //! tile of ground depth toward the camera and rows per metre of height.
-//! The isometric mode builds that basis from a footprint preset
-//! (`Camera::isometric`), so its pitch is whatever the footprint implies —
-//! 25.24 degrees above the horizon for the 4:1 footprints and 43.31 for
-//! the far zoom's 2x1 — and its scales are ADR-004's, each zoom an exact
-//! halving of the next: `columns_per_metre` across the ground and
-//! `rows_per_metre` up the screen. Heights project through the second, so
-//! a 2 m person is 12 rows at 1:1 and 1.5 at 1:8.
+//! The isometric mode is a table (ADR-009): a zoom's columns per metre,
+//! the tilt of the ground plane on screen, from 30 degrees to straight
+//! down, and a relief, the factor height is drawn taller than the tilt
+//! implies. Its scales are ADR-004's, each zoom an exact halving of the
+//! next: `columns_per_metre` across the ground and `rows_per_metre` up
+//! the screen. Heights project through the second, so a 2 m person is 12
+//! rows at 1:1 and 1.5 at 1:8 at the floor tilt, and none at all straight
+//! down, where `detail_rows` keeps the level of detail the zoom's.
 //!
 //! A positive field of view is a perspective view from an eye (stage 2 of
 //! the ADR): the chase, shoulder and first-person modes each place the eye
@@ -41,9 +42,11 @@ pub struct Basis {
 }
 
 impl Basis {
-    /// The pitch above the horizon this basis implies: a metre of ground
-    /// depth is `rows / TILE_METRES` rows and a metre of height `rise`.
-    pub fn pitch(&self) -> f32 {
+    /// The pitch above the horizon the exaggeration implies, taking the
+    /// relief for foreshortening: `atan(tan(tilt) / relief)`, 25.24
+    /// degrees at the floor tilt, the number ADR-007 pinned. The ground
+    /// plane's own angle is `Camera::tilt`.
+    pub fn apparent_pitch(&self) -> f32 {
         (self.rows / TILE_METRES).atan2(self.rise)
     }
 
@@ -153,11 +156,19 @@ pub struct Camera {
     /// cosine are cached in `yaw`, so it is set through `set_angle`.
     angle: f32,
     yaw: (f32, f32),
-    /// Pitch in radians above the horizon: positive looks down. The
-    /// isometric constructor derives it from the basis; a camera built
-    /// from a pitch (`Camera::orthographic`, the perspective modes)
-    /// derives the basis from it.
+    /// Pitch in radians above the horizon: positive looks down. An
+    /// isometric camera's pitch is its tilt; a perspective mode's is its
+    /// placement's, turned by `pitch_by`.
     pub pitch: f32,
+    /// The table's tilt (ADR-009): the angle of the ground plane on
+    /// screen, in radians, within `TILT_RANGE`.
+    tilt: f32,
+    /// How much taller than the tilt implies height is drawn; it
+    /// multiplies `cos(tilt)` and so vanishes at the plan view.
+    relief: f32,
+    /// Rows a metre draws as at the floor tilt: the basis's `rise` there,
+    /// and the same number at every tilt (`detail_rows`).
+    detail: f32,
     /// Field of view in radians across the screen; zero is an orthographic
     /// view, and every isometric preset is one.
     pub fov: f32,
@@ -272,21 +283,33 @@ impl Camera {
     /// The pitch a perspective view may be turned to, either way.
     const PITCH_RANGE: (f32, f32) = (-80.0 * DEG, 85.0 * DEG);
 
+    /// A cell's width over its height: the canonical font's 8 pixels
+    /// over 16.
+    pub const CELL_ASPECT: f32 = 0.5;
+
+    /// The tilt the table may be set to: the isometric look at the floor,
+    /// straight down at the top.
+    pub const TILT_RANGE: (f32, f32) = (30.0 * DEG, 90.0 * DEG);
+
+    /// The relief the table draws with: `sqrt 1.5`, the exaggeration the
+    /// footprint presets always had.
+    pub const RELIEF: f32 = 1.224_744_9;
+
     /// The far preset at the compass view.
     pub fn new() -> Camera {
         Camera::isometric(0)
     }
 
-    /// The isometric mode: the orthographic camera a footprint preset
-    /// implies, at the compass view, with no offset. The basis is the
-    /// preset's own numbers — `hw * sqrt 2` columns and `hh * sqrt 2` rows
-    /// per tile, `3 hw / 8` rows per metre — and the pitch is what they
-    /// imply.
+    /// The isometric mode: the table at a zoom preset, at the compass
+    /// view and the floor tilt, with no offset.
     pub fn isometric(zoom: usize) -> Camera {
         let mut cam = Camera {
             angle: 0.0,
             yaw: (0.0, 1.0),
             pitch: 0.0,
+            tilt: Camera::TILT_RANGE.0,
+            relief: Camera::RELIEF,
+            detail: 1.0,
             fov: 0.0,
             ox: 0.0,
             oy: 0.0,
@@ -309,18 +332,29 @@ impl Camera {
         cam
     }
 
-    /// An orthographic camera from a yaw, a pitch and a scale, at no
-    /// offset: the general form the isometric presets are instances of.
-    /// It carries the preset nearest its rows per metre for what is keyed
-    /// by zoom.
-    pub fn orthographic(yaw: f32, pitch: f32, scale: Scale) -> Camera {
-        let (s, c) = pitch.sin_cos();
-        let basis = Basis { cols: scale.columns * TILE_METRES, rows: scale.rows * s * TILE_METRES, rise: scale.rows * c };
-        let mut cam = Camera::isometric(Camera::nearest_zoom(basis.rise));
+    /// An orthographic camera from a yaw, a tilt, a relief and columns per
+    /// metre, at no offset: the general form the isometric presets are
+    /// instances of. It carries the preset nearest its detail scale for
+    /// what is keyed by zoom, whatever its tilt.
+    pub fn orthographic(yaw: f32, tilt: f32, relief: f32, columns: f32) -> Camera {
+        let detail = Camera::table_basis(columns, Camera::TILT_RANGE.0, relief).rise;
+        let mut cam = Camera::isometric(Camera::nearest_zoom(detail));
         cam.set_angle(yaw);
-        cam.pitch = pitch;
-        cam.basis = basis;
+        cam.tilt = tilt;
+        cam.relief = relief;
+        cam.pitch = tilt;
+        cam.basis = Camera::table_basis(columns, tilt, relief);
+        cam.detail = detail;
         cam
+    }
+
+    /// The basis of a table (ADR-009): `columns` per metre across the
+    /// screen, the ground plane tilted `tilt` radians toward the viewer,
+    /// and height `relief` times taller than the tilt implies.
+    fn table_basis(columns: f32, tilt: f32, relief: f32) -> Basis {
+        let (s, c) = tilt.sin_cos();
+        let cols = columns * TILE_METRES;
+        Basis { cols, rows: cols * Camera::CELL_ASPECT * s, rise: relief * columns * Camera::CELL_ASPECT * c }
     }
 
     /// A perspective camera with its eye at a point, looking along `yaw`
@@ -450,22 +484,35 @@ impl Camera {
         self.aim();
     }
 
-    /// The preset whose rows per metre are nearest `rise`.
-    fn nearest_zoom(rise: f32) -> usize {
+    /// The preset whose detail scale is nearest `detail`: the rows a metre
+    /// draws as at the floor tilt, which no tilt moves.
+    fn nearest_zoom(detail: f32) -> usize {
         let nearest = (0..ZOOMS.len()).min_by(|&i, &j| {
-            let d = |z: usize| (Camera::isometric(z).rows_per_metre() - rise).abs();
+            let d = |z: usize| (Camera::isometric(z).detail_rows() - detail).abs();
             d(i).total_cmp(&d(j))
         });
         nearest.unwrap_or(0)
     }
 
-    /// Switch to a footprint preset in place: its index, footprint, basis
-    /// and pitch. The offset is left to the caller.
+    /// A zoom preset's columns per metre: `hw sqrt 2` columns a tile.
+    fn zoom_columns(zoom: usize) -> f32 {
+        ZOOMS[zoom % ZOOMS.len()].0 as f32 * SQRT_2 / TILE_METRES
+    }
+
+    /// Switch to a zoom preset in place: its index, footprint, basis and
+    /// detail scale. The offset is left to the caller.
     fn preset(&mut self, zoom: usize) {
         self.zoom = zoom % ZOOMS.len();
         (self.hw, self.hh) = ZOOMS[self.zoom];
-        self.basis = Basis { cols: self.hw as f32 * SQRT_2, rows: self.hh as f32 * SQRT_2, rise: self.hw as f32 * 3.0 / 8.0 };
-        self.pitch = self.basis.pitch();
+        let columns = Camera::zoom_columns(self.zoom);
+        self.basis = Camera::table_basis(columns, self.tilt, self.relief);
+        // The far preset keeps its 2x1 footprint's rows until stage 2 of
+        // ADR-009.
+        if self.zoom == 0 {
+            self.basis.rows = self.hh as f32 * SQRT_2;
+        }
+        self.detail = Camera::table_basis(columns, Camera::TILT_RANGE.0, self.relief).rise;
+        self.pitch = self.tilt;
     }
 
     /// The perspective modes' scale factor the preset carries: the far
@@ -532,7 +579,8 @@ impl Camera {
         let depth = self.depth_ref();
         let rows = self.focal / 2.0 / depth;
         self.basis = Basis { cols: self.focal / depth * TILE_METRES, rows: rows * sp * TILE_METRES, rise: rows * cp };
-        self.zoom = Camera::nearest_zoom(self.basis.rise);
+        self.detail = self.basis.rise;
+        self.zoom = Camera::nearest_zoom(self.detail);
         (self.hw, self.hh) = ZOOMS[self.zoom];
     }
 
@@ -601,6 +649,17 @@ impl Camera {
         (self.pitch / DEG).round() as i32
     }
 
+    /// The table's tilt in radians: the angle of the ground plane on
+    /// screen, 30 degrees at the floor and 90 straight down.
+    pub fn tilt(&self) -> f32 {
+        self.tilt
+    }
+
+    /// The relief: how much taller than the tilt implies height is drawn.
+    pub fn relief(&self) -> f32 {
+        self.relief
+    }
+
     /// The orthographic basis: the numbers the projection multiplies by.
     pub fn basis(&self) -> Basis {
         self.basis
@@ -628,23 +687,34 @@ impl Camera {
         self.a() / TILE_METRES
     }
 
-    /// Screen rows a metre of height draws as. In the isometric mode that
-    /// is three rows per eight columns of half width, so a 2 m person is
-    /// 12 rows at 1:1 and halves with every zoom out. On 1:2 cells that is
-    /// 96 pixels of height against 90 pixels of ground per metre, so
-    /// vertical and horizontal scale agree. Level of detail and the sprite
-    /// tiers key off it. In perspective it is the scale at the character's
-    /// depth; `rows_per_metre_at` gives any other point's.
+    /// Screen rows a metre of height displaces a thing up the screen: the
+    /// basis's `rise`. At the floor tilt a 2 m person is 12 rows at 1:1
+    /// and halves with every zoom out, 96 pixels of height against 90
+    /// pixels of ground per metre; straight down it is zero. The
+    /// projection and the screen-extent culls read it; what a thing is
+    /// drawn as reads `detail_rows`. In perspective it is the scale at
+    /// the character's depth.
     pub fn rows_per_metre(&self) -> f32 {
         self.basis.rise
     }
 
-    /// Rows a metre of height draws as at a world point: the camera's
-    /// scale in an orthographic view, and in perspective the scale at the
-    /// point's own depth, so a sprite picks the tier its distance implies.
-    pub fn rows_per_metre_at(&self, x: f32, y: f32, z: f32) -> f32 {
+    /// Rows a metre of an upright thing facing the viewer draws as: the
+    /// zoom's `rows_per_metre` at the floor tilt, to the bit, at every
+    /// tilt. The level of detail, the sprite tiers and the walk's samples
+    /// per metre key off it, so a plan view at 1:1 resolves the ground as
+    /// finely as a tilted one and a person seen from overhead is still a
+    /// person-sized billboard. In perspective it is the scale at the
+    /// character's depth; `detail_rows_at` gives any other point's.
+    pub fn detail_rows(&self) -> f32 {
+        self.detail
+    }
+
+    /// `detail_rows` at a world point: the camera's in an orthographic
+    /// view, and in perspective the scale at the point's own depth, so a
+    /// sprite picks the tier its distance implies.
+    pub fn detail_rows_at(&self, x: f32, y: f32, z: f32) -> f32 {
         if !self.is_perspective() {
-            return self.rows_per_metre();
+            return self.detail;
         }
         let depth = self.view_depth(x, y, z).max(0.5);
         self.focal / 2.0 * self.pitch.cos() / depth
@@ -883,12 +953,12 @@ impl Camera {
     }
 
     /// Virtual camera altitude in metres for cloud parallax in the
-    /// orthographic modes; higher when zoomed out. A perspective view has
-    /// a real eye and does not use it.
+    /// orthographic modes; higher when zoomed out, whatever the tilt. A
+    /// perspective view has a real eye and does not use it.
     pub fn altitude(&self) -> f32 {
-        match self.hw {
-            0..=2 => 100.0,
-            3..=4 => 130.0,
+        match self.zoom {
+            0 => 100.0,
+            1 => 130.0,
             _ => 240.0,
         }
     }
@@ -1340,32 +1410,46 @@ mod tests {
     }
 
     #[test]
-    fn the_isometric_pitch_is_what_the_footprint_implies() {
-        // tan(pitch) = 4 sqrt 2 hh / (3 hw): 25.24 degrees for the three
-        // 4:1 footprints and 43.31 for the far zoom's 2x1, which has always
-        // been the steeper view. Building the general orthographic camera
-        // from that pitch and the preset's scale gives the preset's basis
-        // back, within a few ulps.
-        let four_to_one = (SQRT_2 / 3.0).atan();
-        let two_to_one = (2.0 * SQRT_2 / 3.0).atan();
-        assert!((four_to_one.to_degrees() - 25.24).abs() < 0.01 && (two_to_one.to_degrees() - 43.31).abs() < 0.01);
+    fn the_table_at_the_floor_tilt_is_the_footprint_preset_to_the_bit() {
+        // The basis from the tilt, the relief and the zoom's columns per
+        // metre (ADR-009) is the footprint's own numbers — `hw sqrt 2`,
+        // `hh sqrt 2`, `3 hw / 8` — bit for bit at 1:4, 1:2 and 1:1, and
+        // the far zoom's rise too: sin(30) is exactly 0.5 in f32 and the
+        // relief is sqrt 1.5. The detail scale is that rise.
+        assert_eq!(Camera::RELIEF, 1.5f32.sqrt());
+        assert_eq!(Camera::TILT_RANGE.0.sin(), 0.5);
         for (zoom, &(hw, hh)) in ZOOMS.iter().enumerate() {
             let cam = Camera::isometric(zoom);
-            let want = (4.0 * SQRT_2 * hh as f32 / (3.0 * hw as f32)).atan();
-            assert!((cam.pitch - want).abs() < 1e-6, "zoom {zoom}: pitch {} for {hw}x{hh}", cam.pitch.to_degrees());
-            assert!((cam.pitch - if hw == 2 * hh { two_to_one } else { four_to_one }).abs() < 1e-6, "zoom {zoom}");
+            let old = Old { angle: 0.0, ox: 0.0, oy: 0.0, hw, hh };
+            let (a, b, rpm) = old.scales();
+            let got = Camera::table_basis(cam.columns_per_metre(), Camera::TILT_RANGE.0, Camera::RELIEF);
+            assert_eq!((got.cols, got.rise), (a, rpm), "zoom {zoom}");
+            assert_eq!(cam.detail_rows(), rpm, "zoom {zoom}");
+            assert_eq!((cam.a(), cam.b(), cam.rows_per_metre()), (a, b, rpm), "zoom {zoom}");
+            if zoom > 0 {
+                assert_eq!(got.rows, b, "zoom {zoom}");
+            }
+            assert_eq!((cam.tilt(), cam.pitch, cam.relief()), (Camera::TILT_RANGE.0, Camera::TILT_RANGE.0, Camera::RELIEF));
             assert_eq!(cam.fov, 0.0, "every preset is orthographic");
-            let general = Camera::orthographic(cam.angle(), cam.pitch, cam.scale());
-            let (got, want) = (general.basis(), cam.basis());
-            assert!((got.cols - want.cols).abs() < 1e-5 && (got.rows - want.rows).abs() < 1e-5 && (got.rise - want.rise).abs() < 1e-5, "zoom {zoom}: {got:?} vs {want:?}");
+            // The general form built from the preset's own numbers is the
+            // preset again and carries it.
+            let general = Camera::orthographic(cam.angle(), cam.tilt(), cam.relief(), cam.columns_per_metre());
+            assert_eq!((general.basis().cols, general.basis().rise, general.detail_rows()), (a, rpm, rpm), "zoom {zoom}");
             assert_eq!((general.zoom, general.hw, general.hh), (zoom, hw, hh), "the general camera carries the nearest preset");
-            assert!((general.pitch - cam.pitch).abs() < 1e-6 && (general.scale().rows - cam.scale().rows).abs() < 1e-5);
         }
+        // The apparent pitch is the number ADR-007 pinned, the tilt taken
+        // for foreshortening with the relief: 25.24 degrees at the floor,
+        // and 43.31 for the far zoom's 2x1 rows while it keeps them.
+        let close = Camera::isometric(3);
+        assert!((close.basis().apparent_pitch().to_degrees() - 25.24).abs() < 0.01);
+        assert!((close.basis().apparent_pitch() - (Camera::TILT_RANGE.0.tan() / Camera::RELIEF).atan()).abs() < 1e-6);
+        assert!((Camera::isometric(0).basis().apparent_pitch().to_degrees() - 43.31).abs() < 0.01);
         // A top-down view has all its rows in ground depth and none in
-        // height; a view along the ground the reverse.
-        let down = Camera::orthographic(0.0, FRAC_PI_2, Scale { columns: 4.0, rows: 2.0 });
+        // height; a view along the ground the reverse, with no relief.
+        let down = Camera::orthographic(0.0, FRAC_PI_2, Camera::RELIEF, 4.0);
         assert!((down.b() - 2.0 * TILE_METRES).abs() < 1e-6 && down.rows_per_metre().abs() < 1e-6);
-        let along = Camera::orthographic(0.0, 0.0, Scale { columns: 4.0, rows: 2.0 });
+        assert_eq!(down.detail_rows(), Camera::table_basis(4.0, Camera::TILT_RANGE.0, Camera::RELIEF).rise, "the detail scale does not tilt");
+        let along = Camera::orthographic(0.0, 0.0, 1.0, 4.0);
         assert!(along.b().abs() < 1e-6 && (along.rows_per_metre() - 2.0).abs() < 1e-6);
     }
 
@@ -1775,12 +1859,13 @@ mod tests {
             let (sx0, _) = cam.project(cx, cy, cz);
             let (sx1, _) = cam.project(cx + rx / TILE_METRES, cy + ry / TILE_METRES, cz);
             assert!(((sx1 - sx0) - cam.columns_per_metre()).abs() < 0.05, "{}: a metre across is {} columns, stated {}", cam.mode_name(), sx1 - sx0, cam.columns_per_metre());
-            assert!((cam.rows_per_metre_at(cx, cy, cz) - cam.rows_per_metre()).abs() < 1e-3);
+            assert_eq!(cam.detail_rows(), cam.rows_per_metre(), "{}: from an eye the detail scale is the height scale", cam.mode_name());
+            assert!((cam.detail_rows_at(cx, cy, cz) - cam.rows_per_metre()).abs() < 1e-3);
             let far = (cx + (cx - ex), cy + (cy - ey), cz + (cz - ez));
-            assert!((cam.rows_per_metre_at(far.0, far.1, far.2) * 2.0 - cam.rows_per_metre()).abs() < 1e-2, "{}: twice the depth is half the rows", cam.mode_name());
+            assert!((cam.detail_rows_at(far.0, far.1, far.2) * 2.0 - cam.rows_per_metre()).abs() < 1e-2, "{}: twice the depth is half the rows", cam.mode_name());
             // Level of detail keys off the stated scale, and the preset
             // carried is the one nearest it.
-            let nearest = Camera::nearest_zoom(cam.rows_per_metre());
+            let nearest = Camera::nearest_zoom(cam.detail_rows());
             assert_eq!(cam.zoom, nearest);
         }
         // First person states its scale a few metres out.

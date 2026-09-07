@@ -74,7 +74,7 @@ impl Detail {
     /// and a twig about a column thick. The level counts the zooms a model
     /// is grown at: 0 at the mid zoom, 1 near, 2 close.
     pub(crate) fn of(cam: &crate::camera::Camera) -> Detail {
-        Detail::at(cam.rows_per_metre(), cam.columns_per_metre())
+        Detail::at(cam.detail_rows(), cam.columns_per_metre())
     }
 
     /// The detail for a tree at its own depth from a perspective eye: the
@@ -379,7 +379,7 @@ impl HeightGrid {
         /// A volume the walk never meets: only the shadow mask sweeps it.
         const UNREGISTERED: (i32, i32, i32, i32) = (0, 0, -1, -1);
         let mut spans: Vec<(i32, i32, i32, i32)> = Vec::new();
-        let lod = crate::raster::lod_of(cam.rows_per_metre());
+        let lod = crate::raster::lod_of(cam.detail_rows());
         let detail = Detail::of(cam);
         // From an eye every tree in reach is a volume: its model where its
         // own depth gives it the rows a model needs, its stand-in beyond.
@@ -412,7 +412,7 @@ impl HeightGrid {
                         if cam.fog_depth(eye, cx, cy, ground) > sc.far + dims.radius * s {
                             continue;
                         }
-                        let rows = cam.rows_per_metre_at(cx, cy, ground);
+                        let rows = cam.detail_rows_at(cx, cy, ground);
                         (crate::raster::lod_of(rows), Detail::snapped(rows))
                     } else {
                         let (sx, sy) = cam.project(cx, cy, ground);
