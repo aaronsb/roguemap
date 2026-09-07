@@ -990,12 +990,14 @@ impl Camera {
     /// The eye's ray through a screen position, as a unit direction in
     /// metres: what the perspective walk marches. An orthographic view
     /// answers with a ray from far along its own drift, for the callers
-    /// that do not ask which they have.
+    /// that do not ask which they have: down it lies `ray`'s ground point
+    /// and along it `ray`'s drift, so its direction is the basis's
+    /// `apparent_pitch` rather than the table's tilt.
     pub fn eye_ray(&self, sx: f32, sy: f32) -> EyeRay {
         if !self.is_perspective() {
             let Ray { p0, d } = self.ray(sx, sy);
             let (s, c) = self.yaw;
-            let (sp, cp) = self.pitch.sin_cos();
+            let (sp, cp) = self.basis.apparent_pitch().sin_cos();
             let far = 400.0;
             return EyeRay { eye: (p0.0 + d.0 * far * sp, p0.1 + d.1 * far * sp, far * sp), dir: (-s * cp, -c * cp, -sp) };
         }
@@ -2315,6 +2317,29 @@ mod tests {
         let landed = flown.in_mode(0);
         assert!(!landed.is_perspective() && landed.mode() == Mode::Isometric);
         assert_eq!(landed.tilt_degrees(), table.tilt_degrees());
+    }
+
+    /// The orthographic `eye_ray` is the table's own ray in the
+    /// perspective form: down it to height zero is `ray`'s ground point,
+    /// and along it is `ray`'s drift.
+    #[test]
+    fn the_orthographic_eye_ray_is_the_tables_own_ray() {
+        for degrees in [30.0, 45.0, 70.0, 90.0] {
+            let mut cam = Camera::isometric(2);
+            cam.set_tilt(degrees * DEG);
+            cam.look_at_point(8.5, 8.5, 4.0, 120, 40);
+            let (sx, sy) = (37.5, 21.0);
+            let flat = cam.ray(sx, sy);
+            let eye = cam.eye_ray(sx, sy);
+            let t = eye.eye.2 / -eye.dir.2;
+            let (gx, gy) = eye.ground(t);
+            assert!((gx - flat.p0.0).abs() < 1e-3 && (gy - flat.p0.1).abs() < 1e-3, "{degrees}: {gx}, {gy} is not {:?}", flat.p0);
+            // `Ray::d` is tiles per metre of height: along the ray, its
+            // drift over what it climbs.
+            let (dx, dy) = eye.drift();
+            let (dx, dy) = (dx / eye.dir.2, dy / eye.dir.2);
+            assert!((dx - flat.d.0).abs() < 1e-4 && (dy - flat.d.1).abs() < 1e-4, "{degrees}: {dx}, {dy} is not {:?}", flat.d);
+        }
     }
 
     /// Leaving the free camera undoes the push that entered it: the table
