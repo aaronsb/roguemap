@@ -1620,6 +1620,60 @@ mod tests {
     }
 
     #[test]
+    fn from_an_eye_a_near_tree_is_its_model_and_a_far_one_its_stand_in() {
+        use crate::volume::Shape;
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let pine = assets.species.iter().position(|s| s.name == "pine").unwrap();
+        // Two live pines on a flat plain, twelve and seventy-five metres
+        // from an eye at (8.5, 2.5) looking along +y, the far one off to
+        // the side so the near one does not stand in its way.
+        let map = Map::synthetic(48, 48, assets.clone(), 1, move |x, y| {
+            let mut t = Tile::flat(5);
+            t.seed = 7;
+            if (x, y) == (8, 8) || (x, y) == (24, 36) {
+                t.tree = Some(Flora { species: pine as u8, variant: 2 });
+            }
+            t
+        });
+        let world = World::new(1);
+        let (w, h) = (120, 40);
+        let mut cam = Camera::first_person(PI);
+        cam.look_at_point(8.5, 2.5, 5.0 + 1.7, w, h);
+        assert_eq!(cam.forward(), (PI.sin(), PI.cos()), "toward the camera is -y, so it looks along +y");
+        let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+        let r = prepared(&sc, w, h);
+        let grid = r.grid();
+        assert_eq!(grid.crowns.len(), 2, "both pines are in reach of the eye");
+        // Twelve metres off the pine has rows enough for its model;
+        // seventy-five metres off it has not, and is its stand-in cone
+        // alone.
+        let (near_rows, far_rows) = (cam.rows_per_metre_at(8.5, 8.5, 5.0), cam.rows_per_metre_at(24.5, 36.5, 5.0));
+        assert!(near_rows >= 1.5 && far_rows < 1.5, "{near_rows} and {far_rows} rows per metre");
+        let near: Vec<Shape> = grid.volumes.iter().filter(|v| v.my == 8).map(|v| v.shape).collect();
+        let far: Vec<Shape> = grid.volumes.iter().filter(|v| v.my == 36).map(|v| v.shape).collect();
+        assert!(near.contains(&Shape::Cluster) && near.contains(&Shape::Branch), "the near pine is grown: {near:?}");
+        assert_eq!(far, vec![Shape::Cone], "the far pine is its stand-in");
+        // The stand-in is what the walk meets there: a ray at the far
+        // crown's middle is a canopy hit on its tile, and the near tree's
+        // leader is wood or foliage of the model.
+        let v = grid.tree_crowns().find(|v| v.my == 36).unwrap();
+        let (px, py) = cam.project(v.cx, v.cy, v.h0 + 0.5 * v.height);
+        let hit = r.ray(&sc, px, py).expect("the far crown");
+        assert_eq!((hit.kind, hit.my), (HitKind::Canopy, 36));
+        let v = grid.tree_crowns().find(|v| v.my == 8).unwrap();
+        let (px, py) = cam.project(v.cx, v.cy, v.top() - 1.5);
+        let hit = r.ray(&sc, px, py).expect("the near leader");
+        assert!(hit.kind.is_tree() && hit.my == 8, "{:?} on tile {}", hit.kind, hit.my);
+        // The same scene from the isometric mid zoom grows both.
+        let mut iso = Camera::isometric(1);
+        iso.look_at(8, 20, &map, w, h);
+        let sc = Scene::new(&map, ts, &world, &iso, 0.0);
+        let r = prepared(&sc, w, h);
+        assert!(r.grid().volumes.iter().filter(|v| v.my == 36).any(|v| v.shape == Shape::Cluster));
+    }
+
+    #[test]
     fn a_tilled_plot_lays_its_own_ground_in_rows_along_its_longer_axis() {
         let assets = test_assets();
         let ts = &Tileset::all(&assets)[0];

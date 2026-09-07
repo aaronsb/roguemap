@@ -77,6 +77,21 @@ impl Detail {
         Detail::at(cam.rows_per_metre(), cam.columns_per_metre())
     }
 
+    /// The detail for a tree at its own depth from a perspective eye: the
+    /// preset's whose level the rows per metre there fall in, so every
+    /// tree at a level shares one simplification and the model cache one
+    /// key.
+    pub(crate) fn snapped(rows: f32) -> Detail {
+        let zoom = if rows >= 6.0 {
+            3
+        } else if rows >= 3.0 {
+            2
+        } else {
+            1
+        };
+        Detail::of(&crate::camera::Camera::isometric(zoom))
+    }
+
     /// The same from a zoom's scale alone.
     pub(crate) fn at(rows: f32, cols: f32) -> Detail {
         let level = if rows >= 6.0 {
@@ -366,8 +381,12 @@ impl HeightGrid {
         let mut spans: Vec<(i32, i32, i32, i32)> = Vec::new();
         let lod = crate::raster::lod_of(cam.rows_per_metre());
         let detail = Detail::of(cam);
+        // From an eye every tree in reach is a volume: its model where its
+        // own depth gives it the rows a model needs, its stand-in beyond.
+        let perspective = cam.is_perspective();
+        let eye = cam.eye();
         cache.begin();
-        if lod.volumes {
+        if lod.volumes || perspective {
             for y in y0..=y1 {
                 for x in x0..=x1 {
                     let i = at(x, y);
@@ -387,13 +406,23 @@ impl HeightGrid {
                     let (cx, cy) = (x as f32 + 0.5 + jx, y as f32 + 0.5 + jy);
                     let ground = (t.hf + fields.detail(cx, cy)).max(SEA as f32);
                     // A tree whose crown cannot reach the screen, and whose
-                    // shadow cannot either, is not worth a volume.
-                    let (sx, sy) = cam.project(cx, cy, ground);
-                    let crown = (dims.trunk + dims.height) * s * cam.rows_per_metre();
-                    let wide = dims.radius * s * cam.columns_per_metre() + MARGIN;
-                    if sx + wide < -MARGIN || sx - wide > sw as f32 + MARGIN || sy + MARGIN < 0.0 || sy - crown - MARGIN > sh as f32 {
-                        continue;
-                    }
+                    // shadow cannot either, is not worth a volume; from an
+                    // eye, one beyond the fog is not.
+                    let (tree_lod, tree_detail) = if perspective {
+                        if cam.fog_depth(eye, cx, cy, ground) > sc.far + dims.radius * s {
+                            continue;
+                        }
+                        let rows = cam.rows_per_metre_at(cx, cy, ground);
+                        (crate::raster::lod_of(rows), Detail::snapped(rows))
+                    } else {
+                        let (sx, sy) = cam.project(cx, cy, ground);
+                        let crown = (dims.trunk + dims.height) * s * cam.rows_per_metre();
+                        let wide = dims.radius * s * cam.columns_per_metre() + MARGIN;
+                        if sx + wide < -MARGIN || sx - wide > sw as f32 + MARGIN || sy + MARGIN < 0.0 || sy - crown - MARGIN > sh as f32 {
+                            continue;
+                        }
+                        (lod, detail)
+                    };
                     let gust = world.gust(x as f32, y as f32, sc.t);
                     let shear = if gust > 0.0 {
                         let phase = (t.seed % 628) as f32 * 0.01;
@@ -423,10 +452,10 @@ impl HeightGrid {
                     };
                     // The model, if this species grows one and the zoom is
                     // near enough to read it.
-                    let model = if lod.model && sp.lsystem.is_some() {
+                    let model = if tree_lod.model && sp.lsystem.is_some() {
                         let foliage = if dead { 0.0 } else { sp.foliage(t.temp as f32, world.season) };
                         let steps = (foliage.clamp(0.0, 1.0) * FOLIAGE_STEPS).round() as u8;
-                        cache.model(flora.species, sp, t.seed, steps, dead, detail)
+                        cache.model(flora.species, sp, t.seed, steps, dead, tree_detail)
                     } else {
                         None
                     };

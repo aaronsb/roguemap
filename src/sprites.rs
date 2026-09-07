@@ -68,14 +68,19 @@ struct Resolved<'a> {
     depth_bias: f32,
 }
 
-/// Whether trees are billboards at this zoom rather than volumes.
+/// Whether trees are billboards at this zoom rather than volumes. A
+/// perspective view builds a volume for every tree in reach, a stand-in
+/// where the tree is too far for its model, so it never draws them.
 pub(crate) fn tree_billboards(cam: &crate::camera::Camera) -> bool {
-    !crate::raster::lod_of(cam.rows_per_metre()).volumes
+    !cam.is_perspective() && !crate::raster::lod_of(cam.rows_per_metre()).volumes
 }
 
 impl SpriteItem {
-    fn resolve<'a>(&self, sc: &Scene<'a>, tile: &Tile) -> Resolved<'a> {
-        let (assets, ts, pal, world, cam) = (sc.assets, sc.ts, &sc.pal, sc.world, sc.cam);
+    /// The item's art and colours, its tier picked from the rows a metre
+    /// is worth where it stands: the camera's scale in an orthographic
+    /// view, the scale at its own depth in a perspective one.
+    fn resolve<'a>(&self, sc: &Scene<'a>, tile: &Tile, rows_per_metre: f32) -> Resolved<'a> {
+        let (assets, ts, pal, world) = (sc.assets, sc.ts, &sc.pal, sc.world);
         match *self {
             SpriteItem::Tree(flora) => {
                 let sp = flora.species(assets);
@@ -92,11 +97,7 @@ impl SpriteItem {
             SpriteItem::Entity(kind) => {
                 let creature = &assets.creatures[kind as usize % assets.creatures.len()];
                 let tint = Tint { bg: creature.color, fg: creature.glyph };
-                Resolved {
-                    sprite: assets.art.for_rows(&creature.art, creature.size[2] * cam.rows_per_metre()).expect("creature art was checked at load"),
-                    colors: SpriteColors { top: tint, base: tint },
-                    depth_bias: 0.01,
-                }
+                Resolved { sprite: assets.art.for_rows(&creature.art, creature.size[2] * rows_per_metre).expect("creature art was checked at load"), colors: SpriteColors { top: tint, base: tint }, depth_bias: 0.01 }
             }
         }
     }
@@ -124,6 +125,11 @@ impl Renderer {
             }
         }
         for e in &world.entities {
+            // The first-person eye is the character's own; they are not
+            // drawn.
+            if cam.hides_player() && world.player().is_some_and(|p| std::ptr::eq(p, e)) {
+                continue;
+            }
             let (mx, my) = e.tile();
             if mx < x0 || mx > x1 || my < y0 || my > y1 {
                 continue;
@@ -134,18 +140,19 @@ impl Renderer {
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (_, x, y, tile, item) in items {
-            let a = cam.anchor_at(x, y, sc.map.ground_at(x, y));
+            let ground = sc.map.ground_at(x, y);
+            let a = cam.anchor_at(x, y, ground);
             if a.sx < -40 || a.sx > self.w + 40 || a.sy < -40 || a.sy > self.h + 40 {
                 continue;
             }
-            self.draw_item(sc, &item, &tile, &a);
+            self.draw_item(sc, &item, &tile, &a, cam.rows_per_metre_at(x, y, ground));
         }
     }
 
-    fn draw_item(&mut self, sc: &Scene, item: &SpriteItem, tile: &Tile, a: &Anchor) {
-        let r = item.resolve(sc, tile);
+    fn draw_item(&mut self, sc: &Scene, item: &SpriteItem, tile: &Tile, a: &Anchor, rows_per_metre: f32) {
+        let r = item.resolve(sc, tile, rows_per_metre);
         let anchor = Anchor { depth: a.depth + r.depth_bias, ..*a };
-        self.sprite(r.sprite, &anchor, &r.colors, sc.cam.rows_per_metre());
+        self.sprite(r.sprite, &anchor, &r.colors, rows_per_metre);
     }
 
     /// Draw a billboard anchored so its feet sit on the tile's centre row,
@@ -186,10 +193,16 @@ impl Renderer {
             return;
         }
         let (x0, y0, x1, y1) = self.tile_bounds(cam);
+        // From an eye a prop is under a row past `focal_rows` metres, and
+        // the tiles beyond that are not worth scattering.
+        let reach = cam.is_perspective().then(|| (cam.eye(), cam.focal_rows() + 2.0));
         let mut items: Vec<(f32, f32, f32, f32, usize)> = Vec::new();
         for my in y0..=y1 {
             for mx in x0..=x1 {
                 let Some(tile) = self.tile_at(sc, mx, my) else { continue };
+                if reach.is_some_and(|(eye, range)| cam.fog_depth(eye, mx as f32 + 0.5, my as f32 + 0.5, tile.hf) > range) {
+                    continue;
+                }
                 scatter(sc, mx, my, &tile, |x, y, pi| items.push((cam.depth(x, y), x, y, tile.hf.max(SEA as f32), pi)));
             }
         }
@@ -201,7 +214,8 @@ impl Renderer {
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (depth, x, y, z, pi) in items {
             let p = &props[pi];
-            let Some(sprite) = assets.art.for_rows(&p.art, p.size[2] * cam.rows_per_metre()) else { continue };
+            let rows_per_metre = cam.rows_per_metre_at(x, y, z);
+            let Some(sprite) = assets.art.for_rows(&p.art, p.size[2] * rows_per_metre) else { continue };
             let (sx, sy) = cam.project(x, y, z);
             let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
             let n = sprite.rows.len() as i32;
@@ -221,7 +235,7 @@ impl Renderer {
                         let solid = p.color != Rgb(0, 0, 0);
                         let bg = if solid { p.color.lerp(Rgb(228, 232, 240), snow * 0.8) } else { cell.albedo };
                         let fg = p.glyph.lerp(Rgb(235, 238, 245), snow * 0.6);
-                        *cell = GCell { albedo: bg, ch, glyph: fg, wx: x, wy: y, wz: z + (n - 1 - r as i32) as f32 / cam.rows_per_metre(), face: FACE_TOP, lit: true, depth };
+                        *cell = GCell { albedo: bg, ch, glyph: fg, wx: x, wy: y, wz: z + (n - 1 - r as i32) as f32 / rows_per_metre, face: FACE_TOP, lit: true, depth };
                     }
                 }
             }
