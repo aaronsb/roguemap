@@ -26,6 +26,7 @@ strip drawn by the game's own renderer.
 | `surfaces.toml` | `[[season]]`, `[[surface]]`, `[density]` | four seasonal palettes, four surface texture rules, grass and cattail densities |
 | `lights.toml` | `[[light]]` | colour, radius, intensity, falloff, flicker |
 | `ui.toml` | `[[frame]]` | overlay frames (see [frames.md](frames.md)) |
+| `editor-ui.toml` | `[[frame]]` | the editor's own panes, the same row shape |
 
 Beside them, `materials.toml` holds wall and roof colours, `settings.toml`
 the settings rows, `tilesets/*.toml` the glyph roles and sprite vocabulary
@@ -57,9 +58,9 @@ so an exported directory is a faithful starting point; the editor's own
 `--export DIR` writes the set and then opens on it. Tables are parsed in a
 fixed order and resolved in dependency order — materials, lights, habits,
 species, biomes, props, blocks, creatures, surfaces, settings, frames,
-tilesets — so a reference is always resolved against something already
-built. A `.toml` under `assets/` that is neither a table nor a tileset is
-rejected rather than ignored.
+editor frames, tilesets — so a reference is always resolved against
+something already built. A `.toml` under `assets/` that is neither a table
+nor a tileset is rejected rather than ignored.
 
 An error names the file, the line for a parse error, and the table row:
 
@@ -80,8 +81,9 @@ surfaces, in order; all eleven settings keys must exist and every value of
 the `glyphs` row must name a tileset; a material called `stone` must
 exist, because buildings on rock and near the snow line are built of it; a
 prop called `campfire` with a light must exist, because the `f` key places
-it; `player` must be the first creature; and every frame in `ui.toml` must
-name a content kind the code supplies and a key that can be parsed.
+it; `player` must be the first creature; and every frame in `ui.toml` and
+`editor-ui.toml` must name a content kind that file's code supplies and a
+key that can be parsed.
 
 Geometry has its own rules: block levels rise and stay within
 `max_levels`, footprints are smallest-to-largest and no wider than a
@@ -123,20 +125,25 @@ message, since the embedded set has nowhere to be written back to.
 
 ### Panes
 
-Three focusable panes cycle with `Tab`: **tables**, **rows** and the
-**form**. The left column is twenty cells wide and holds the table list
-over the row list. To its right is the preview strip — one pane per sprite
-tier, `tiny 2x1`, `small 4x1`, `medium 8x2` and `large 16x4` — drawing a
-flat fixture in the chosen biome and season with the selected row at its
-centre: a tree, a block pattern, four of a prop, a creature, a lit light
-at night, a house in a material. Under the strip is the row form, or the
-art grid, then a status line. Below 120 by 50 the strip shows one tier and
-`t` cycles it; the floor is 80 by 25, as for the game. Thirteen tables are
-listed: `biomes species materials props blocks creatures seasons surfaces
-density lights settings tilesets art`, where `seasons`, `surfaces` and
-`density` are the three sections of `surfaces.toml`. `ui.toml` and
-`tree_styles.toml` load and save so the set round-trips, but have no pane;
-edit them by hand.
+Every pane is a frame: a row in `editor-ui.toml` over a content kind in
+`src/editor/ui.rs`, placed by the same layout as the game's overlays
+([frames.md](frames.md)). Three of them take the cursor and cycle with
+`Tab`: **tables**, **rows** and the **form**. The left column is twenty
+cells wide and holds the table list over the row list. To its right is the
+preview strip — one pane per sprite tier, `tiny 2x1`, `small 4x1`,
+`medium 8x2` and `large 16x4` — drawing a flat fixture in the chosen biome
+and season with the selected row at its centre: a tree, a block pattern,
+four of a prop, a creature, a lit light at night, a house in a material.
+Under the strip is the row form, or the art grid, then a status line. The
+strip's row asks for a screen of at least 120 by 45, which is its tallest
+tier with a form under it; on anything smaller it gives way to the
+one-tier pane behind it, which `t` cycles. The floor is 80 by 25, as for
+the game. Thirteen tables are listed: `biomes species materials props
+blocks creatures seasons surfaces density lights settings tilesets art`,
+where `seasons`, `surfaces` and `density` are the three sections of
+`surfaces.toml`. `ui.toml`,
+`editor-ui.toml` and `tree_styles.toml` load and save so the set
+round-trips, but have no pane; edit them by hand.
 
 In the strip the four tiers stand side by side, so the close panes are
 close-ups by design: a full-grown tree overflows `large 16x4` there and

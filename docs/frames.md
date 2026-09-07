@@ -1,10 +1,11 @@
 # Frames
 
-Everything drawn over the scene is a frame. A frame is a row in
-`assets/ui.toml` saying where it goes, how it is framed, when it shows and
-which key toggles it, plus a `Content` in `src/ui.rs` that draws into it
-and, when focused, takes the keys. Adding a pane means adding a row and a
-content kind, not a draw call. The decision is
+Everything drawn over the scene is a frame, and so is every pane of the
+asset editor. A frame is a row in `assets/ui.toml` — or, for the editor,
+`assets/editor-ui.toml` — saying where it goes, how it is framed and when
+it shows, plus a content in `src/ui.rs` or `src/editor/ui.rs` that draws
+into it and, when focused, takes the keys. Adding a pane means adding a
+row and a content kind, not a draw call. The decision is
 [ADR-005](adr/ADR-005-overlay-frames.md); this page is the system as it
 stands.
 
@@ -39,29 +40,39 @@ size = { cols = 0.22, rows = 0.6, min_cols = 24, min_rows = 8 }
 | `content` | a kind the code supplies; the frame's name by default |
 | `anchor` | `top_left top top_right left centre right bottom_left bottom bottom_right full` |
 | `size` | `cols` and `rows` each a whole number of cells, a fraction of the screen, `"fill"` or `"auto"`; `min_cols` and `min_rows` drop the frame when it will not fit |
-| `border` | `none`, `line`, `double`, `chrome` |
+| `margin` | `left`, `top`, `right`, `bottom`: cells kept clear at the screen's edges before the anchor places it; zero everywhere unless a row says otherwise |
+| `border` | `none`, `line`, `double`, `chrome`, `top_right` |
 | `background` | `none`, `opaque`, or `{ tint = 0.0..1.0 }` |
 | `z` | draw order, lowest first |
 | `priority` | which frame survives when two overlap |
-| `show` | `always`, `zoomed_out`, `zoomed_in`, `on_key`, `never`, or `{ min_columns = N }` |
+| `show` | `always`, `zoomed_out`, `zoomed_in`, `on_key`, `never`, `{ min_columns = N }`, or `{ min_size = { columns = N, rows = N } }` |
 | `key` | the toggle key, bound to `Toggle(name)` in `src/input.rs` |
 
 The loader refuses a row whose content is not a kind the code supplies or
-whose key it cannot parse, and a test keeps `ui.toml`'s key and the
-binding table in step in both directions.
+whose key it cannot parse. A test keeps `ui.toml`'s keys and the binding
+table in step in both directions, and another keeps `editor-ui.toml`'s
+content kinds and `src/editor/ui.rs` in step, also in both directions.
+
+`top_right` is the tiled pane's border: a line along the top, which carries
+the title, and one down the right, leaving the other two edges to the
+neighbours that draw them. With margins it lets a screen of panes meet
+without sharing a cell or doubling a line, which is what the editor's
+screen is.
 
 ## Layout
 
 `Layout::resolve` runs on every frame, which is cheap for a list of ten
 rectangles and needs no resize hook.
 
-Each frame is dropped if it is closed or its show rule fails. Its border
-costs one cell a side, and that comes out of an `auto` size rather than
-being added to it, so a content that asks for a 48 by 13 interior gets a
-50 by 15 frame. Each axis then resolves to cells, a fraction of the
-screen, the whole axis, or what the content asked for, and is clamped to
-the screen and to the minimum. A frame smaller than its minimum is
-dropped.
+Each frame is dropped if it is closed or its show rule fails. It is then
+sized and placed inside the screen less its margins, which is the whole
+screen for every frame of the game. Its border costs a cell on each side
+it draws, and that comes out of an `auto` size rather than being added to
+it, so a content that asks for a 48 by 13 interior gets a 50 by 15 frame
+with a line border and a 49 by 14 one with a `top_right` border. Each axis
+then resolves to cells, a fraction of the area, the whole axis, or what
+the content asked for, and is clamped to the area and to the minimum. A
+frame smaller than its minimum is dropped.
 
 The anchor places the rectangle; `centre` and `full` both centre it.
 Overlaps then resolve by priority: a frame is hidden only when a frame of
@@ -198,9 +209,33 @@ A list draws each item as a title row and, where there is one, an indented
 detail row; the selected title is inverted and the window keeps the cursor
 centred.
 
-## What is not a frame
+## The editor's panes
 
-The editor's panes are not frames. `ADR-005` planned for them, but
-`src/editor/ui.rs` still has its own rectangle and layout code, and the
-nine content kinds are the game's only. That step of the ADR's plan is
-outstanding.
+![editor](screenshots/editor.png)
+
+The editor's screen is eight rows of `assets/editor-ui.toml` over the
+content kinds `src/editor/ui.rs` supplies: `tables`, `rows`, `strip`,
+`pane`, `form`, `grid`, `picker` and `status`. They draw from the `Editor`
+rather than from the scene, so they are `Pane<Editor>` rather than
+`Content`: `frame.rs` places them, draws their chrome and reads their
+titles, and the editor keeps its own focus and key handling.
+
+The screen tiles rather than floats. The lists hold a twenty-cell left
+column, the preview and the form take what is right of it with a left
+margin, the lists and the form leave the last row to the status line with
+a bottom margin, and every pane has a `top_right` border, so the panes
+meet exactly and cover the screen between them. Nothing in the code says
+where a pane goes.
+
+The 80 by 25 collapse is two rows and their rules. `strip` draws the four
+sprite tiers side by side and shows only on a screen of at least 120 by
+45 — the tallest tier with a form under it. `pane` draws the one tier `t`
+picked and is always shown, but ranks below `strip` and is opaque, so
+wherever the strip fits the pane is hidden by priority and wherever it
+does not the pane is all there is. That one pane drops to a tier whose
+subject stands whole in it, which is the rule
+[assets-and-editor.md](assets-and-editor.md) describes.
+
+Which of `form`, `grid` and `picker` holds the bottom right is the
+editor's mode, through `Pane::open`. They share a rectangle, so only one
+is ever open.
