@@ -117,6 +117,7 @@ The catalogues and decision records those pages lean on:
 | [ADR-003](docs/adr/ADR-003-asset-editor.md) | The editor as a second binary over a shared library |
 | [ADR-004](docs/adr/ADR-004-world-scale.md) | World scale in metres and zoom as exact ratios |
 | [ADR-005](docs/adr/ADR-005-overlay-frames.md) | One frame system for everything drawn over the scene |
+| [ADR-006](docs/adr/ADR-006-movement-by-screen-cell.md) | One keypress moves one screen cell, positions in centimetres |
 
 ## Contributing
 
