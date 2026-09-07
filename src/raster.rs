@@ -433,8 +433,14 @@ impl Renderer {
             let (mx, my) = (ifloor(x), ifloor(y));
             // High over the coarse ceiling of the block it is crossing, the
             // walk has nothing to meet: drop to that ceiling, or to where the
-            // path leaves the block, whichever comes first.
-            let ceiling = grid.block_top(mx, my);
+            // path leaves the block, whichever comes first. A tile on the
+            // map carries its block's ceiling; off the map the block grid
+            // answers.
+            let geo = grid.geo(mx, my);
+            let ceiling = match geo {
+                Some(g) => g.ceiling,
+                None => grid.block_top(mx, my),
+            };
             if zf > ceiling {
                 let jump = ceiling.max(grid.block_exit(p0, d, mx, my));
                 let next = iceil(jump * steps as f32);
@@ -445,7 +451,7 @@ impl Renderer {
                     continue;
                 }
             }
-            let Some(geo) = grid.geo(mx, my) else {
+            let Some(geo) = geo else {
                 prev = None;
                 z_prev = zf;
                 continue;

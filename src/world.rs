@@ -9,7 +9,7 @@
 use crate::biome::seasonal_temp;
 use crate::canvas::Rgb;
 use crate::map::{Map, Terrain};
-use crate::noise::{fbm, smoothstep, value};
+use crate::noise::{fbm, smoothstep, value, FbmCache};
 use crate::properties::Identity;
 
 /// How a kind of light glows, a row of `lights.toml`; a `Light` is one
@@ -97,11 +97,17 @@ pub struct Weather {
 /// Named weather presets: cover, precipitation.
 pub const WEATHER_PRESETS: [(f32, f32); 4] = [(0.15, 0.0), (0.75, 0.0), (0.9, 0.5), (1.0, 1.0)];
 pub const STORM: usize = 3;
+/// The cloud field's noise: three octaves of `fbm` on its own seed.
+const CLOUD_SEED: u64 = 0xC10D;
+const CLOUD_OCTAVES: u32 = 3;
+
 /// The cloud shadow field at one moment (`World::cloud_shadows`).
 pub struct CloudShadows {
     offset: (f32, f32),
     shift: (f32, f32),
     threshold: f32,
+    /// The noise lattice over the tiles a pass covers, if it asked for one.
+    cache: Option<FbmCache>,
 }
 
 impl CloudShadows {
@@ -109,7 +115,12 @@ impl CloudShadows {
     #[inline]
     pub fn at(&self, x: f32, y: f32) -> f32 {
         let ((ox, oy), (sx, sy), th) = (self.offset, self.shift, self.threshold);
-        smoothstep(th, th + 0.10, World::cloud_field(x + ox + sx, y + oy + sy))
+        let (fx, fy) = (x + ox + sx, y + oy + sy);
+        let field = match &self.cache {
+            Some(c) => c.fbm(fx * 0.07, fy * 0.07),
+            None => World::cloud_field(fx, fy),
+        };
+        smoothstep(th, th + 0.10, field)
     }
 }
 
@@ -339,7 +350,7 @@ impl World {
 
     /// The cloud field at a point already offset by the drift.
     fn cloud_field(x: f32, y: f32) -> f32 {
-        fbm(x * 0.07, y * 0.07, 0xC10D, 3)
+        fbm(x * 0.07, y * 0.07, CLOUD_SEED, CLOUD_OCTAVES)
     }
 
     /// Cloud density in `[0, 1)` over a map point, after the drift so far.
@@ -357,7 +368,19 @@ impl World {
     /// The cloud shadow field for this moment, its drift, shift and
     /// threshold worked out once for a pass that asks at every cell.
     pub fn cloud_shadows(&self) -> CloudShadows {
-        CloudShadows { offset: self.cloud_offset, shift: self.shadow_shift(), threshold: self.cloud_threshold() }
+        CloudShadows { offset: self.cloud_offset, shift: self.shadow_shift(), threshold: self.cloud_threshold(), cache: None }
+    }
+
+    /// The same with the cloud noise hashed once over the tiles
+    /// `x0..=x1` by `y0..=y1`, for a pass that asks at every cell of a
+    /// frame.
+    pub fn cloud_shadows_over(&self, x0: i32, y0: i32, x1: i32, y1: i32) -> CloudShadows {
+        let mut c = self.cloud_shadows();
+        let ((ox, oy), (sx, sy)) = (c.offset, c.shift);
+        let (fx0, fy0) = ((x0 as f32 + ox + sx) * 0.07, (y0 as f32 + oy + sy) * 0.07);
+        let (fx1, fy1) = ((x1 as f32 + 1.0 + ox + sx) * 0.07, (y1 as f32 + 1.0 + oy + sy) * 0.07);
+        c.cache = Some(FbmCache::new(fx0, fy0, fx1, fy1, CLOUD_SEED, CLOUD_OCTAVES));
+        c
     }
 
     /// Local gust strength at a tile, 0 still to 1 full sway. Calm air gives

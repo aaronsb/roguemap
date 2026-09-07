@@ -161,6 +161,9 @@ pub(crate) struct Geo {
     /// Whether the tile is on the map at all; the walk asks at every
     /// sample, and this keeps it out of the tile array.
     pub on_map: bool,
+    /// The coarse ceiling of the block the tile is in (`block_top`), here
+    /// so the walk's sample reads one record.
+    pub ceiling: f32,
     /// Range into the volume index.
     pub vol: (u32, u32),
     /// Tallest volume on the tile measured base to top: how far back from
@@ -267,7 +270,7 @@ impl HeightGrid {
         let data: Vec<f32> = tiles.iter().map(|t| t.map(|t| t.hf).unwrap_or(0.0)).collect();
         let octaves = crate::raster::detail_octaves(cam);
         let fields = map.fields(x0, y0, x1, y1, octaves);
-        let empty = Geo { stack: None, runs: Runs::SINGLE, open: 0, door: NO_FACE, base: 0.0, flat: false, zs: 0.0, top: 0.0, hmax: 0.0, on_map: false, vol: (0, 0), vspan: 0.0 };
+        let empty = Geo { stack: None, runs: Runs::SINGLE, open: 0, door: NO_FACE, base: 0.0, flat: false, zs: 0.0, top: 0.0, hmax: 0.0, on_map: false, ceiling: 0.0, vol: (0, 0), vspan: 0.0 };
         let mut geo = vec![empty; n];
         let at = |x: i32, y: i32| ((y - y0) * w + (x - x0)) as usize;
 
@@ -515,6 +518,11 @@ impl HeightGrid {
                 let b = &mut blocks[((y / BLOCK) * bw + x / BLOCK) as usize];
                 *b = b.max(t);
                 max_top = max_top.max(t);
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                geo[(y * w + x) as usize].ceiling = blocks[((y / BLOCK) * bw + x / BLOCK) as usize];
             }
         }
         HeightGrid { x0, y0, w, h, data, tiles, geo, volumes, crowns, vol_index, slack, blocks, bw, max_top, fields }

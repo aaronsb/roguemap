@@ -77,7 +77,10 @@ impl Renderer {
         let sunny = sun[0] + sun[1] + sun[2] > 0.01;
         let face_k = [1.0f32, 0.78, 0.5];
         let lights: Vec<&Light> = world.lights.iter().chain(self.frame_lights.iter()).collect();
-        let clouds = world.cloud_shadows();
+        let clouds = match self.heights.as_ref().map(|g| g.bounds()) {
+            Some((x0, y0, x1, y1)) => world.cloud_shadows_over(x0, y0, x1, y1),
+            None => world.cloud_shadows(),
+        };
         for y in 0..self.h {
             for x in 0..self.w {
                 let g = self.g[(y * self.w + x) as usize];
