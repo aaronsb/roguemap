@@ -237,6 +237,22 @@ mod tests {
         Tile { terrain: Terrain::Sand, biome: biome as u8, ..Tile::flat(z) }
     }
 
+    /// A sweep whose start is past its end marks nothing. The crown sweep
+    /// caps its end at `MAX_SWEEP` and takes its start from the crown's
+    /// underside, so a crown high enough over ground at a low sun hands
+    /// `stamp` an interval that runs backwards.
+    #[test]
+    fn a_sweep_that_starts_past_its_end_marks_nothing() {
+        let (w, h) = (16, 16);
+        let mut mask = ShadowMask { x0: 0, y0: 0, w, h, res: RES, top: vec![CLEAR; (w * h) as usize], opacity: vec![0.0; (w * h) as usize], u: (1.0, 0.0), k: 1.8 };
+        mask.stamp((4.0, 4.0), 1.0, MAX_SWEEP + 0.78, MAX_SWEEP, 20.0, 1.0, None);
+        assert!(mask.top.iter().all(|&t| t == CLEAR), "an inverted sweep wrote a ray");
+        assert!(mask.opacity.iter().all(|&o| o == 0.0), "an inverted sweep wrote an opacity");
+        // The interval the owner's crash carried, to the bit.
+        mask.stamp((4.0, 4.0), 1.0, 12.783108, 12.0, 20.0, 1.0, None);
+        assert!(mask.top.iter().all(|&t| t == CLEAR));
+    }
+
     #[test]
     fn a_single_column_shades_the_ground_down_sun_for_its_height_times_the_factor() {
         let assets = test_assets();
