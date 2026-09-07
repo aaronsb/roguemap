@@ -68,7 +68,7 @@ pub const SCENE: &[Binding] = &[
         help: "walk",
     },
     Binding { shift: false, keys: &[(Left, Pan(1, 0)), (Right, Pan(-1, 0)), (Up, Pan(0, 1)), (Down, Pan(0, -1))], label: "arrows", help: "pan" },
-    Binding { shift: true, keys: &[(Up, Run(0, -1)), (Down, Run(0, 1)), (Left, Run(-1, 0)), (Right, Run(1, 0))], label: "shift+arrows", help: "run eight" },
+    Binding { shift: true, keys: &[(Up, Run(0, -1)), (Down, Run(0, 1)), (Left, Run(-1, 0)), (Right, Run(1, 0))], label: "shift+arrows", help: "run" },
     Binding { shift: false, keys: &[(Char('c'), Centre)], label: "c", help: "centre" },
     Binding { shift: false, keys: &[(Char('r'), RotateQuarter(1)), (Char('R'), RotateQuarter(-1)), (Char('('), RotateDegrees(-5.0)), (Char(')'), RotateDegrees(5.0))], label: "r/R ( )", help: "rotate" },
     Binding { shift: false, keys: &[(Char('z'), Zoom(1)), (Char('Z'), Zoom(-1))], label: "z/Z", help: "zoom" },
@@ -185,7 +185,7 @@ mod tests {
         // entries added after it do not change the golden frames.
         let scene = help_line(SCENE, "  ");
         assert!(scene.len() > 120, "the scene help line already runs past 120 columns");
-        assert_eq!(&scene[..120], " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run eight  c centre  r/R ( ) rotate  z/Z zoom  v fi");
+        assert_eq!(&scene[..120], " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run  c centre  r/R ( ) rotate  z/Z zoom  v fill  g ");
         for frame in ["inventory", "stats", "history", "conversation"] {
             assert!(SCENE.iter().flat_map(|b| b.keys).any(|&(_, a)| a == Toggle(frame)), "{frame} has no toggle key");
         }

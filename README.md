@@ -71,8 +71,8 @@ help line at the bottom of the screen.
 
 | Key | Action |
 |---|---|
-| `w a s d` or `h j k l` | walk the player one screen cell (9 cm sideways at 1:1, 71 cm at 1:8); the camera follows |
-| arrows | pan by one tile; shift with an arrow runs eight cells |
+| `w a s d` or `h j k l` | walk that way at 1.4 m/s while held, a tap 14 cm; the figure faces and strides, and the camera follows with some give |
+| arrows | pan by one tile; shift with an arrow runs, three times walking speed |
 | `c` | centre on the player |
 | `r` / `R`, `(` / `)` | snap to the next compass view, or turn five degrees |
 | `z` / `Z` | zoom through far 1:8, mid 1:4, near 1:2, close 1:1; in a chase view halve or double the distance |

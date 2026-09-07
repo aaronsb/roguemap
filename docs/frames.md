@@ -137,7 +137,7 @@ binding table, so a new binding with a label appears there without anyone
 writing it out. It starts:
 
 ```
- tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run eight  c centre  r/R ( ) rotate  z/Z zoom  v fi
+ tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run  c centre  r/R ( ) rotate  z/Z zoom  v fill  g 
 ```
 
 `H` hides both bars together.
