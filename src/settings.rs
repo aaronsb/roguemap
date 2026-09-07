@@ -3,6 +3,7 @@
 //! edits the same values.
 
 use crate::assets::Assets;
+use crate::camera::Camera;
 use crate::map::Map;
 use crate::properties::Identity;
 use crate::render::{FogMode, RenderOptions};
@@ -23,7 +24,7 @@ pub struct SettingItem {
 }
 
 /// Keys the engine reads; loading fails if one is missing.
-pub const REQUIRED_SETTINGS: [&str; 12] = ["traversal", "camera", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
+pub const REQUIRED_SETTINGS: [&str; 14] = ["traversal", "camera", "fov", "fog", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
 
 pub struct Settings {
     pub items: Vec<SettingItem>,
@@ -91,15 +92,50 @@ impl Settings {
         self.get("view") == 1
     }
 
-    /// Push the table into the objects that act on it, and return what the
-    /// renderer needs to know.
-    pub fn apply(&self, map: &mut Map, world: &mut World) -> RenderOptions {
+    /// The field of view the `fov` row asks for, in degrees, or `None` for
+    /// the camera mode's own.
+    pub fn fov_degrees(&self) -> Option<f32> {
+        let row = self.row("fov");
+        self.items[row].values[self.values[row]].parse().ok()
+    }
+
+    /// Put the `fov` row on the value nearest `degrees`, for the keys that
+    /// step it from wherever the camera stands.
+    pub fn set_fov_near(&mut self, degrees: f32) {
+        let row = self.row("fov");
+        let nearest = self.items[row].values.iter().enumerate().filter_map(|(i, v)| v.parse::<f32>().ok().map(|d| (i, (d - degrees).abs()))).min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = nearest {
+            self.values[row] = i;
+        }
+    }
+
+    /// Step the `fov` row's degrees by `dir` without wrapping through
+    /// `preset`: from `preset` the step starts at the value nearest what
+    /// the camera shows.
+    pub fn step_fov(&mut self, dir: i32, from_degrees: f32) {
+        let row = self.row("fov");
+        if self.values[row] == 0 {
+            self.set_fov_near(from_degrees);
+        }
+        let n = self.items[row].values.len() as i32;
+        self.values[row] = (self.values[row] as i32 + dir).clamp(1, n - 1) as usize;
+    }
+
+    /// Push the table into the objects that act on it — the map, the
+    /// world and the camera, which takes its mode and field of view — and
+    /// return what the renderer needs to know.
+    pub fn apply(&self, map: &mut Map, world: &mut World, cam: &mut Camera) -> RenderOptions {
         map.bounded = !self.filled();
         world.auto_time = self.get("clock") == 0;
         world.weather_preset = self.get("weather").checked_sub(1);
         world.wind_preset = self.get("wind").checked_sub(1);
         world.day_secs = world::DAY_LENGTHS[self.get("day_length")];
-        RenderOptions { aa: self.get("antialias") == 0, clouds: self.get("clouds") == 0, fog: FogMode::default() }
+        let mode = self.get("camera");
+        if cam.mode_index() != mode {
+            *cam = cam.in_mode(mode);
+        }
+        cam.set_fov_override(self.fov_degrees());
+        RenderOptions { aa: self.get("antialias") == 0, clouds: self.get("clouds") == 0, fog: FogMode::from_index(self.get("fog")) }
     }
 }
 
@@ -107,7 +143,6 @@ impl Settings {
 mod tests {
     use super::*;
     use crate::assets::test_assets;
-    use crate::camera::Camera;
     use crate::input::{self, Action, SCENE};
     use crate::world::{DAY_LENGTHS, WEATHER_PRESETS, WIND_PRESETS};
     use crossterm::event::KeyCode;
@@ -126,6 +161,13 @@ mod tests {
         // The camera row's values are the camera's own modes (ADR-007).
         assert_eq!(a.setting("camera").unwrap().values, Camera::MODES);
         assert_eq!(a.setting("camera").unwrap().values[a.setting("camera").unwrap().default as usize], "isometric");
+        // The fog row's values are the renderer's fog modes, and the field
+        // of view row is `preset` then whole degrees, rising.
+        assert_eq!(a.setting("fog").unwrap().values, FogMode::NAMES);
+        let fov = a.setting("fov").unwrap();
+        assert_eq!(fov.values[fov.default as usize], "preset");
+        let degrees: Vec<f32> = fov.values[1..].iter().map(|v| v.parse::<f32>().expect("a whole number of degrees")).collect();
+        assert!(degrees.windows(2).all(|w| w[1] > w[0]) && degrees[0] >= 20.0 && *degrees.last().unwrap() <= 120.0, "{degrees:?}");
     }
 
     #[test]
@@ -169,10 +211,14 @@ mod tests {
         let mut s = Settings::new(&assets);
         let mut map = Map::new(4, 4, 1, assets.clone());
         let mut world = World::new(1);
-        let opts = s.apply(&mut map, &mut world);
+        let mut cam = Camera::new();
+        cam.look_at(2, 2, &map, 120, 40);
+        let opts = s.apply(&mut map, &mut world, &mut cam);
         assert!(map.bounded && world.auto_time && world.weather_preset.is_none() && world.wind_preset.is_none());
         assert_eq!(world.day_secs, DAY_LENGTHS[s.get("day_length")]);
         assert!(opts.aa && opts.clouds, "the defaults draw everything");
+        assert_eq!(opts.fog, FogMode::Perspective);
+        assert!(!cam.is_perspective() && cam.mode_index() == 0, "the default camera is the isometric mode");
 
         s.set("view", 1);
         s.set("clock", 1);
@@ -181,7 +227,13 @@ mod tests {
         s.set("day_length", 0);
         s.set("clouds", 1);
         s.set("antialias", 1);
-        let opts = s.apply(&mut map, &mut world);
+        s.set("camera", 1);
+        s.set("fov", 8);
+        s.set("fog", 2);
+        let opts = s.apply(&mut map, &mut world, &mut cam);
+        assert!(cam.is_perspective() && cam.mode_name() == "chase", "the camera row switches the mode");
+        assert!((cam.fov_degrees() - 100.0).abs() < 1e-3, "the fov row overrides the preset's");
+        assert_eq!(opts.fog, FogMode::Never);
         assert!(!map.bounded, "filled view unbounds the map");
         assert!(!world.auto_time, "paused clock stops time");
         assert_eq!(world.weather_preset, Some(3), "storm is the last preset");
@@ -191,8 +243,28 @@ mod tests {
 
         s.set("weather", 0);
         s.set("wind", 0);
-        s.apply(&mut map, &mut world);
+        s.set("fov", 0);
+        s.apply(&mut map, &mut world, &mut cam);
         assert_eq!((world.weather_preset, world.wind_preset), (None, None), "auto rows clear the presets");
+        assert!((cam.fov_degrees() - 60.0).abs() < 1e-3, "preset gives the chase view its own sixty degrees");
+        s.set("camera", 0);
+        s.apply(&mut map, &mut world, &mut cam);
+        assert!(!cam.is_perspective(), "and back to the isometric mode");
+        // The fov keys step the row's degrees from wherever the camera
+        // shows and never wrap through `preset`.
+        s.set("camera", 2);
+        s.apply(&mut map, &mut world, &mut cam);
+        assert_eq!(s.fov_degrees(), None);
+        s.step_fov(1, cam.fov_degrees());
+        assert_eq!(s.fov_degrees(), Some(50.0), "one step wider than the shoulder view's forty");
+        for _ in 0..20 {
+            s.step_fov(-1, cam.fov_degrees());
+        }
+        assert_eq!(s.fov_degrees(), Some(30.0), "clamped at the narrow end, not wrapped to preset");
+        for _ in 0..20 {
+            s.step_fov(1, cam.fov_degrees());
+        }
+        assert_eq!(s.fov_degrees(), Some(110.0));
         s.set("view", 5);
         assert_eq!(s.get("view"), 1, "set wraps into the row's values");
     }
@@ -221,10 +293,11 @@ mod tests {
             assert_eq!(bound, item.shortcut, "settings.toml and input.rs disagree on the shortcut for {}", item.key);
         }
         for b in SCENE.iter().flat_map(|b| b.keys.iter()) {
-            if let Action::Cycle(key) = b.1 {
+            if let Action::Cycle(key) | Action::Step(key, _) = b.1 {
                 assert!(a.setting(key).is_some(), "input.rs cycles unknown setting {key}");
             }
         }
+        assert_eq!(input::lookup(SCENE, KeyCode::Char('>'), true), Some(Action::Step("fov", 1)));
         assert_eq!(input::lookup(SCENE, KeyCode::Char('v'), false), Some(Action::Cycle("view")));
     }
 }

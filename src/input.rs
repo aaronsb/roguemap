@@ -25,6 +25,10 @@ pub enum Action {
     /// Step a settings row forward, by key. `settings.toml` carries the
     /// same shortcut per row; a test keeps the two in step.
     Cycle(&'static str),
+    /// Step a settings row either way without wrapping: the field of view.
+    Step(&'static str, i32),
+    /// Turn a perspective view up or down by degrees.
+    Pitch(f32),
     StepSeason(f32),
     StepHour(f32),
     Campfire,
@@ -82,6 +86,8 @@ pub const SCENE: &[Binding] = &[
     Binding { shift: false, keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
     Binding { shift: false, keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
     Binding { shift: false, keys: &[(Char('n'), Toggle("inset"))], label: "n", help: "inset" },
+    Binding { shift: false, keys: &[(Char('{'), Pitch(-5.0)), (Char('}'), Pitch(5.0))], label: "{ }", help: "pitch" },
+    Binding { shift: false, keys: &[(Char('<'), Step("fov", -1)), (Char('>'), Step("fov", 1))], label: "< >", help: "fov" },
     Binding { shift: false, keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
 ];
 

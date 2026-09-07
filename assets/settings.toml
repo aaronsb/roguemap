@@ -13,6 +13,20 @@ values = ["isometric", "chase", "shoulder", "first-person"]
 default = 0
 
 [[setting]]
+key = "fov"
+description = "The field of view of a perspective camera across the screen, in degrees; preset is the mode's own (60 for chase and first-person, 40 for shoulder). The isometric mode has none. < and > narrow and widen it while playing."
+label = "Field of view"
+values = ["preset", "30", "40", "50", "60", "70", "80", "90", "100", "110"]
+default = 0
+
+[[setting]]
+key = "fog"
+description = "Where the far field fades to the sky colour by its depth from the eye (#21): in the perspective views, in the isometric view too (by depth past the screen centre), or nowhere. The distance is the weather's visibility."
+label = "Fog"
+values = ["perspective", "always", "never"]
+default = 0
+
+[[setting]]
 key = "view"
 description = "A bounded island floating in the sky, or terrain in every direction."
 label = "World view"

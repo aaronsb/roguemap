@@ -55,8 +55,8 @@ impl App {
         let mut map = Map::new(size, size, seed, assets.clone());
         let mut world = World::new(seed);
         let settings = Settings::new(&assets);
-        settings.apply(&mut map, &mut world);
         let mut cam = Camera::new();
+        settings.apply(&mut map, &mut world, &mut cam);
         cam.set_zoom(Camera::fitting_zoom(&map, sw, sh), sw, sh);
         cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
@@ -74,7 +74,11 @@ impl App {
     /// `t`. A full-screen opaque frame covers the scene, so nothing is
     /// rendered under one.
     fn frame(&mut self, cv: &mut Canvas, t: f32) {
-        let opts = self.settings.apply(&mut self.map, &mut self.world);
+        let opts = self.settings.apply(&mut self.map, &mut self.world, &mut self.cam);
+        // A perspective view is placed from the character every frame.
+        if self.cam.is_perspective() {
+            self.cam.follow(&self.world, &self.map, self.sw, self.sh);
+        }
         ui::apply_settings(&mut self.frames, &self.settings);
         let corner = self.settings.get("inset");
         if corner != 0 {
@@ -83,7 +87,7 @@ impl App {
         let ts = &self.tilesets[self.settings.get("glyphs")];
         let mut lights = 0;
         if !self.frames.is_open("worldmap") {
-            self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t), &opts);
+            self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t).with_fog(opts.fog), &opts);
             lights = self.world.lights.len() + self.renderer.frame_light_count();
         }
         let ctx = FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts, settings: &self.settings, wmap: &self.wmap, lights, t, focused: false };
@@ -168,6 +172,12 @@ impl App {
             Action::RotateQuarter(steps) => self.cam.rotate(steps, sw, sh),
             Action::RotateDegrees(deg) => self.cam.rotate_by(deg.to_radians(), sw, sh),
             Action::Zoom(steps) => self.cam.zoom_by(steps, sw, sh),
+            Action::Pitch(deg) => self.cam.pitch_by(deg.to_radians()),
+            Action::Step(key, dir) => {
+                if key == "fov" {
+                    self.settings.step_fov(dir, self.cam.fov_degrees());
+                }
+            }
             Action::Cycle(key) => {
                 self.settings.cycle(key, 1);
                 if key == "weather" {

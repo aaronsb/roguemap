@@ -12,7 +12,7 @@ use crate::camera::Camera;
 use crate::canvas::Canvas;
 use crate::frame::{FrameCtx, Frames};
 use crate::map::{FixtureSpec, Flora, Map, Terrain};
-use crate::render::{Renderer, Scene};
+use crate::render::{FogMode, Renderer, Scene};
 use crate::settings::Settings;
 use crate::tileset::Tileset;
 use crate::ui;
@@ -59,7 +59,11 @@ impl SnapArgs {
 /// (0|1), inset (0 off, 1..4 the corner of the inset view), worldmap (1)
 /// with scale, open (frame names of ui.toml, comma separated), frames (N,
 /// to time rendering), scene (`scale` for the yardstick of ADR-004: a
-/// person, an oak and a house on flat ground).
+/// person, an oak and a house on flat ground), camera (isometric, chase,
+/// shoulder or first-person: ADR-007), pitch and fov (degrees, for a
+/// perspective camera), fog (metres of visibility, 0 for no fade),
+/// fogmode (perspective, always or never), px and py (the tile the
+/// character stands on; a perspective view's default is cx, cy).
 pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> Canvas {
     let a = SnapArgs::parse(args);
     let (sw, sh) = (w as i32, h as i32);
@@ -85,7 +89,32 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     let glyphs = a.text("glyphs").unwrap_or("petscii");
     settings.set("glyphs", settings.items[settings.find("glyphs").unwrap()].values.iter().position(|v| v == glyphs).unwrap_or(0));
     settings.set("inset", a.num("inset", settings.get("inset") as f32) as usize);
-    let opts = settings.apply(&mut map, &mut world);
+    // camera=isometric|chase|shoulder|first-person picks the mode (ADR-007)
+    // through its settings row; a perspective mode takes pitch= and fov=
+    // in degrees, fov= through its row where the row lists the value.
+    let mode = a.text("camera").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).unwrap_or(0);
+    settings.set("camera", mode);
+    let fov = a.kv.get("fov").and_then(|v| v.parse::<f32>().ok());
+    if let Some(fov) = fov {
+        settings.set_fov_near(fov);
+        if settings.fov_degrees() != Some(fov) {
+            settings.set("fov", 0);
+        }
+    }
+    if let Some(fog) = a.text("fogmode").and_then(|m| FogMode::NAMES.iter().position(|n| *n == m)) {
+        settings.set("fog", fog);
+    }
+    let zoom = a.kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| Camera::fitting_zoom(&map, sw, sh));
+    let mut cam = Camera::isometric(zoom);
+    let opts = settings.apply(&mut map, &mut world, &mut cam);
+    if cam.is_perspective() {
+        if let Some(fov) = fov {
+            cam.set_fov_override(Some(fov));
+        }
+        if let Some(pitch) = a.kv.get("pitch").and_then(|v| v.parse::<f32>().ok()) {
+            cam.pitch_by(pitch.to_radians() - cam.pitch);
+        }
+    }
     let mut frames = ui::frames(&assets);
     ui::apply_settings(&mut frames, &settings);
     frames.set_open("settings", a.flag("popover"));
@@ -98,19 +127,6 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
 
     let mut cv = Canvas::new(w, h);
     let mut renderer = Renderer::new(sw, sh);
-    let zoom = a.kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| Camera::fitting_zoom(&map, sw, sh));
-    // camera=isometric|chase|shoulder|first-person picks the mode (ADR-007);
-    // a perspective mode takes pitch= and fov= in degrees.
-    let mode = a.text("camera").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).unwrap_or(0);
-    let mut cam = Camera::isometric(zoom).in_mode(mode);
-    if cam.is_perspective() {
-        if let Some(fov) = a.kv.get("fov").and_then(|v| v.parse::<f32>().ok()) {
-            cam.set_fov_override(Some(fov));
-        }
-        if let Some(pitch) = a.kv.get("pitch").and_then(|v| v.parse::<f32>().ok()) {
-            cam.pitch_by(pitch.to_radians() - cam.pitch);
-        }
-    }
     cam.set_angle(std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians());
     let (cx, cy) = (a.num("cx", map.w as f32 / 2.0) as i32, a.num("cy", map.h as f32 / 2.0) as i32);
     cam.look_at(cx, cy, &map, sw, sh);
