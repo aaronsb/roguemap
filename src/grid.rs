@@ -89,7 +89,7 @@ impl Detail {
         } else {
             1
         };
-        Detail::of(&crate::camera::Camera::isometric(zoom))
+        Detail::of(&crate::camera::Camera::table(zoom))
     }
 
     /// The same from a zoom's scale alone.

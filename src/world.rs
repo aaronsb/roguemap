@@ -875,7 +875,7 @@ mod tests {
     /// camera looking south, where the screen's up is north and the body
     /// spawns facing it.
     fn looking_south(map: &Map) -> Camera {
-        let mut cam = Camera::isometric(3);
+        let mut cam = Camera::table(3);
         cam.set_angle(0.0);
         cam.look_at(32, 32, map, 120, 40);
         cam

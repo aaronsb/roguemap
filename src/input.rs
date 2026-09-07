@@ -623,7 +623,7 @@ mod tests {
         // Forty-five columns right is a quarter turn at two degrees each.
         let Some(Look::Turn(yaw, _)) = m.event(at(MouseEventKind::Drag(Left), 55, 10), MouseMode::Drag) else { panic!("a drag turns") };
         assert_eq!(yaw, -90.0);
-        let mut cam = Camera::isometric(3);
+        let mut cam = Camera::table(3);
         cam.set_angle(0.0);
         assert_eq!(cam.forward(), (0.0, 1.0), "a yaw of zero looks south");
         cam.rotate_by(yaw.to_radians(), 120, 40);

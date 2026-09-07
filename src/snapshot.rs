@@ -65,11 +65,11 @@ impl SnapArgs {
 /// (0|1), inset (0 off, 1..4 the corner of the inset view), worldmap (1)
 /// with scale, open (frame names of ui.toml, comma separated), frames (N,
 /// to time rendering), scene (`scale` for the yardstick of ADR-004: a
-/// person, an oak and a house on flat ground), camera (isometric, chase,
+/// person, an oak and a house on flat ground), camera (table, chase,
 /// shoulder or first-person: ADR-007; free for the detached eye of
 /// ADR-009, placed where the switch from the view named by from= leaves
 /// it, the table by default), pitch (degrees above the ground: 30 to 90
-/// on the isometric table, ADR-009) and fov (degrees, for a perspective
+/// on the table, ADR-009) and fov (degrees, for a perspective
 /// camera), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
 /// character stands on; a perspective view's default is cx, cy), walk
@@ -101,7 +101,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     let glyphs = a.text("glyphs").unwrap_or("petscii");
     settings.set("glyphs", settings.items[settings.find("glyphs").unwrap()].values.iter().position(|v| v == glyphs).unwrap_or(0));
     settings.set("inset", a.num("inset", settings.get("inset") as f32) as usize);
-    // camera=isometric|chase|shoulder|first-person picks the mode (ADR-007)
+    // camera=table|chase|shoulder|first-person picks the mode (ADR-007)
     // through its settings row; a perspective mode takes pitch= and fov=
     // in degrees, fov= through its row where the row lists the value.
     let mode = a.text("camera").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).unwrap_or(0);
@@ -128,7 +128,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         settings.set("fog", fog);
     }
     let zoom = a.kv.get("zoom").and_then(|v| v.parse().ok()).unwrap_or_else(|| Camera::fitting_zoom(&map, sw, sh));
-    let mut cam = Camera::isometric(zoom);
+    let mut cam = Camera::table(zoom);
     let opts = settings.apply(&mut map, &mut world, &mut cam);
     if cam.is_perspective() {
         if let Some(fov) = fov {

@@ -46,7 +46,7 @@ pub fn tiles(strip: Rect, tier: Tier, one: bool) -> Vec<(Tier, Rect)> {
 /// The pane title: the tier and the zoom it is drawn at, named as the
 /// game names zooms (`far 1:8` to `close 1:1`).
 pub fn pane_title(tier: Tier) -> String {
-    let (name, ratio) = Camera::isometric(tier.min_zoom()).zoom_name();
+    let (name, ratio) = Camera::table(tier.min_zoom()).zoom_name();
     format!("{} {name} {ratio}", tier.name())
 }
 
@@ -54,7 +54,7 @@ pub fn pane_title(tier: Tier) -> String {
 /// height in rows per metre at that tile size, and the row the pane's
 /// own label sits on.
 pub fn rows_for(tier: Tier, top: f32) -> i32 {
-    (top * Camera::isometric(tier.min_zoom()).rows_per_metre()).ceil() as i32 + 1
+    (top * Camera::table(tier.min_zoom()).rows_per_metre()).ceil() as i32 + 1
 }
 
 /// The tier a pane `w` by `h` can show a subject `top` metres tall at:
@@ -67,7 +67,7 @@ pub fn rows_for(tier: Tier, top: f32) -> i32 {
 /// would show ground rather than the thing being edited. `tiny` is shown
 /// only when it is the tier asked for.
 pub fn fitting_tier(want: Tier, top: f32, w: i32, h: i32) -> Tier {
-    let fits = |t: Tier| rows_for(t, top) <= h && Camera::isometric(t.min_zoom()).footprint().0 <= w;
+    let fits = |t: Tier| rows_for(t, top) <= h && Camera::table(t.min_zoom()).footprint().0 <= w;
     let floor = want.min_zoom().min(Tier::Small.min_zoom());
     TIERS[floor..=want.min_zoom()].iter().copied().rev().find(|&t| fits(t)).unwrap_or(TIERS[floor])
 }
@@ -123,7 +123,7 @@ impl Preview {
         for p in &mut self.panes {
             p.want_rows = rows_for(p.tier, fx.top);
             p.shown = if fit { fitting_tier(p.tier, fx.top, p.w, p.h) } else { p.tier };
-            p.cam = Camera::isometric(p.shown.min_zoom());
+            p.cam = Camera::table(p.shown.min_zoom());
             p.cam.set_angle(angle);
             // What is shown grows upward from the tile, so the tile sits in
             // the lower part of the pane: aim half way up the subject, and

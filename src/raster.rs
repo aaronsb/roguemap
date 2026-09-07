@@ -1706,7 +1706,7 @@ mod tests {
         let hit = r.ray(&sc, px, py).expect("the near leader");
         assert!(hit.kind.is_tree() && hit.my == 8, "{:?} on tile {}", hit.kind, hit.my);
         // The same scene from the isometric mid zoom grows both.
-        let mut iso = Camera::isometric(1);
+        let mut iso = Camera::table(1);
         iso.look_at(8, 20, &map, w, h);
         let sc = Scene::new(&map, ts, &world, &iso, 0.0);
         let r = prepared(&sc, w, h);
