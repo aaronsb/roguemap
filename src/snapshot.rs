@@ -68,9 +68,9 @@ impl SnapArgs {
 /// person, an oak and a house on flat ground), camera (isometric, chase,
 /// shoulder or first-person: ADR-007; free for the detached eye of
 /// ADR-009, placed where the switch from the view named by from= leaves
-/// it, the table by default), pitch and fov (degrees, for a
-/// perspective camera), tilt (degrees, 30 to 90, of the isometric table:
-/// ADR-009), fog (metres of visibility, 0 for no fade),
+/// it, the table by default), pitch (degrees above the ground: 30 to 90
+/// on the isometric table, ADR-009) and fov (degrees, for a perspective
+/// camera), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
 /// character stands on; a perspective view's default is cx, cy), walk
 /// (`KEYS,SECONDS`: hold those walk keys that long in 40 ms ticks,
@@ -134,9 +134,6 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         if let Some(fov) = fov {
             cam.set_fov_override(Some(fov));
         }
-        if let Some(pitch) = pitch {
-            cam.pitch_by(pitch.to_radians() - cam.pitch);
-        }
     }
     let mut frames = ui::frames(&assets);
     ui::apply_settings(&mut frames, &settings);
@@ -150,9 +147,11 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
 
     let mut cv = Canvas::new(w, h);
     let mut renderer = Renderer::new(sw, sh);
-    // tilt=DEGREES tilts the isometric table (ADR-009); the floor is what
-    // every frame drew before it.
-    cam.set_tilt(a.num("tilt", Camera::TILT_RANGE.0.to_degrees()).to_radians());
+    // pitch=DEGREES sets the angle above the ground, clamped to what the
+    // projection allows; without it the view keeps its vantage's own.
+    if let Some(pitch) = pitch {
+        cam.set_pitch(pitch.to_radians());
+    }
     cam.set_angle(std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians());
     let (cx, cy) = (a.num("cx", map.w as f32 / 2.0) as i32, a.num("cy", map.h as f32 / 2.0) as i32);
     cam.look_at(cx, cy, &map, sw, sh);
@@ -219,7 +218,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         settings.set("camera", Camera::MODES.len() - 1);
         cam = cam.in_mode(Camera::MODES.len() - 1);
         if let Some(pitch) = pitch {
-            cam.pitch_by(pitch.to_radians() - cam.pitch);
+            cam.set_pitch(pitch.to_radians());
         }
     }
     // walk=KEYS,SECONDS holds walk keys (w, a, s, d and the diagonals) for
@@ -335,17 +334,17 @@ mod tests {
         assert_eq!(glyphs(&world_of(&[])), glyphs(&world_of(&["player_dx=-9999999"])));
     }
 
-    /// The tilt and the free eye of ADR-009, headless: the table's angle
-    /// and a detached eye that leaves the character where it stands.
+    /// The table's angle and the free eye of ADR-009, headless: a
+    /// detached eye leaves the character where it stands.
     #[test]
-    fn the_tilt_and_the_free_eye_draw_and_the_character_stays_put() {
+    fn the_pitch_and_the_free_eye_draw_and_the_character_stays_put() {
         let shot = |extra: &[&str]| {
             let mut args = vec!["scene=scale", "zoom=3", "t=3", "tod=12", "open=stats"];
             args.extend_from_slice(extra);
             glyphs(&render(test_assets(), 120, 40, &args))
         };
         let table = shot(&[]);
-        assert_ne!(shot(&["tilt=90"]), table, "the table tilts to the plan view");
+        assert_ne!(shot(&["pitch=90"]), table, "the table tilts to the plan view");
         let free = shot(&["camera=free"]);
         assert_ne!(free, table, "the eye has left the table");
         // The stats pane reads the position back: the yardstick's person
