@@ -7,14 +7,15 @@
 
 use crate::assets::{Assets, Tier, TilesetSpec};
 use crate::biome::{Form, COVERS, FORMS};
+use std::f32::consts::SQRT_2;
+
 use crate::sprite::Sprite;
 
-/// Tile footprints as (half width in columns, half height in rows), one per
-/// zoom, each an exact halving of the next (ADR-004): far 2x1 (1:8), mid
-/// 4x1 (1:4), near 8x2 (1:2), close 16x4 (1:1). Tiles step by these amounts
-/// and each footprint tessellates the screen; with 1:2 cells, 2x1 and 4x1
-/// read as 45-degree diamonds, the rest 2:1.
-pub const ZOOMS: [(i32, i32); 4] = [(2, 1), (4, 1), (8, 2), (16, 4)];
+/// Columns per metre at each zoom, each an exact halving of the next
+/// (ADR-004): far 1:8, mid 1:4, near 1:2, close 1:1. A tile is
+/// `TILE_METRES` of them across the screen; the rows it spans come from
+/// the table's tilt (ADR-009).
+pub const ZOOMS: [f32; 4] = [SQRT_2, 2.0 * SQRT_2, 4.0 * SQRT_2, 8.0 * SQRT_2];
 
 /// The zooms by name, in `ZOOMS` order.
 pub const ZOOM_NAMES: [&str; 4] = ["far", "mid", "near", "close"];

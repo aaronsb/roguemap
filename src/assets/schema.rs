@@ -585,6 +585,9 @@ pub struct CreatureRow {
     /// Metres per second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f32>,
+    /// Degrees per second the body turns on the spot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<f32>,
     /// Tags it eats.
     #[serde(default, skip_serializing_if = "is_none_or_empty")]
     pub diet: Vec<String>,

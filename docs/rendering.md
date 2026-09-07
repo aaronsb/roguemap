@@ -36,26 +36,47 @@ A `Camera` is a yaw (the heading, `angle`), a pitch above the horizon, a
 field of view, a scale and a screen offset
 ([ADR-007](adr/ADR-007-general-camera.md)). A field of view of zero is an
 orthographic view, which the isometric mode is; a positive one is a
-perspective view from an eye, which the chase, shoulder and first-person
-modes are. An orthographic view projects through a basis of three numbers — `a`
-columns per tile across the screen, `b` rows per tile of ground depth
-toward the camera, and `rpm` rows per metre of height — which are the
-scale times the pitch's sine and cosine:
+perspective view from an eye, which the chase, shoulder, first-person and
+free modes are. An orthographic view projects through a basis of three
+numbers — `a` columns per tile across the screen, `b` rows per tile of
+ground depth toward the camera, and `rpm` rows per metre of height —
+which are the scale times the tilt's sine and cosine:
 
 ```
 sx = a * (x cos - y sin) + ox
 sy = b * (x sin + y cos) - z * rpm + oy
 ```
 
-The isometric mode is `Camera::isometric(zoom)`: the basis from a
-footprint preset, `hw sqrt 2`, `hh sqrt 2` and `3 hw / 8`, and the pitch
-those imply, `atan(4 sqrt 2 hh / (3 hw))` — 25.24 degrees for the three
-4:1 footprints and 43.31 for the far zoom's 2x1, which has always been the
-steeper view. `Camera::orthographic(yaw, pitch, scale)` is the general
-form the presets are instances of. The basis is computed when a camera is
-built or its zoom set, not from the pitch on every call, so the preset's
-numbers are exact; the yaw's sine and cosine are cached the same way, so
-the heading is set through `set_angle`.
+The isometric mode is a table
+([ADR-009](adr/ADR-009-camera-modes-and-controls.md)):
+`Camera::isometric(zoom)` builds its basis from the zoom's columns per
+metre, the `tilt` the ground plane draws at and the `relief` height is
+drawn taller by.
+
+```
+cols = columns_per_metre * TILE_METRES
+rows = cols * CELL_ASPECT * sin(tilt)
+rise = relief * columns_per_metre * CELL_ASPECT * cos(tilt)
+```
+
+The tilt runs from 30 degrees, the isometric look, to 90, straight down,
+where `rise` is zero and height displaces nothing; the relief is
+`sqrt 1.5` and vanishes with the cosine it multiplies, so it is a knob in
+the tilted range alone. `Basis::apparent_pitch` is the angle the
+exaggeration implies, 25.24 degrees at the floor, and `Camera::tilt` is
+the real one. `Camera::orthographic(yaw, tilt, relief, columns)` is the
+general form the presets are instances of. The basis is computed when a
+camera is built, its zoom set or its tilt changed, not on every
+projection, so the presets' numbers are exact; the yaw's sine and cosine
+are cached the same way, so the heading is set through `set_angle`.
+
+A tilt moves the height on screen and must not move the detail on screen,
+so the two are separate numbers: `rows_per_metre` is `rise`, read by the
+projection and the screen-extent culls, and `detail_rows` is the rows an
+upright thing facing the viewer draws as, which is `rise` at the floor
+tilt and does not move with the table. Level of detail, the sprite tier,
+the walk's samples per metre, the cloud-layer switch and the prop shadow
+threshold read `detail_rows`.
 
 ### The eye
 
@@ -72,6 +93,7 @@ fov)` is the general form the three presets are instances of.
 | chase | 12 m | 30 | 60 | on it | close behind and above the character's middle, following them | 1x |
 | shoulder | 30 m | 20 | 40 | 12 m ahead, 3 m right | well back and high, off to one side, looking past the shoulder; the figure sits low and off-centre | 1.5x |
 | first-person | 0 | 0 | 60 | on it | the character's eye, `EYE_HEIGHT` (0.85) of their height over the ground; the character is not drawn | 1x |
+| free | 0 | the view's | 60 | it is the eye | detached, flown by the walk keys; the character stands where it was left | 1x |
 
 The projection is the eye's: a point's offset from the eye is resolved
 along the view direction, screen right and screen up and divided by its
@@ -82,13 +104,27 @@ scale at the character's depth: `rows_per_metre` is `focal / 2 / depth *
 cos(pitch)`, the first-person view stating it four metres out
 (`FIRST_PERSON_DEPTH`), so level of detail, the sprite tiers of ADR-004
 and the zoom preset carried for what is keyed by zoom keep one answer per
-frame. `rows_per_metre_at` gives any other point's, which is what a
+frame. `detail_rows_at` gives any other point's, which is what a
 creature, a prop and a tree take at their own distance. Rotation turns
 the eye about the character, `{` and `}` pitch it, zoom halves or
 doubles the chase distance between three metres and sixty-four, `<` and
 `>` widen and narrow the field of view, and the camera follows the
 character every frame. The `camera` settings row switches the mode
 through `Camera::in_mode`, which keeps the yaw and the aimed point.
+
+The free mode is the exception to all of that: its anchor is the eye
+itself, so `Camera::fly` moves the eye along the view direction and
+across it, the pan keys move it too, `follow` does not run, and `c`
+brings it back to the character. `V` enters it from whatever view was in
+play and returns to that view; entered from an eye it takes the eye it
+found, and from the table the point under the screen centre pushed back
+along the yaw and up by the tilt at thirty metres, so the switch does not
+jump. Leaving is that push undone, the point thirty metres down the eye's
+own view: `V` twice is the view it was entered from, and a flown eye
+leaves the table on the ground ahead of it.
+`Camera::addresses_character` is the question that separates the
+two: the walk keys walk the character and the view follows, or they fly
+the eye and nothing follows.
 
 ### What the camera owns
 
@@ -100,14 +136,15 @@ that needs a camera quantity asks for it rather than deriving it:
 | `project`, `unproject`, `project_tile`, `anchor_at` | a world point on screen and back | sprites, lights, the grid's culling, the view bounds |
 | `ray(sx, sy)` | the ray through a cell, `p0 + d * z` | the walk and its sub-rays |
 | `eye_ray(sx, sy)` | the eye's ray through a cell, `eye + dir * t` | the perspective walk, the cloud plane from the eye |
-| `rows_per_metre_at(x, y, z)` | the scale at a point's own depth | sprite and prop tiers, a tree's model detail |
+| `detail_rows()`, `detail_rows_at(x, y, z)` | the rows an upright metre draws as, here and at a point's own depth | level of detail, sprite and prop tiers, a tree's model detail |
 | `fog_origin(sw, sh)`, `fog_depth` | where the fog is measured from and how deep a point is in it | the light pass, the sub-rays' start |
 | `reach(w, far)` | the ground under the frustum out to the fog | the grid's box |
-| `in_mode(i)`, `hides_player()`, `view_label()` | the mode switch, whether the character is the eye, the status line | the settings row, the sprite pass, the HUD |
+| `in_mode(i)`, `hides_player()`, `addresses_character()`, `view_label()` | the mode switch, whether the character is the eye, whether the keys address the character, the status line | the settings row, the sprite pass, the tick, the HUD |
 | `forward()`, `right()`, `depth(x, y)`, `tile_depth` | the map-space view axes and the depth sort | face shading, the sprite and prop sort, crown seams |
 | `project_vector(run, rise)` | a world displacement in cells | stroke directions for bare branches and furrows |
 | `footprint()` | the cells a tile spans | the ground texture lattice, door and window widths, `pan` |
-| `rows_per_metre()`, `columns_per_metre()` | the scale | level of detail (`raster::lod_of`), sprite tiers, model detail |
+| `rows_per_metre()`, `columns_per_metre()` | the scale, height and ground | the projection, the screen-extent culls |
+| `tilt()`, `set_tilt()`, `pitch_by()` | the table's angle and the keys that change it | `{` and `}`, the mouse's rows, the snapshot's `tilt=` |
 | `cloud_view(w, h)` | the cloud plane's parallax | the cloud layer |
 | `inset()` | the second camera at the other end of the scale | the inset frame |
 | `focus(sw, sh)`, `cell_step`, `screen_dir_to_map` | the target and the walk keys' steps | zoom and rotation pivots, movement |

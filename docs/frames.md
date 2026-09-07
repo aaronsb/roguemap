@@ -110,10 +110,13 @@ typing in it does not walk the player.
 
 `roguemap --snap` takes `open=name,name` to render any of them headless,
 `camera=chase` (or `shoulder`, `first-person`) for the perspective modes
-with `pitch=` and `fov=` in degrees, `fog=` metres of visibility (`0` for
-no fade), `fogmode=always` for the fog row, and `px=`, `py=` for the tile
-the character stands on, which a perspective view otherwise puts at the
-view centre.
+with `pitch=` and `fov=` in degrees, `camera=free from=MODE` for the
+detached eye placed where the switch from that view leaves it, `tilt=`
+degrees for the isometric table, `coupling=view-only` for the body that
+turns on its own, `fog=` metres of visibility (`0` for no fade),
+`fogmode=always` for the fog row, and `px=`, `py=` for the tile the
+character stands on, which a perspective view otherwise puts at the view
+centre.
 
 ## The HUD lines
 
@@ -153,7 +156,8 @@ shortcut and the binding table in step.
 |---|---|---|
 | Traversal | screen space, map axes | |
 | Mouse | drag, free, off | |
-| Camera | isometric, chase, shoulder, first-person | |
+| Camera | isometric, chase, shoulder, first-person, free | `V` for free |
+| Coupling | body-turns, view-only | |
 | Field of view | preset, 30, 40, 50, 60, 70, 80, 90, 100, 110 | `<` `>` |
 | Fog | perspective, always, never | |
 | World view | island, filled | `v` |
@@ -172,12 +176,19 @@ view sets whether the map is bounded, the clock sets `auto_time`, weather
 and wind set their presets, day length sets the seconds in a day, the
 camera row puts the camera in its mode and the field of view row
 overrides the mode's own field of view (the preset's is 60 degrees for
-chase and first-person and 40 for shoulder; the isometric mode has none
-and ignores the row), and antialias, cloud layer and fog become the
+chase, first-person and free and 40 for shoulder; the isometric mode has
+none and ignores the row), and antialias, cloud layer and fog become the
 renderer's options. `<` and `>` step the field of view row in tens of
 degrees from wherever the camera stands and never wrap it back to
-`preset`; `{` and `}` pitch a perspective view by five degrees, which is
-the camera's and not a row.
+`preset`; `{` and `}` pitch a perspective view by five degrees and tilt
+the isometric table by the same, which is the camera's and not a row.
+
+The camera row is where the eye sits and the coupling row is whether the
+body turns with it
+([ADR-009](adr/ADR-009-camera-modes-and-controls.md)); the two are read
+by the tick, in [scale.md](scale.md). `V` is the camera row's one
+shortcut: it sets the row to `free` and back to the mode it suspended,
+which is state beside the camera, since no row holds it.
 
 ## The world map
 
@@ -193,15 +204,17 @@ cursor and a legend of every biome. The details are in
 
 The inset owns a second `Camera` and `Renderer` and its own canvas,
 rebuilt whenever its interior changes size. It copies the main camera's
-angle, sets its zoom by the bias rule of [scale.md](scale.md), looks at
+angle and, from a table, its tilt, sets its zoom by the bias rule of
+[scale.md](scale.md), looks at
 the player, renders the same `Scene` with antialiasing and clouds off, and
 blits the result. Its title is the row's title plus the ratio it is
 drawing at, so it reads `inset 1:1`.
 
 It follows the player, not the camera it hangs off: panning the main view
 leaves it where it was. It is not focusable. The `Inset` settings row
-places it in any of the four corners or turns it off, and `n` flips
-between the last corner and off. Its priority of 15 is below the HUD
+places it in any of the four corners or turns it off, and `x` flips
+between the last corner and off. It looks at the character under every
+camera mode, so it stays visible while a free eye is away. Its priority of 15 is below the HUD
 bars', so it covers the tail of the line it sits on rather than taking
 that line away, and it yields to any pane opened over it.
 

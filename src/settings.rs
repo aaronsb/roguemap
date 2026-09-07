@@ -4,7 +4,7 @@
 
 use crate::assets::Assets;
 use crate::camera::Camera;
-use crate::input::MouseMode;
+use crate::input::{Coupling, MouseMode};
 use crate::map::Map;
 use crate::properties::Identity;
 use crate::render::{FogMode, RenderOptions};
@@ -25,7 +25,7 @@ pub struct SettingItem {
 }
 
 /// Keys the engine reads; loading fails if one is missing.
-pub const REQUIRED_SETTINGS: [&str; 15] = ["traversal", "mouse", "camera", "fov", "fog", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
+pub const REQUIRED_SETTINGS: [&str; 16] = ["traversal", "mouse", "camera", "coupling", "fov", "fog", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
 
 pub struct Settings {
     pub items: Vec<SettingItem>,
@@ -92,6 +92,11 @@ impl Settings {
     /// What the mouse does with the view (ADR-008).
     pub fn mouse_mode(&self) -> MouseMode {
         MouseMode::from_index(self.get("mouse"))
+    }
+
+    /// Whether the body turns with the view (ADR-009).
+    pub fn coupling(&self) -> Coupling {
+        Coupling::from_index(self.get("coupling"))
     }
 
     pub fn filled(&self) -> bool {
@@ -179,6 +184,15 @@ mod tests {
         for (i, mode) in [MouseMode::Drag, MouseMode::Free, MouseMode::Off].into_iter().enumerate() {
             s.set("mouse", i);
             assert_eq!(s.mouse_mode(), mode, "{}", MouseMode::NAMES[i]);
+        }
+        // The coupling row's values are the couplings (ADR-009), and each
+        // of them is what the setting reads back.
+        let coupling = a.setting("coupling").unwrap();
+        assert_eq!(coupling.values, Coupling::NAMES);
+        assert_eq!(coupling.values[coupling.default as usize], "body-turns");
+        for (i, c) in [Coupling::BodyTurns, Coupling::ViewOnly].into_iter().enumerate() {
+            s.set("coupling", i);
+            assert_eq!(s.coupling(), c, "{}", Coupling::NAMES[i]);
         }
         let fov = a.setting("fov").unwrap();
         assert_eq!(fov.values[fov.default as usize], "preset");

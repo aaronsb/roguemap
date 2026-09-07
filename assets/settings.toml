@@ -14,9 +14,16 @@ default = 0
 
 [[setting]]
 key = "camera"
-description = "How the world maps to the screen (ADR-007): the isometric mode is the orthographic view at the pitch the four footprints imply; chase, shoulder and first-person are perspective views from an eye placed from the character."
+description = "Where the eye sits (ADR-009): the isometric mode is the orthographic table at its tilt; chase, shoulder and first-person are perspective views placed from the character; free is a detached eye the walk keys fly, which V enters and leaves."
 label = "Camera"
-values = ["isometric", "chase", "shoulder", "first-person"]
+values = ["isometric", "chase", "shoulder", "first-person", "free"]
+default = 0
+
+[[setting]]
+key = "coupling"
+description = "Whether the body turns with the view (ADR-009): under body-turns a walk key is a screen direction read against the view every tick, so the mouse steers the walk and a and d strafe; under view-only w and s pace the body along its own facing, a and d turn it, and the mouse turns the view alone."
+label = "Coupling"
+values = ["body-turns", "view-only"]
 default = 0
 
 [[setting]]

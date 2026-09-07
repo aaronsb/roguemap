@@ -58,7 +58,7 @@ impl ShadowMask {
             return None; // the sun is overhead: nothing reaches past its own footprint
         }
         let (x0, y0, x1, y1) = grid.bounds();
-        let lod = crate::raster::lod_of(sc.cam.rows_per_metre());
+        let lod = crate::raster::lod_of(sc.cam.detail_rows());
         let (volumes, props) = (lod.volumes || sc.cam.is_perspective(), lod.prop_shadows);
         let res = if props { CLOSE_RES } else { RES };
         let (w, h) = (((x1 - x0 + 1) as f32 * res) as i32, ((y1 - y0 + 1) as f32 * res) as i32);

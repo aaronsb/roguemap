@@ -159,6 +159,7 @@ Their own properties are:
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | speed | metres per second | 2 | Walking speed. The player walks at it every tick and runs at `World::RUN` times it (ADR-008); the person's is 1.4. |
+| turn | degrees per second | 180 | How fast the body turns on the spot. Under the `view-only` coupling the turn keys spend it into the body's yaw (ADR-009); the person's is 180. |
 | can_enter | terrain list | land | Terrain it may walk on; swimming and flying widen it. |
 | diet | tag list | [] | Tags it eats; connects to `yields` and `tags`. |
 | behaviour | name | idle | Wander, graze, flee, hunt, patrol. |

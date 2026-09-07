@@ -1329,14 +1329,14 @@ mod tests {
         let top: String = cv.cells[..80].iter().map(|c| c.ch).collect();
         assert!(top.contains("species: oak"), "{top}");
         // The one pane of the floor is eleven rows: too short for an oak
-        // at 16x4, so it drops to a tier that fits and labels itself with
+        // at 1:1, so it drops to a tier that fits and labels itself with
         // the tier it shows and the rows the one asked for wanted.
         let label: String = cv.cells[80..160].iter().map(|c| c.ch).collect();
-        assert!(label.contains("small 4x1") && label.contains("(large 16x4 needs ") && label.contains(" of 11 rows)"), "{label}");
+        assert!(label.contains("small mid 1:4") && label.contains("(large close 1:1 needs ") && label.contains(" of 11 rows)"), "{label}");
         // A campfire is short enough to keep the tier asked for.
         let cv = snapshot(a.clone(), 80, 25, &["table=props", "row=campfire"]).unwrap();
         let label: String = cv.cells[80..160].iter().map(|c| c.ch).collect();
-        assert!(label.contains("large 16x4") && !label.contains("needs"), "{label}");
+        assert!(label.contains("large close 1:1") && !label.contains("needs"), "{label}");
         let cv = snapshot(a.clone(), 168, 71, &["table=props", "row=boulder", "biome=steppe", "season=3", "tod=22", "glyphs=ascii", "pane=form"]).unwrap();
         let top: String = cv.cells[..168].iter().map(|c| c.ch).collect();
         assert!(top.contains("props: boulder") && top.contains("showing four boulder") && top.contains("biome steppe  winter 22:00  ascii"), "{top}");

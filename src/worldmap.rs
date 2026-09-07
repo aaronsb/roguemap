@@ -192,7 +192,7 @@ mod tests {
         // A lake with two islets; the cursor sits nearer the western one.
         let map = Map::synthetic(24, 24, test_assets(), 0, |x, y| Tile::flat(if (x, y) == (4, 10) || (x, y) == (20, 10) { 6 } else { -4 }));
         let mut world = World::new(1);
-        world.spawn_player(&map, 20, 10);
+        world.spawn_player(&map, 20, 10, 0.0);
         let mut wm = WorldMap::new();
         wm.cursor = (9, 12);
         assert_eq!(map.get(9, 12).unwrap().terrain, Terrain::Water);

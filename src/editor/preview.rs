@@ -43,11 +43,11 @@ pub fn tiles(strip: Rect, tier: Tier, one: bool) -> Vec<(Tier, Rect)> {
     out
 }
 
-/// The pane title: the tier and the tile size it is drawn at, named as
-/// the game names zooms (2x1 to 16x4).
+/// The pane title: the tier and the zoom it is drawn at, named as the
+/// game names zooms (`far 1:8` to `close 1:1`).
 pub fn pane_title(tier: Tier) -> String {
-    let cam = Camera::isometric(tier.min_zoom());
-    format!("{} {}x{}", tier.name(), cam.hw, cam.hh)
+    let (name, ratio) = Camera::isometric(tier.min_zoom()).zoom_name();
+    format!("{} {name} {ratio}", tier.name())
 }
 
 /// Rows a pane needs to show a subject `top` metres tall at a tier: its
@@ -178,8 +178,8 @@ mod tests {
         let before = pv.panes.len();
         pv.resize(&[(Tier::Tiny, 5, 4)], false);
         assert_eq!(pv.panes.len(), before);
-        assert_eq!(pane_title(Tier::Large), "large 16x4");
-        assert_eq!(pane_title(Tier::Tiny), "tiny 2x1");
+        assert_eq!(pane_title(Tier::Large), "large close 1:1");
+        assert_eq!(pane_title(Tier::Tiny), "tiny far 1:8");
     }
 
     /// The one pane of the 80x25 floor is 59 by 11: too short for the

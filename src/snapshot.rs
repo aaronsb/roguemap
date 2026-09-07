@@ -6,11 +6,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
+use crossterm::event::KeyCode;
+
 use crate::assets::Assets;
 use crate::blocks::Stack;
 use crate::camera::Camera;
 use crate::canvas::Canvas;
 use crate::frame::{FrameCtx, Frames};
+use crate::input::{self, Coupling, Held};
 use crate::map::{FixtureSpec, Flora, Map, Terrain};
 use crate::render::{FogMode, Renderer, Scene};
 use crate::settings::Settings;
@@ -63,12 +66,16 @@ impl SnapArgs {
 /// with scale, open (frame names of ui.toml, comma separated), frames (N,
 /// to time rendering), scene (`scale` for the yardstick of ADR-004: a
 /// person, an oak and a house on flat ground), camera (isometric, chase,
-/// shoulder or first-person: ADR-007), pitch and fov (degrees, for a
-/// perspective camera), fog (metres of visibility, 0 for no fade),
+/// shoulder or first-person: ADR-007; free for the detached eye of
+/// ADR-009, placed where the switch from the view named by from= leaves
+/// it, the table by default), pitch and fov (degrees, for a
+/// perspective camera), tilt (degrees, 30 to 90, of the isometric table:
+/// ADR-009), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
 /// character stands on; a perspective view's default is cx, cy), walk
-/// (`KEY,SECONDS`: hold a walk key that long in 40 ms ticks, ADR-008)
-/// with run (1 for the run speed).
+/// (`KEYS,SECONDS`: hold those walk keys that long in 40 ms ticks,
+/// ADR-008) with run (1 for the run speed), coupling (body-turns or
+/// view-only: whether the body turns with the view, ADR-009).
 pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> Canvas {
     let a = SnapArgs::parse(args);
     let (sw, sh) = (w as i32, h as i32);
@@ -98,8 +105,19 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     // through its settings row; a perspective mode takes pitch= and fov=
     // in degrees, fov= through its row where the row lists the value.
     let mode = a.text("camera").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).unwrap_or(0);
-    settings.set("camera", mode);
+    // The free eye is placed from the view it is entered from (ADR-009),
+    // named by from= and the table by default, so that view is aimed first
+    // and the mode taken after.
+    let free = mode == Camera::MODES.len() - 1;
+    let from = a.text("from").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).filter(|m| *m != mode).unwrap_or(0);
+    settings.set("camera", if free { from } else { mode });
+    // coupling=body-turns|view-only is whether the body turns with the
+    // view (ADR-009), which is what the walk keys below mean.
+    if let Some(c) = a.text("coupling").and_then(|c| Coupling::NAMES.iter().position(|n| *n == c)) {
+        settings.set("coupling", c);
+    }
     let fov = a.kv.get("fov").and_then(|v| v.parse::<f32>().ok());
+    let pitch = a.kv.get("pitch").and_then(|v| v.parse::<f32>().ok());
     if let Some(fov) = fov {
         settings.set_fov_near(fov);
         if settings.fov_degrees() != Some(fov) {
@@ -116,7 +134,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         if let Some(fov) = fov {
             cam.set_fov_override(Some(fov));
         }
-        if let Some(pitch) = a.kv.get("pitch").and_then(|v| v.parse::<f32>().ok()) {
+        if let Some(pitch) = pitch {
             cam.pitch_by(pitch.to_radians() - cam.pitch);
         }
     }
@@ -132,6 +150,9 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
 
     let mut cv = Canvas::new(w, h);
     let mut renderer = Renderer::new(sw, sh);
+    // tilt=DEGREES tilts the isometric table (ADR-009); the floor is what
+    // every frame drew before it.
+    cam.set_tilt(a.num("tilt", Camera::TILT_RANGE.0.to_degrees()).to_radians());
     cam.set_angle(std::f32::consts::FRAC_PI_4 + a.num("rot", 0.0) * std::f32::consts::FRAC_PI_2 + a.num("deg", 0.0).to_radians());
     let (cx, cy) = (a.num("cx", map.w as f32 / 2.0) as i32, a.num("cy", map.h as f32 / 2.0) as i32);
     cam.look_at(cx, cy, &map, sw, sh);
@@ -171,12 +192,12 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
                 map.set_stack(mx + 3 + dx, my - 1 + dy, Some(Stack { kind: house, levels: 1 }));
             }
         }
-        world.spawn_player(&map, mx, my);
-    } else if a.flag("player") || cam.is_perspective() {
+        world.spawn_player(&map, mx, my, cam.angle());
+    } else if a.flag("player") || free || cam.is_perspective() {
         // A perspective view is placed from the character, so it always
         // has one, standing at the view centre; px, py put them elsewhere.
         let (px, py) = if cam.is_perspective() { (cx, cy) } else { (map.w as i32 / 2, map.h as i32 / 2) };
-        world.spawn_player(&map, a.num("px", px as f32) as i32, a.num("py", py as f32) as i32);
+        world.spawn_player(&map, a.num("px", px as f32) as i32, a.num("py", py as f32) as i32, cam.angle());
     }
     // player_dx / player_dy walk the player from the spawn, in centimetres,
     // the way a run of keypresses would, so a stepped figure is reproducible.
@@ -192,21 +213,32 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     if let Some(p) = world.player().filter(|_| cam.is_perspective()) {
         cam.look_at_entity(p, &map, sw, sh);
     }
-    // walk=KEY,SECONDS holds a walk key (w, a, s, d) for that long in
-    // 40 ms ticks of the same walk and camera follow the game runs
-    // (ADR-008), with run=1 for the run speed, so a frame mid-stride is
+    // camera=free detaches the eye where the switch from the aimed table
+    // would leave it, and the character stands where it was put.
+    if free {
+        settings.set("camera", Camera::MODES.len() - 1);
+        cam = cam.in_mode(Camera::MODES.len() - 1);
+        if let Some(pitch) = pitch {
+            cam.pitch_by(pitch.to_radians() - cam.pitch);
+        }
+    }
+    // walk=KEYS,SECONDS holds walk keys (w, a, s, d and the diagonals) for
+    // that long in 40 ms ticks of the same held-key set, walk and camera
+    // follow the game runs (ADR-008, ADR-009), with run=1 for the run
+    // speed, so a frame mid-stride — or mid-curve under view-only — is
     // reproducible.
-    if let Some((key, secs)) = a.text("walk").and_then(|w| w.split_once(',')) {
-        let key = key.chars().next().unwrap_or('d');
+    if let Some((keys, secs)) = a.text("walk").and_then(|w| w.split_once(',')) {
         let ticks = (secs.parse::<f32>().unwrap_or(0.0) / TICK).round().max(0.0) as usize;
-        if let Some(crate::input::Action::Walk(dx, dy)) = crate::input::lookup(crate::input::SCENE, crossterm::event::KeyCode::Char(key), false) {
-            let heading = cam.heading(settings.screen_space(), dx, dy);
-            let facing = cam.facing_of(heading);
-            for _ in 0..ticks {
-                world.walk_toward(heading, a.flag("run"), facing);
-                world.step_walk(&map, TICK);
-                cam.follow(&world, &map, sw, sh);
+        let mut held = Held::new(true);
+        for key in keys.chars() {
+            if let Some((dir, run)) = input::lookup(input::SCENE, KeyCode::Char(key), false).and_then(Held::movement) {
+                held.press(KeyCode::Char(key), dir, run || a.flag("run"));
             }
+        }
+        for _ in 0..ticks {
+            input::walk_keys(&mut world, &cam, settings.coupling(), settings.screen_space(), &held);
+            world.step_walk(&map, TICK);
+            cam.follow(&world, &map, sw, sh);
         }
     }
     let t = a.num("t", 0.0);
@@ -301,6 +333,26 @@ mod tests {
         // The argument goes through try_move: a step that lands off the island
         // is refused and the frame is the spawn's.
         assert_eq!(glyphs(&world_of(&[])), glyphs(&world_of(&["player_dx=-9999999"])));
+    }
+
+    /// The tilt and the free eye of ADR-009, headless: the table's angle
+    /// and a detached eye that leaves the character where it stands.
+    #[test]
+    fn the_tilt_and_the_free_eye_draw_and_the_character_stays_put() {
+        let shot = |extra: &[&str]| {
+            let mut args = vec!["scene=scale", "zoom=3", "t=3", "tod=12", "open=stats"];
+            args.extend_from_slice(extra);
+            glyphs(&render(test_assets(), 120, 40, &args))
+        };
+        let table = shot(&[]);
+        assert_ne!(shot(&["tilt=90"]), table, "the table tilts to the plan view");
+        let free = shot(&["camera=free"]);
+        assert_ne!(free, table, "the eye has left the table");
+        // The stats pane reads the position back: the yardstick's person
+        // stands at the centre of a 24-tile fixture under either camera.
+        for frame in [&table, &free] {
+            assert!(frame.contains("25.00, 25.00 m"), "the character stands where it was spawned");
+        }
     }
 
     #[test]

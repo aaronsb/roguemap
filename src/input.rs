@@ -3,6 +3,7 @@
 
 use crossterm::event::{KeyCode, MouseEvent, MouseEventKind};
 
+use crate::camera::Camera;
 use crate::world::World;
 
 /// What a key does. Scene actions come first, then the settings popover's,
@@ -31,6 +32,9 @@ pub enum Action {
     Step(&'static str, i32),
     /// Turn a perspective view up or down by degrees.
     Pitch(f32),
+    /// Enter the free camera, or return to the mode it was entered from
+    /// (ADR-009).
+    FreeCamera,
     StepSeason(f32),
     StepHour(f32),
     Campfire,
@@ -88,7 +92,7 @@ pub const SCENE: &[Binding] = &[
     Binding { shift: false, keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
     Binding { shift: false, keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
     Binding { shift: false, keys: &[(Char('x'), Toggle("inset"))], label: "x", help: "inset" },
-    Binding { shift: false, keys: &[(Char('{'), Pitch(-5.0)), (Char('}'), Pitch(5.0))], label: "{ }", help: "pitch" },
+    Binding { shift: false, keys: &[(Char('{'), Pitch(-5.0)), (Char('}'), Pitch(5.0))], label: "{ }", help: "tilt" },
     Binding { shift: false, keys: &[(Char('<'), Step("fov", -1)), (Char('>'), Step("fov", 1))], label: "< >", help: "fov" },
     // The roguelike diagonals, so one key is a diagonal in a terminal that
     // cannot report two keys held at once (ADR-008); the capitals run.
@@ -101,6 +105,10 @@ pub const SCENE: &[Binding] = &[
         label: "yubn",
         help: "diagonals",
     },
+    // A view for looking around is reached from anywhere rather than
+    // through a popover, and its help entry falls past the same 120th
+    // column the diagonals do (ADR-009).
+    Binding { shift: false, keys: &[(Char('V'), FreeCamera)], label: "V", help: "free camera" },
     Binding { shift: false, keys: &[(Char('q'), Quit), (Esc, Quit)], label: "q", help: "quit" },
 ];
 
@@ -186,6 +194,111 @@ impl MouseMode {
             _ => MouseMode::Drag,
         }
     }
+}
+
+/// Whether the body turns with the view (ADR-009): the `coupling`
+/// settings row, and with it the two control schemes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Coupling {
+    /// A walk key is a screen direction, read against the view every tick,
+    /// so the mouse steers a walk in progress and `a` and `d` strafe.
+    BodyTurns,
+    /// A walk key is read against the body's own yaw: `w` and `s` pace it,
+    /// `a` and `d` turn it, and the mouse turns the view alone.
+    ViewOnly,
+}
+
+impl Coupling {
+    /// The values of the settings row, in order; a test keeps the two in
+    /// step.
+    pub const NAMES: [&'static str; 2] = ["body-turns", "view-only"];
+
+    pub fn from_index(i: usize) -> Coupling {
+        match i {
+            1 => Coupling::ViewOnly,
+            _ => Coupling::BodyTurns,
+        }
+    }
+}
+
+/// What the keys down ask of a body carrying its own yaw (ADR-009): the
+/// rows pace it forward and back, the columns turn it left and right, and
+/// a diagonal key names a direction to turn to and walk, since a screen
+/// diagonal means nothing against a body yaw.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct BodyKeys {
+    /// Forward or back along the yaw, in multiples of the pace.
+    pub pace: f32,
+    /// Left or right, left positive, in multiples of the turn rate.
+    pub turn: f32,
+    /// The screen direction a diagonal key names.
+    pub diagonal: Option<(i32, i32)>,
+}
+
+impl BodyKeys {
+    pub fn of(dirs: impl IntoIterator<Item = (i32, i32)>) -> BodyKeys {
+        let mut k = BodyKeys::default();
+        for (dx, dy) in dirs {
+            if dx != 0 && dy != 0 {
+                k.diagonal = Some((dx.signum(), dy.signum()));
+                continue;
+            }
+            // Up the screen paces forward; moving right turns right, which
+            // counts the yaw down.
+            k.pace = (k.pace - dy.signum() as f32).clamp(-1.0, 1.0);
+            k.turn = (k.turn - dx.signum() as f32).clamp(-1.0, 1.0);
+        }
+        k
+    }
+
+    /// Whether the keys ask for nothing, so the figure stands still.
+    pub fn is_still(&self) -> bool {
+        self.pace == 0.0 && self.turn == 0.0 && self.diagonal.is_none()
+    }
+}
+
+/// Point the player's walk where the keys down say, under either coupling
+/// (ADR-009), and report whether they are walking at all.
+///
+/// Under `body-turns` the heading is the normalised sum of what the keys
+/// mean on screen, read against the view every tick (ADR-008). Under
+/// `view-only` the rows pace the body along its own yaw and the columns
+/// spend the creature's turn into it; a diagonal key turns the body to the
+/// direction it names — the screen diagonal, or the map one where
+/// `traversal` says map axes — and walks that.
+pub fn walk_keys(world: &mut World, cam: &Camera, coupling: Coupling, screen_space: bool, held: &Held) -> bool {
+    let (run, grace) = (held.running(), held.grace());
+    if coupling == Coupling::BodyTurns {
+        let Some(dir) = cam.held_heading(screen_space, held.dirs()) else {
+            world.stop_walk();
+            return false;
+        };
+        world.walk_for(dir, 0.0, run, cam.facing_of(dir), grace);
+        return true;
+    }
+    let keys = BodyKeys::of(held.dirs());
+    let walk = match world.player_mut() {
+        Some(p) if !keys.is_still() => {
+            // A diagonal key is a direction to face and walk; the rows and
+            // columns are a pace and a turn about the yaw the body has.
+            let (pace, turn) = match keys.diagonal {
+                Some((dx, dy)) => {
+                    p.face(cam.heading(screen_space, dx, dy));
+                    (1.0, 0.0)
+                }
+                None => (keys.pace, keys.turn),
+            };
+            let (hx, hy) = p.heading();
+            Some(((hx * pace, hy * pace), turn))
+        }
+        _ => None,
+    };
+    let Some((dir, turn)) = walk else {
+        world.stop_walk();
+        return false;
+    };
+    world.walk_for(dir, turn, run, cam.facing_of(dir), grace);
+    true
 }
 
 /// What a mouse event asks of the view.
@@ -498,8 +611,9 @@ mod tests {
         assert_eq!(o.event(at(MouseEventKind::Moved, 41, 20), MouseMode::Free), None, "and it starts afresh when it is turned back on");
     }
 
-    /// Moving the pointer right turns the view right, and a perspective
-    /// pitch stops at the end of its range rather than turning over.
+    /// Moving the pointer right turns the view right; its rows tilt the
+    /// isometric table and pitch a perspective view, each stopping at the
+    /// end of its range rather than turning over.
     #[test]
     fn a_turn_right_is_a_turn_right_and_the_pitch_clamps() {
         use crate::camera::Camera;
@@ -515,11 +629,20 @@ mod tests {
         cam.rotate_by(yaw.to_radians(), 120, 40);
         let (fx, fy) = cam.forward();
         assert!((fx + 1.0).abs() < 1e-4 && fy.abs() < 1e-4, "looking south and turning right looks west: {fx}, {fy}");
-        // The isometric view has no pitch to turn; a chase view has, and it
+        // The rows tilt the table from its floor of 30 degrees to straight
+        // down and no further (ADR-009); a chase view pitches instead, and
         // stops at the end of its range.
-        let flat = cam.pitch_degrees();
-        cam.pitch_by(30f32.to_radians());
-        assert_eq!(cam.pitch_degrees(), flat, "the isometric pitch is the footprint's");
+        assert_eq!(cam.tilt_degrees(), 30);
+        cam.pitch_by((5.0 * Mouse::PITCH_PER_ROW).to_radians());
+        assert_eq!(cam.tilt_degrees(), 45, "fifteen rows down is fifteen degrees steeper");
+        for _ in 0..40 {
+            cam.pitch_by((10.0 * Mouse::PITCH_PER_ROW).to_radians());
+        }
+        assert_eq!(cam.tilt_degrees(), 90, "however far the pointer is dragged down");
+        for _ in 0..80 {
+            cam.pitch_by((-10.0 * Mouse::PITCH_PER_ROW).to_radians());
+        }
+        assert_eq!(cam.tilt_degrees(), 30, "and up");
         let mut chase = Camera::chase(std::f32::consts::FRAC_PI_4);
         for _ in 0..40 {
             chase.pitch_by((10.0 * Mouse::PITCH_PER_ROW).to_radians());
@@ -529,6 +652,23 @@ mod tests {
             chase.pitch_by((-10.0 * Mouse::PITCH_PER_ROW).to_radians());
         }
         assert_eq!(chase.pitch_degrees(), -80, "and up");
+    }
+
+    /// The keys down against a body that carries its own yaw (ADR-009).
+    #[test]
+    fn the_rows_pace_a_body_and_the_columns_turn_it() {
+        let of = |dirs: &[(i32, i32)]| BodyKeys::of(dirs.to_vec());
+        assert!(of(&[]).is_still());
+        assert_eq!(of(&[(0, -1)]).pace, 1.0, "up the screen paces forward");
+        assert_eq!(of(&[(0, 1)]).pace, -1.0);
+        assert_eq!(of(&[(-1, 0)]).turn, 1.0, "left turns left, which counts the yaw up");
+        assert_eq!(of(&[(1, 0)]).turn, -1.0);
+        let curve = of(&[(0, -1), (-1, 0)]);
+        assert_eq!((curve.pace, curve.turn), (1.0, 1.0), "forward with a turn is a curve");
+        let opposed = of(&[(0, -1), (0, 1), (-1, 0), (1, 0)]);
+        assert!(opposed.is_still(), "two opposite keys are nothing, as they are on screen");
+        assert_eq!(of(&[(1, -1)]).diagonal, Some((1, -1)), "a diagonal key names a direction to face");
+        assert!(!of(&[(1, -1)]).is_still());
     }
 
     #[test]
@@ -551,7 +691,9 @@ mod tests {
         let scene = help_line(SCENE, "  ");
         assert!(scene.len() > 120, "the scene help line already runs past 120 columns");
         assert_eq!(&scene[..120], " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run  c centre  r/R ( ) rotate  z/Z zoom  v fill  g ");
-        assert!(scene.find("yubn diagonals").is_some_and(|at| at > 120), "an entry added to the table falls past the columns the golden frames pin");
+        for entry in ["yubn diagonals", "V free camera"] {
+            assert!(scene.find(entry).is_some_and(|at| at > 120), "{entry}: an entry added to the table falls past the columns the golden frames pin");
+        }
         for frame in ["inventory", "stats", "history", "conversation"] {
             assert!(SCENE.iter().flat_map(|b| b.keys).any(|&(_, a)| a == Toggle(frame)), "{frame} has no toggle key");
         }

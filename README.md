@@ -71,22 +71,23 @@ help line at the bottom of the screen.
 
 | Key | Action |
 |---|---|
-| `w a s d` or `h j k l` | walk that way at 1.4 m/s while held, a tap 14 cm; the figure faces and strides, and the camera follows with some give |
+| `w a s d` or `h j k l` | walk that way at 1.4 m/s while held, a tap 14 cm; the figure faces and strides, and the camera follows with some give. Under the `Coupling` setting's `view-only`, `w` and `s` pace the body along its own facing and `a` and `d` turn it at 180 degrees a second |
 | `y u b n` | the four diagonals, one key each; the capitals run them |
 | two direction keys | held together they walk the diagonal between them; opposite keys cancel |
 | arrows | pan by one tile; shift with an arrow runs, three times walking speed |
 | `c` | centre on the player |
 | `r` / `R`, `(` / `)` | snap to the next compass view, or turn five degrees |
 | `z` / `Z` | zoom through far 1:8, mid 1:4, near 1:2, close 1:1; in a chase view halve or double the distance |
-| `{` / `}` | pitch a perspective view down or up by five degrees |
+| `{` / `}` | tilt the isometric table between 30 degrees and straight down, or pitch a perspective view, by five degrees |
 | `<` / `>` | narrow or widen the field of view by ten degrees |
 | `v` | island or filled world |
 | `g` | PETSCII or ASCII glyphs |
 | `[` / `]`, `,` / `.`, `p` | step the season, step the clock, pause it |
 | `W`, `f`, `F` | cycle the weather, light a campfire, put the fires out |
-| `Tab` or `o` | the settings frame: the camera mode (isometric, chase, shoulder, first-person), the field of view, the fog and the rest |
+| `Tab` or `o` | the settings frame: the camera mode (isometric, chase, shoulder, first-person, free), the coupling, the field of view, the fog and the rest |
 | `m` | the world map |
 | `x` | the inset view at the other end of the zoom scale |
+| `V` | the free camera: a detached eye the walk keys fly, `c` back to the character, `V` again to the view it was entered from |
 | mouse | turns the view: drag with a button, or any motion under the `Mouse` setting's `free`; the wheel zooms the isometric view and narrows or widens a perspective one |
 | `i`, `I`, `L`, `C` | inventory, stats, history, conversation |
 | `H` | hide the HUD |
@@ -105,7 +106,7 @@ the gallery, the map of the pages and how to run everything.
 |---|---|
 | [world.md](docs/world.md) | The height field, relief in metres, rivers, climate, biomes, chunks, the world map |
 | [rendering.md](docs/rendering.md) | The camera, the ray walk, block and tree geometry, shadows, lighting, sextant antialiasing, level of detail, cost |
-| [scale.md](docs/scale.md) | Metres, the four zooms and their ratios, movement, the inset view |
+| [scale.md](docs/scale.md) | Metres, the four zooms and their ratios, the tilt, movement and its control schemes, the inset view |
 | [trees.md](docs/trees.md) | The eight growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](docs/assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |
 | [frames.md](docs/frames.md) | Frames over the scene: HUD, settings, world map, inset, panes |

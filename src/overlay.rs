@@ -13,7 +13,7 @@ impl Renderer {
     pub(crate) fn cloud_pass(&self, cv: &mut Canvas, sc: &Scene) {
         let (ts, world, cam) = (sc.ts, sc.world, sc.cam);
         let perspective = cam.is_perspective();
-        if !perspective && !lod_of(cam.rows_per_metre()).cloud_layer {
+        if !perspective && !lod_of(cam.detail_rows()).cloud_layer {
             return;
         }
         let cover = world.weather.cover;

@@ -17,9 +17,9 @@ use crate::render::{GCell, Hit, HitKind, Renderer, Scene, FACE_LEFT, FACE_RIGHT,
 use crate::volume::Part;
 
 /// Detail octaves for a zoom: none at the overview, more up close. Keyed
-/// off rows per metre, as the rest of the level of detail is (ADR-004).
+/// off the detail scale, as the rest of the level of detail is (ADR-004).
 pub(crate) fn detail_octaves(cam: &Camera) -> u32 {
-    let rpm = cam.rows_per_metre();
+    let rpm = cam.detail_rows();
     if rpm < 1.0 {
         0
     } else if rpm < 2.0 {
@@ -62,10 +62,10 @@ pub(crate) struct Lod {
     pub(crate) prop_shadows: bool,
 }
 
-/// The level of detail at a zoom, by rows per metre: 0.75 far, 1.5 mid,
-/// 3 near, 6 close.
-pub(crate) fn lod_of(rows_per_metre: f32) -> Lod {
-    let rpm = rows_per_metre;
+/// The level of detail at a zoom, by its detail scale
+/// (`Camera::detail_rows`): 0.75 far, 1.5 mid, 3 near, 6 close.
+pub(crate) fn lod_of(detail_rows: f32) -> Lod {
+    let rpm = detail_rows;
     Lod {
         profiles: rpm >= 1.5,
         volumes: rpm >= 1.5,
@@ -81,7 +81,7 @@ pub(crate) fn lod_of(rows_per_metre: f32) -> Lod {
 }
 
 fn lod(cam: &Camera) -> Lod {
-    lod_of(cam.rows_per_metre())
+    lod_of(cam.detail_rows())
 }
 
 /// Brightness of a tree cell on the seam behind a nearer tree
@@ -525,15 +525,16 @@ impl Renderer {
         // position stays put as the walk descends.
         let crate::camera::Ray { p0, d } = cam.ray(sx, sy);
         let (s, c) = cam.forward();
-        let rpm = cam.rows_per_metre();
+        let detail = cam.detail_rows();
         // Only the heights whose ground point lies in the grid can be met,
         // and outside them the walk would step through hundreds of metres of
         // air over a range it cannot see.
         let (zlo, zhi) = grid.z_span(p0, d)?;
         let top = grid.max_top.min(start).min(zhi);
-        // Two screen rows per step, which is about a tile of ground at
-        // every zoom: fine enough that a step cannot cross a terrace.
-        let steps = (rpm / 2.0).ceil().max(1.0) as i32;
+        // Two rows of the detail scale per step, which is about a tile of
+        // ground at every zoom and tilt: fine enough that a step cannot
+        // cross a terrace.
+        let steps = (detail / 2.0).ceil().max(1.0) as i32;
         // A sample's height is its index over the steps; where the steps
         // are a power of two the reciprocal multiplies to the same value,
         // and the walk takes half a million samples a frame.
@@ -1648,7 +1649,7 @@ mod tests {
         // Twelve metres off the pine has rows enough for its model;
         // seventy-five metres off it has not, and is its stand-in cone
         // alone.
-        let (near_rows, far_rows) = (cam.rows_per_metre_at(8.5, 8.5, 5.0), cam.rows_per_metre_at(24.5, 36.5, 5.0));
+        let (near_rows, far_rows) = (cam.detail_rows_at(8.5, 8.5, 5.0), cam.detail_rows_at(24.5, 36.5, 5.0));
         assert!(near_rows >= 1.5 && far_rows < 1.5, "{near_rows} and {far_rows} rows per metre");
         let near: Vec<Shape> = grid.volumes.iter().filter(|v| v.my == 8).map(|v| v.shape).collect();
         let far: Vec<Shape> = grid.volumes.iter().filter(|v| v.my == 36).map(|v| v.shape).collect();
