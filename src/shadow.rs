@@ -137,6 +137,9 @@ impl ShadowMask {
     /// occluder's own footprint, are left alone so it does not shade itself.
     #[allow(clippy::too_many_arguments)]
     fn stamp(&mut self, c: (f32, f32), r: f32, t0: f32, t1: f32, top: f32, opacity: f32, exclude: Option<(f32, f32, f32, f32)>) {
+        if t0 >= t1 {
+            return; // a sweep that starts past MAX_SWEEP falls beyond the cap and marks nothing
+        }
         let (ux, uy) = self.u;
         let (px, py) = (-uy, ux);
         // Bounding box of the swept disc.
