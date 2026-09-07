@@ -145,6 +145,7 @@ shortcut and the binding table in step.
 | Setting | Values | Shortcut |
 |---|---|---|
 | Traversal | screen space, map axes | |
+| Camera | isometric | |
 | World view | island, filled | `v` |
 | Glyphs | petscii, ascii | `g` |
 | HUD | shown, hidden | `H` |

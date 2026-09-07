@@ -55,20 +55,29 @@ pub const ZOOM_RATIOS: [&str; 4] = ["1:8", "1:4", "1:2", "1:1"];
 Two numbers derived from the footprint carry the scale, and each is an
 exact halving of the next:
 
-| zoom | footprint | ratio | columns per metre | rows per metre | a 2 m person |
-|---|---|---|---|---|---|
-| close | 16x4 | 1:1 | 11.31 | 6 | 12 rows |
-| near | 8x2 | 1:2 | 5.66 | 3 | 6 rows |
-| mid | 4x1 | 1:4 | 2.83 | 1.5 | 3 rows |
-| far | 2x1 | 1:8 | 1.41 | 0.75 | one glyph |
+| zoom | footprint | ratio | columns per metre | rows per metre | a 2 m person | pitch |
+|---|---|---|---|---|---|---|
+| close | 16x4 | 1:1 | 11.31 | 6 | 12 rows | 25.24 |
+| near | 8x2 | 1:2 | 5.66 | 3 | 6 rows | 25.24 |
+| mid | 4x1 | 1:4 | 2.83 | 1.5 | 3 rows | 25.24 |
+| far | 2x1 | 1:8 | 1.41 | 0.75 | one glyph | 43.31 |
 
-`Camera::columns_per_metre` is `hw * sqrt(2) / TILE_METRES`, the ground
-scale that falls out of the isometric projection.
-`camera::rows_per_metre_of` is `hw * 3.0 / 8.0`, chosen so the vertical
-scale agrees with the horizontal one. Heights project through the second
-rather than through one row per unit, which is what makes an 18 m oak 108
-rows at 1:1 and 13 rows at 1:8, with the person standing under its
-canopy.
+`Camera::isometric(zoom)` builds a preset. `Camera::columns_per_metre` is
+`hw * sqrt(2) / TILE_METRES`, the ground scale that falls out of the
+isometric projection. `Camera::rows_per_metre` is `hw * 3.0 / 8.0`, chosen
+so the vertical scale agrees with the horizontal one. Heights project
+through the second rather than through one row per unit, which is what
+makes an 18 m oak 108 rows at 1:1 and 13 rows at 1:8, with the person
+standing under its canopy.
+
+The pitch is a number on the camera
+([ADR-007](adr/ADR-007-general-camera.md)): a metre of ground depth
+toward the camera is `hh * sqrt(2) / 2` rows and a metre of height
+`3 hw / 8`, so the view is pitched `atan(4 sqrt(2) hh / (3 hw))` above
+the horizon — 25.24 degrees for the three 4:1 footprints, a hair flatter
+than the 26.57 of classic 2:1 pixel isometry, and 43.31 for the far
+zoom's 2x1, which is the steeper view an overview wants and the only
+footprint a 1:8 tile can have in whole cells.
 
 `z` / `Z` step through the four. The status bar names the current one by
 both its ratio and its name, so the top line reads `1:2 near`.

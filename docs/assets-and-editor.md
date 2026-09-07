@@ -77,7 +77,7 @@ fractions sit in 0 to 1, radii and reaches are non-negative, and a
 seasonal colour table has exactly four entries. Some checks are
 structural. Every one of the nine Köppen codes the classifier can emit
 must be claimed by exactly one biome; there must be four seasons and four
-surfaces, in order; all eleven settings keys must exist and every value of
+surfaces, in order; all twelve settings keys must exist and every value of
 the `glyphs` row must name a tileset; a material called `stone` must
 exist, because buildings on rock and near the snow line are built of it; a
 prop called `campfire` with a light must exist, because the `f` key places

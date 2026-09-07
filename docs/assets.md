@@ -144,7 +144,7 @@ Each table has a Rust struct that is its schema: the raw row structs in
 resolves every reference, checks the ranges in the catalogue (sizes
 positive, block levels within `max_levels`, window bands rising within a
 level, volume overrides positive), and requires what the engine relies on: every Köppen code the classifier emits has a
-biome, the four seasons and four surfaces are in order, the ten settings
+biome, the four seasons and four surfaces are in order, the twelve settings
 keys exist and every `glyphs` value has a tileset, a `stone` material, a
 `campfire` prop with a light, `player` as the first creature, and every
 frame of `ui.toml` naming a content kind code supplies and a key that can

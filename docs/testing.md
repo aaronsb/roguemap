@@ -28,9 +28,24 @@ is one command.
   One frame, `props`, is there for the prop shadows: a close view of a
   boulder field at 15:00, the only shot whose sun is low enough for the
   mask to be built at a zoom where props cast.
-- **Camera.** Project then unproject returns the input at every zoom and
-  several angles; `screen_dir_to_map` gives the eight compass steps;
-  `tile_depth` orders a nearer tile above a farther one at every angle.
+- **Camera** (ADR-007). The general projection gives the old formulas'
+  bits: the footprint-era `project` and `unproject` live in the test
+  module and a lattice of 441 points by six heights, at every zoom and
+  seven headings, projects and unprojects to exactly the same `f32`s
+  through the basis; the walk's ray is the old walk's `p0` and drift to
+  the bit and every point along it projects back to its cell. The
+  isometric pitch is what the footprint implies, 25.24 degrees for 4:1
+  and 43.31 for 2x1, every preset is orthographic, and the general
+  `Camera::orthographic` built from a preset's own pitch and scale gives
+  the preset's basis back within a few ulps and carries the preset; a
+  top-down view puts all its rows in ground depth and a view along the
+  ground all of them in height. The inset camera keeps the heading at the
+  other end of the scale; `forward`, `right`, `depth` and
+  `project_vector` are the yaw's sine and cosine, and a unit of ground
+  toward the camera is `b` rows; the footprint is the cells a pan slides
+  by. Project then unproject returns the input at every zoom and several
+  angles; `screen_dir_to_map` gives the eight compass steps; `tile_depth`
+  orders a nearer tile above a farther one at every angle.
 - **Scale** (ADR-004). Each zoom's rows and columns per metre are an exact
   halving of the next (0.75, 1.5, 3, 6 rows and 1.41, 2.83, 5.66, 11.31
   columns), so a 2 m person is 1.5, 3, 6 and 12 rows; heights project
@@ -137,9 +152,9 @@ is one command.
 - **Lighting.** The knee is monotonic and bounded; a point light at
   distance zero gives its intensity and at its radius gives zero; ambient
   at midnight is the night floor.
-- **Overlays.** The cloud sample for a screen cell (`CloudView`) moves by
-  C/(C-H) tiles per tile of camera pan; precipitation kind follows the
-  temperature at the screen centre.
+- **Overlays.** The cloud sample for a screen cell (`Camera::cloud_view`)
+  moves by C/(C-H) tiles per tile of camera pan; precipitation kind
+  follows the temperature at the screen centre.
 
 ## Interaction
 
@@ -163,7 +178,8 @@ is one command.
   freezing and melts above; wetness dries faster in sun.
 - Settings: each row cycles through all values and wraps;
   `Settings::apply` pushes every row into the objects it governs; presets
-  and rows agree in length.
+  and rows agree in length, and the `camera` row's values are
+  `Camera::MODES`.
 - Traversal: `Camera::cell_step` makes a screen-space step at 45 degrees a
   diagonal map step and a map-axes step a cardinal one.
 - World map: `WorldMap::teleport` lands at the centre of the nearest land
@@ -222,7 +238,7 @@ is one command.
 - A test names the property it checks, not the function it calls.
 - Where the code makes a property awkward to reach, a small test-only
   helper (`Map::synthetic`, `Tile::flat`, `World::set_wetness`) or a
-  named `pub(crate)` piece (`lighting::knee`, `overlay::CloudView`) is
+  named `pub(crate)` piece (`lighting::knee`, `camera::CloudView`) is
   preferred to restructuring modules.
 - A change that alters pixels re-records the golden frames in the same
   commit and says which frames changed and why.

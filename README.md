@@ -96,7 +96,7 @@ the gallery, the map of the pages and how to run everything.
 | Page | What it covers |
 |---|---|
 | [world.md](docs/world.md) | The height field, relief in metres, rivers, climate, biomes, chunks, the world map |
-| [rendering.md](docs/rendering.md) | The ray walk, block and tree geometry, shadows, lighting, sextant antialiasing, level of detail, cost |
+| [rendering.md](docs/rendering.md) | The camera, the ray walk, block and tree geometry, shadows, lighting, sextant antialiasing, level of detail, cost |
 | [scale.md](docs/scale.md) | Metres, the four zooms and their ratios, movement, the inset view |
 | [trees.md](docs/trees.md) | The eight growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](docs/assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |

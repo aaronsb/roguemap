@@ -106,7 +106,7 @@ derived once:
 | `project_vector(run, rise)` | a world displacement in cells | `raster::stroke_dir` |
 | `footprint()` | the cells a tile spans | `2 * hw` in `raster::ground_hash`, `pan`, the cloud test |
 | `cloud_view(w, h)` | the cloud plane's parallax, C/(C-H) | `overlay::CloudView` |
-| `inset(w, h)` | the second camera at the other end of the scale | assembled in `ui::Inset` |
+| `inset()` | the second camera at the other end of the scale | assembled in `ui::Inset` |
 | `focus(sw, sh)` | the target under the screen centre | inlined in `set_zoom` and `rotate_by` |
 | `Camera::isometric(zoom)` | a preset's scale, for the editor's panes and `fitting_zoom` | `rows_per_metre_of(ZOOMS[..].0)` |
 
@@ -158,9 +158,12 @@ unbounded, is a stage 2 cost and is not paid here.
   camera and nowhere else.
 - The basis is stored rather than recomputed from the pitch, so a caller
   that sets `pitch` directly changes nothing until it rebuilds the camera;
-  in stage 1 nothing sets it but the constructor. That is the trade for
+  in stage 1 nothing sets it but the constructors. That is the trade for
   bit-exactness, and stage 2's perspective constructor is where it will
-  matter.
+  matter. The yaw's sine and cosine are cached the same way, so the
+  heading is a private field set through `set_angle`; every projection
+  reads the cache instead of calling `sin_cos`, which is where the
+  overview got slightly cheaper.
 - The walk keeps its height parameterisation. Perspective rays that
   descend fit it; horizontal ones do not, which bounds how low a
   first-person pitch can go until the walk is reparameterised.

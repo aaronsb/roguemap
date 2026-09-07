@@ -38,7 +38,7 @@ terminal shows with the same font.
 | Page | What it covers |
 |---|---|
 | [world.md](world.md) | The height field, relief in metres, rivers, climate, biomes, chunks and the world map |
-| [rendering.md](rendering.md) | The ray walk, block and tree geometry, shadows, lighting, antialiasing, level of detail, cost |
+| [rendering.md](rendering.md) | The camera, the ray walk, block and tree geometry, shadows, lighting, antialiasing, level of detail, cost |
 | [scale.md](scale.md) | Metres, the four zooms and their ratios, movement, the inset view |
 | [trees.md](trees.md) | The growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |

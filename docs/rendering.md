@@ -30,17 +30,65 @@ front with a depth test. The **light pass** is the only pass that writes
 the scene to the canvas, and **weather and clouds** draws precipitation
 and then the cloud layer over it.
 
+## The camera
+
+A `Camera` is a yaw (the heading, `angle`), a pitch above the horizon, a
+field of view, a scale and a screen offset
+([ADR-007](adr/ADR-007-general-camera.md)). A field of view of zero is an
+orthographic view, and every camera is one until perspective lands. An
+orthographic view projects through a basis of three numbers — `a`
+columns per tile across the screen, `b` rows per tile of ground depth
+toward the camera, and `rpm` rows per metre of height — which are the
+scale times the pitch's sine and cosine:
+
+```
+sx = a * (x cos - y sin) + ox
+sy = b * (x sin + y cos) - z * rpm + oy
+```
+
+The isometric mode is `Camera::isometric(zoom)`: the basis from a
+footprint preset, `hw sqrt 2`, `hh sqrt 2` and `3 hw / 8`, and the pitch
+those imply, `atan(4 sqrt 2 hh / (3 hw))` — 25.24 degrees for the three
+4:1 footprints and 43.31 for the far zoom's 2x1, which has always been the
+steeper view. `Camera::orthographic(yaw, pitch, scale)` is the general
+form the presets are instances of. The basis is computed when a camera is
+built or its zoom set, not from the pitch on every call, so the preset's
+numbers are exact; the yaw's sine and cosine are cached the same way, so
+the heading is set through `set_angle`.
+
+### What the camera owns
+
+`camera.rs` is the one place that maps the world to the screen. A module
+that needs a camera quantity asks for it rather than deriving it:
+
+| Method | Gives | Used by |
+|---|---|---|
+| `project`, `unproject`, `project_tile`, `anchor_at` | a world point on screen and back | sprites, lights, the grid's culling, the view bounds |
+| `ray(sx, sy)` | the ray through a cell, `p0 + d * z` | the walk and its sub-rays |
+| `forward()`, `right()`, `depth(x, y)`, `tile_depth` | the map-space view axes and the depth sort | face shading, the sprite and prop sort, crown seams |
+| `project_vector(run, rise)` | a world displacement in cells | stroke directions for bare branches and furrows |
+| `footprint()` | the cells a tile spans | the ground texture lattice, door and window widths, `pan` |
+| `rows_per_metre()`, `columns_per_metre()` | the scale | level of detail (`raster::lod_of`), sprite tiers, model detail |
+| `cloud_view(w, h)` | the cloud plane's parallax | the cloud layer |
+| `inset()` | the second camera at the other end of the scale | the inset frame |
+| `focus(sw, sh)`, `cell_step`, `screen_dir_to_map` | the target and the walk keys' steps | zoom and rotation pivots, movement |
+| `Camera::isometric(zoom)` | a preset's scale | the editor's preview panes, `fitting_zoom` |
+
+Level of detail is a table keyed off rows per metre, `raster::lod_of`,
+and every switch that depends on the zoom — roof profiles, models, glyph
+bands, crown seams, bisections, the wind, the cloud layer, prop shadows —
+is a field of it. The world map is not a view of the scene: it plots
+whole tiles per cell top-down with a cursor and has no camera.
+
 ## The ray walk
 
-`Camera::project` maps a world point to a screen cell —
-`sx = a * (x cos - y sin) + ox` and
-`sy = b * (x sin + y cos) - z * rows_per_metre + oy`.
-
-Invert that at `z = 0` to get a ground point `p0`, and the ray is
-parameterised by height rather than by distance: a metre of height moves
-the ground point by `d = (sin * rpm / b, cos * rpm / b)` tiles, which is
-exactly the drift that keeps the screen position fixed, so the path is
-`p(z) = p0 + d * z`.
+`Camera::ray` gives the walk its ray: invert the projection at `z = 0`
+to get a ground point `p0`, and parameterise by height rather than by
+distance: a metre of height moves the ground point by
+`d = (sin * rpm / b, cos * rpm / b)` tiles, which is exactly the drift
+that keeps the screen position fixed, so the path is `p(z) = p0 + d * z`.
+In an orthographic view every cell's drift is the same; a perspective
+ray from an eye has its own, in the same form.
 
 The walk starts at the highest thing that could be met — the grid's
 ceiling, capped at `TOP_CAP`, which is the top of the world plus 40 metres
@@ -242,15 +290,15 @@ crowns is the seam outline described under Trees.
 Detail keys off rows per metre, not the footprint, so the table lines up
 with the zoom scale in [scale.md](scale.md).
 
-| zoom | rpm | roof profiles | trees | window and roof glyphs | crown seams | bisections | detail octaves |
-|---|---|---|---|---|---|---|---|
-| far 1:8 | 0.75 | flat columns | one-glyph billboard | no | no | 4 | 0 |
-| mid 1:4 | 1.5 | yes | grown models, coarse | no | no | 4 | 1 |
-| near 1:2 | 3 | yes | grown models | yes | no | 4 | 2 |
-| close 1:1 | 6 | yes | grown, finer | yes | yes | 5 | 3 |
+| zoom | rpm | roof profiles | trees | window and roof glyphs | crown seams | bisections | detail octaves | wind | cloud layer | prop shadows |
+|---|---|---|---|---|---|---|---|---|---|---|
+| far 1:8 | 0.75 | flat columns | one-glyph billboard | no | no | 4 | 0 | off | yes | no |
+| mid 1:4 | 1.5 | yes | grown models, coarse | no | no | 4 | 1 | on | no | no |
+| near 1:2 | 3 | yes | grown models | yes | no | 4 | 2 | on | no | yes |
+| close 1:1 | 6 | yes | grown, finer | yes | yes | 5 | 3 | on | no | yes |
 
 Canopy glyph fill is 30 percent of crown cells below 1:1 and 45 percent at
-it, cactus arms appear only at 1:1, and wind is off at the overview.
+it, and cactus arms appear only at 1:1.
 Nothing is placed per level of detail; the block kind, the species and the
 adjacency rules produce all of it.
 
