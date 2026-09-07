@@ -4,7 +4,10 @@
 # height, 8 pixels per cell width, 168x71 cells. The point size is derived
 # from the screen DPI so the glyphs land on the same pixel grid. Falls back
 # to the current terminal if Konsole is not installed.
-# Usage: ./term.sh [seed] [size]     (COLS/ROWS/DPI env override)
+# A crash leaves its evidence: stderr is teed to $LOG and the window stays
+# open on a non-zero exit, since konsole -e closes it the moment the process
+# ends and a panic message would go with it.
+# Usage: ./term.sh [seed] [size]     (COLS/ROWS/DPI/LOG env override)
 set -euo pipefail
 cd "$(dirname "$0")"
 cargo build --release --quiet
@@ -14,6 +17,15 @@ dpi="${DPI:-$(xrdb -query 2>/dev/null | awk -F: '/^Xft.dpi/ {gsub(/ /,"",$2); pr
 dpi="${dpi:-96}"
 # 16 px tall glyphs: points = 16 * 72 / dpi
 pt="$(awk -v d="$dpi" 'BEGIN { printf "%.2f", 16 * 72 / d }')"
+log="${LOG:-/tmp/roguemap-crash.log}"
+: > "$log"
+run="RUST_BACKTRACE=full '$PWD/target/release/roguemap' '${1:-7}' '${2:-32}' 2> >(tee -a '$log' >&2)
+code=\$?
+if [ \$code -ne 0 ]; then
+  printf '\\nexit %s — stderr above and in %s\\n' \$code '$log'
+  read -r -p 'enter to close'
+fi
+exit \$code"
 if command -v konsole >/dev/null; then
   exec konsole \
     -p "Font=unscii,$pt,-1,5,400,0,0,0,0,0,0,0,0,0,0,1" \
@@ -24,6 +36,6 @@ if command -v konsole >/dev/null; then
     -p "TerminalColumns=$cols" -p "TerminalRows=$rows" \
     -p "ScrollBarPosition=2" \
     --hide-menubar --hide-tabbar \
-    -e "$PWD/target/release/roguemap" "${1:-7}" "${2:-32}"
+    -e bash -c "$run"
 fi
-exec ./target/release/roguemap "${1:-7}" "${2:-32}"
+exec bash -c "$run"
