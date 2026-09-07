@@ -148,8 +148,9 @@ fn ground_hash(cam: &Camera, x: f32, y: f32, seed: u32) -> u64 {
 }
 
 /// Texture glyph and its colour for a top-surface cell, or a blank cell in
-/// the base colour.
-fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (char, Rgb) {
+/// the base colour. `rows_along_x` is the axis a ground kind's rows run
+/// along, from the tile's merged run.
+fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32, rows_along_x: bool) -> (char, Rgb) {
     let (ts, pal, world, cam) = (sc.ts, &sc.pal, sc.world, sc.cam);
     let hv = ground_hash(cam, hit.x, hit.y, tile.seed);
     let r = (hv % 1000) as f32 / 1000.0;
@@ -160,12 +161,25 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
     let ground_glyph = b.ground_glyph.lerp(pal.snow_glyph(), snow).lerp(base.scale(1.25), 1.0 - vig);
     let wind_strength = if cam.hw <= 2 { 0.0 } else { world.weather.wind };
     // Ground kinds: a paved tile carries the dirt pair, a tilled one the
-    // dirt glyph in alternating rows.
+    // dirt glyph in furrows.
     if let Some(st) = tile.stack {
-        match st.kind(sc.assets).ground {
+        let kind = st.kind(sc.assets);
+        match kind.ground {
             Ground::Pave if r < sc.assets.surfaces.surface[DIRT].texture_density => return (ts.texture[DIRT][((hv >> 20) % 2) as usize], pal.surfaces[DIRT].glyph),
-            Ground::Till if sy % 2 == 0 && r < 0.5 => return (ts.texture[DIRT][0], pal.surfaces[DIRT].glyph),
-            Ground::Pave | Ground::Till => return (' ', base),
+            Ground::Till => {
+                // Furrows are ground, not screen rows: they run along the
+                // plot's longer axis at the kind's own pitch in metres, so
+                // a field reads as tilled rows at every zoom and from every
+                // angle instead of as a smear.
+                let pitch = (kind.ground_pitch / TILE_METRES).max(1e-3);
+                let across = if rows_along_x { hit.y } else { hit.x };
+                if (across / pitch).rem_euclid(1.0) < 0.4 {
+                    let run = if rows_along_x { (1.0, 0.0) } else { (0.0, 1.0) };
+                    return (ts.furrow[stroke_dir(cam, run, 0.0)], pal.surfaces[DIRT].glyph);
+                }
+                return (' ', base);
+            }
+            Ground::Pave => return (' ', base),
             _ => {}
         }
     }
@@ -227,23 +241,21 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32) -> (
     (' ', base)
 }
 
-/// The bare-wood glyph for a dead branch: the tileset's stroke for the
-/// direction the branch runs on screen, so a whorl reaching sideways is
-/// drawn along its length instead of taking the trunk's upright glyph.
-fn dead_branch(sc: &Scene, v: &crate::volume::Volume) -> char {
-    let cam = sc.cam;
+/// Which of a four-stroke set a line drawn along `run` tiles of ground and
+/// `rise` metres of height takes: vertical, horizontal, rising or falling
+/// on screen. Bare branches and the rows of a tilled field share it.
+fn stroke_dir(cam: &Camera, run: (f32, f32), rise: f32) -> usize {
     let (s, c) = cam.angle.sin_cos();
-    let dx = cam.a() * (v.run.0 * c - v.run.1 * s);
-    let dy = cam.b() * (v.run.0 * s + v.run.1 * c) - v.height * cam.rows_per_metre();
-    let g = &sc.ts.art.dead_branch;
+    let dx = cam.a() * (run.0 * c - run.1 * s);
+    let dy = cam.b() * (run.0 * s + run.1 * c) - rise * cam.rows_per_metre();
     if dy.abs() * 2.0 < dx.abs() {
-        g[1]
+        1
     } else if dx.abs() * 2.0 < dy.abs() {
-        g[0]
+        0
     } else if dx * dy < 0.0 {
-        g[2]
+        2
     } else {
-        g[3]
+        3
     }
 }
 
@@ -599,9 +611,19 @@ impl Renderer {
         };
         if let Some(st) = hit.tile.stack {
             let b = st.kind(sc.assets);
-            if b.ground == Ground::Pave && kind != Terrain::Water {
-                let snow = sc.snow_at(hit.tile.temp);
-                c = self.material(sc, &hit.tile, st.kind).wall.lerp(sc.pal.snow(), snow);
+            // A ground kind lays its own ground over the terrain's: the
+            // kind's colour where its row gives one, else the material's
+            // wall colour on a paved tile.
+            if b.ground != Ground::None && kind != Terrain::Water {
+                let ground = match (b.ground_color, b.ground) {
+                    (Some(c), _) => Some(c),
+                    (None, Ground::Pave) => Some(self.material(sc, &hit.tile, st.kind).wall),
+                    (None, _) => None,
+                };
+                if let Some(g) = ground {
+                    let snow = sc.snow_at(hit.tile.temp);
+                    c = g.lerp(sc.pal.snow(), snow);
+                }
             }
         }
         if kind != Terrain::Water {
@@ -624,6 +646,17 @@ impl Renderer {
     /// tile carries none.
     fn body_beside(&self, sc: &Scene, x: i32, y: i32) -> u16 {
         [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().filter_map(|(dx, dy)| self.tile_at(sc, x + dx, y + dy)).map(|t| t.body_size).max().unwrap_or(0)
+    }
+
+    /// The axis a ground kind's rows run along: the tile's longer merged
+    /// run, as a gable ridge follows the longer run. The tie is broken by
+    /// the seed of the corner the runs start from, which every tile of a
+    /// plot shares, so a square plot's rows all lie one way instead of
+    /// changing direction row by row.
+    fn rows_along_x(&self, sc: &Scene, hit: &Hit) -> bool {
+        let Some(g) = self.grid().geo(hit.mx, hit.my) else { return true };
+        let corner = self.tile_at(sc, hit.mx - g.runs.kx as i32, hit.my - g.runs.ky as i32);
+        crate::blocks::ridge_along_x(g.runs.nx, g.runs.ny, corner.map(|t| t.seed).unwrap_or(0))
     }
 
     /// Whether a ground point lies on or beside sand, as `Map::beach`
@@ -921,7 +954,10 @@ impl Renderer {
                     // it, so the sea's edge is not read as a calm pond.
                     tile.body_size = self.body_beside(sc, hit.mx, hit.my);
                 }
-                let (ch, glyph) = texture(sc, &tile, hit, base, sx, sy);
+                // Only a tilled tile asks which way its rows run, so the
+                // grid lookup behind it is off the path of open ground.
+                let tilled = tile.stack.is_some_and(|st| st.kind(sc.assets).ground == Ground::Till);
+                let (ch, glyph) = texture(sc, &tile, hit, base, sx, sy, tilled && self.rows_along_x(sc, hit));
                 (base, ch, glyph)
             }
             HitKind::Wall => {
@@ -987,7 +1023,7 @@ impl Renderer {
                     // Bare wood: a stroke along the branch, not the trunk's
                     // upright glyph, which on a whorl reaching sideways
                     // reads as a slab.
-                    return (base, dead_branch(sc, v), dead_bark(pal.trunk_glyph));
+                    return (base, ts.art.dead_branch[stroke_dir(sc.cam, v.run, v.height)], dead_bark(pal.trunk_glyph));
                 }
                 (base, ts.art.trunk[0].chars().next().unwrap_or(' '), pal.trunk_glyph)
             }
@@ -1380,6 +1416,54 @@ mod tests {
         let r = prepared(&sc, w, h);
         let b = r.grid().bounds();
         (r, b)
+    }
+
+    #[test]
+    fn a_tilled_plot_lays_its_own_ground_in_rows_along_its_longer_axis() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let world = World::new(1);
+        let field = assets.blocks.iter().position(|b| b.name == "field").expect("a field in the set");
+        let ground = assets.blocks[field].ground_color.expect("the field lays a ground colour");
+        // A plot eight tiles along x by six along y on a flat plain, so the
+        // rows have a longer axis to follow and no tie to break.
+        let map = Map::synthetic(24, 24, assets.clone(), 0, move |x, y| {
+            let mut t = Tile::flat(5);
+            if (8..16).contains(&x) && (9..15).contains(&y) {
+                t.stack = Some(Stack { kind: field as u8, levels: 0 });
+            }
+            t
+        });
+        let (w, h) = (120, 40);
+        for zoom in [1usize, 2, 3] {
+            let mut cam = Camera::new();
+            cam.set_zoom(zoom, w, h);
+            cam.look_at(12, 12, &map, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            let r = prepared(&sc, w, h);
+            let along = ts.furrow[stroke_dir(&cam, (1.0, 0.0), 0.0)];
+            let (mut furrows, mut plain) = (0, 0);
+            for y in 0..h {
+                for x in 0..w {
+                    let Some(hit) = r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5) else { continue };
+                    if hit.tile.stack.is_none() || hit.face != FACE_TOP {
+                        continue;
+                    }
+                    let (base, ch, _) = r.shade(&sc, &hit, x, y);
+                    // The kind's own colour, shaded by the slope under it
+                    // (at most 0.18 either way) and nothing else.
+                    let near = |a: u8, b: u8| (a as f32) >= b as f32 * 0.82 - 1.0 && (a as f32) <= b as f32 * 1.18 + 1.0;
+                    assert!(near(base.0, ground.0) && near(base.1, ground.1) && near(base.2, ground.2), "zoom {zoom}: the plot is the kind's own ground, not the terrain under it: {base:?}");
+                    if ch == ' ' {
+                        plain += 1;
+                    } else {
+                        assert_eq!(ch, along, "zoom {zoom}: a furrow runs along the plot's longer axis");
+                        furrows += 1;
+                    }
+                }
+            }
+            assert!(furrows > 20 && plain > furrows, "zoom {zoom}: rows of furrows over open earth: {furrows} and {plain}");
+        }
     }
 
     #[test]

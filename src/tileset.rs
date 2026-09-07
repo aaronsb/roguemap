@@ -59,6 +59,9 @@ pub struct Tileset {
     pub stubble: [char; 3],
     /// Reeds in still shallow water.
     pub cattail: [char; 2],
+    /// Rows of tilled ground, by the direction they run on screen:
+    /// vertical, horizontal, rising, falling.
+    pub furrow: [char; 4],
     /// Whether sextant glyphs may be used for edge antialiasing.
     pub antialias: bool,
     /// Water surface glyphs, cycled by wave phase.
@@ -111,6 +114,7 @@ impl Tileset {
             cover,
             stubble: r.stubble,
             cattail: r.cattail,
+            furrow: r.furrow,
             antialias: spec.antialias,
             water: r.water,
             texture: [r.texture.sand, r.texture.dirt, r.texture.rock, r.texture.snow],

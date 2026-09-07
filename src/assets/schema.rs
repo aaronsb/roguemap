@@ -530,6 +530,14 @@ pub struct BlockRow {
     /// What the tile top becomes.
     #[serde(default)]
     pub ground: Ground,
+    /// The colour that ground takes in place of the terrain's; the
+    /// material's wall colour when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ground_color: Option<Rgb>,
+    /// Metres between the rows the ground texture draws in: a field's
+    /// furrows.
+    #[serde(default = "one")]
+    pub ground_pitch: f32,
     /// Band within a level, as fractions, where windows go; empty for none.
     #[serde(default = "default_windows")]
     pub windows: Vec<f32>,
@@ -769,6 +777,9 @@ pub struct RolesSpec {
     pub stubble: [char; 3],
     /// Reeds in still shallow water.
     pub cattail: [char; 2],
+    /// Rows of tilled ground, by the direction they run on screen:
+    /// vertical, horizontal, rising, falling.
+    pub furrow: [char; 4],
     /// Water surface glyphs, cycled by wave phase.
     pub water: [char; 4],
     pub texture: TextureGlyphs,

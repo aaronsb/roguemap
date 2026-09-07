@@ -154,6 +154,11 @@ pub struct Block {
     /// Whether same-kind neighbours share walls and roof.
     pub merge: bool,
     pub ground: Ground,
+    /// The colour that ground takes in place of the terrain's, where the
+    /// kind lays one; the material's wall colour when absent.
+    pub ground_color: Option<Rgb>,
+    /// Metres between the rows of the ground texture: a field's furrows.
+    pub ground_pitch: f32,
     /// Window band within a level, as fractions; none for no windows.
     pub windows: Option<[f32; 2]>,
     /// Metres between window centres.

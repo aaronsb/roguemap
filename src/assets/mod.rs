@@ -864,6 +864,8 @@ impl Assets {
                 material,
                 merge: b.merge,
                 ground: b.ground,
+                ground_color: b.ground_color,
+                ground_pitch: b.ground_pitch,
                 windows,
                 window_pitch: b.window_pitch,
                 door: b.door,

@@ -5,6 +5,7 @@ antialias = false
 [roles]
 stubble = [";", ".", "'"]
 cattail = [";", "i"]
+furrow = ["|", "-", "/", "\\"]
 water = ["~", "-", "=", " "]
 wall = [" ", " "]
 star = [".", "*"]

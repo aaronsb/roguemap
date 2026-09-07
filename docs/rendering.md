@@ -70,8 +70,10 @@ slope at sub-tile resolution rather than in whole tiles. Roof profiles are
 nearer edge across the ridge, a hip rises from every edge, and both cap at
 `max_rise`. Ground kinds are `none`, `flatten`, `pave` and `till`.
 
-Neighbours merge when they are 4-adjacent, carry the same kind and the
-same level count, sit above the ground, and the kind's `merge` is true.
+Neighbours are one plot when they are 4-adjacent, carry the same kind and
+the same level count, and the kind's `merge` is true; they merge — share
+walls and a roof — when that plot also sits above the ground, so a field
+is one plot with an axis for its furrows but has no walls to share.
 Runs are labelled per axis, so a profile continues across the seam and the
 ridge follows the longer run, a tie broken by the first tile's seed. A
 face is open when the neighbour across it is not merged, which is where

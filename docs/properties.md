@@ -48,6 +48,7 @@ a test parses the tables below and holds each property against them
 | pitch, max_rise | metres per metre, metres | 1.0, 1.5 | blocks | Roof rise per metre of run from the eaves, and its cap. |
 | merge | bool | true | blocks | Whether same-kind neighbours share walls and roof. |
 | ground | enum | flatten | blocks | What the tile top becomes: none, flatten, pave, till. |
+| ground_color, ground_pitch | rgb, metres | none, 1.0 | blocks | The ground a kind lays: the colour it takes in place of the terrain's, and the spacing of the rows its texture draws in. A tilled field is turned earth with a furrow every `ground_pitch` metres along the plot's longer axis; a paved tile with no `ground_color` takes the material's wall colour. |
 | windows, window_pitch | fraction pair, metres | [0.5, 1.0], 1.0 | blocks | Band within a level where windows go (empty for none) and the spacing along a face. |
 | door | bool | true | blocks | One door at ground level on an open face, toward a road when there is one. |
 | seasonal | bool | false | biomes | Whether the biome's ground and cover colours follow the seasons: a rainforest and a desert say no, a temperate wood yes. A species has no such flag; its canopy is seasonal whenever its `canopy` table gives four colours. |

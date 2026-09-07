@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::biome::Species;
-use crate::blocks::{self, door_face, label_runs, merges, ridge_along_x, Column, Ground, Profile, Runs, Stack, NO_FACE};
+use crate::blocks::{self, door_face, label_runs, merges, one_plot, ridge_along_x, Column, Ground, Profile, Runs, Stack, NO_FACE};
 use crate::lsystem::{Growth, Placement, State, TreeModel};
 use crate::map::{Fields, Tile, MAX_Z, SEA, TILE_METRES};
 use crate::noise::{hash01, ifloor};
@@ -304,7 +304,7 @@ impl HeightGrid {
         // Merged runs along each axis, then the open faces and the door.
         let stack_at = |x: i32, y: i32| -> Option<Stack> { (x >= x0 && x <= x1 && y >= y0 && y <= y1).then(|| tiles[at(x, y)].and_then(|t| t.stack)).flatten() };
         for y in y0..=y1 {
-            let runs = label_runs(w as usize, |i| merges(stack_at(x0 + i as i32, y), stack_at(x0 + i as i32 + 1, y), kind_merges));
+            let runs = label_runs(w as usize, |i| one_plot(stack_at(x0 + i as i32, y), stack_at(x0 + i as i32 + 1, y), kind_merges));
             for (i, (n, k)) in runs.into_iter().enumerate() {
                 let g = &mut geo[at(x0 + i as i32, y)];
                 g.runs.nx = n;
@@ -312,7 +312,7 @@ impl HeightGrid {
             }
         }
         for x in x0..=x1 {
-            let runs = label_runs(h as usize, |j| merges(stack_at(x, y0 + j as i32), stack_at(x, y0 + j as i32 + 1), kind_merges));
+            let runs = label_runs(h as usize, |j| one_plot(stack_at(x, y0 + j as i32), stack_at(x, y0 + j as i32 + 1), kind_merges));
             for (j, (n, k)) in runs.into_iter().enumerate() {
                 let g = &mut geo[at(x, y0 + j as i32)];
                 g.runs.ny = n;

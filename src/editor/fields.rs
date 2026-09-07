@@ -241,7 +241,7 @@ const PROP: [Field; 10] = [
     opt("min_zoom", Kind::U8 { max: 3 }),
 ];
 
-const BLOCK: [Field; 18] = [
+const BLOCK: [Field; 20] = [
     req("name", Kind::Str),
     req("size", Kind::Metres(3)),
     req("terrain", Kind::EnumList(&TERRAINS)),
@@ -253,6 +253,8 @@ const BLOCK: [Field; 18] = [
     opt("material", Kind::Ref { table: TableKind::Materials, extra: &["by_biome"] }),
     opt("merge", Kind::Bool),
     opt("ground", Kind::Enum(&GROUNDS)),
+    opt("ground_color", Kind::Rgb),
+    opt("ground_pitch", NON_NEG),
     opt("windows", Kind::Any),
     opt("window_pitch", NON_NEG),
     opt("door", Kind::Bool),
@@ -310,7 +312,7 @@ const LIGHT: [Field; 7] = [
 
 const SETTING: [Field; 5] = [req("key", Kind::Str), req("label", Kind::Str), req("values", Kind::StrList), opt("default", Kind::U8 { max: 255 }), opt("shortcut", Kind::Glyph)];
 
-const TILESET: [Field; 32] = [
+const TILESET: [Field; 33] = [
     req("name", Kind::Str),
     req("antialias", Kind::Bool),
     req("roles.cover.grass", Kind::GlyphList(3)),
@@ -319,6 +321,7 @@ const TILESET: [Field; 32] = [
     req("roles.cover.bare", Kind::GlyphList(3)),
     req("roles.stubble", Kind::GlyphList(3)),
     req("roles.cattail", Kind::GlyphList(2)),
+    req("roles.furrow", Kind::GlyphList(4)),
     req("roles.water", Kind::GlyphList(4)),
     req("roles.texture.sand", Kind::GlyphList(2)),
     req("roles.texture.dirt", Kind::GlyphList(2)),

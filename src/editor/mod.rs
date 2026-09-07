@@ -878,6 +878,7 @@ impl Editor {
                 r.cover.moss.to_vec(),
                 r.stubble.to_vec(),
                 r.cattail.to_vec(),
+                r.furrow.to_vec(),
                 r.water.to_vec(),
                 r.texture.sand.to_vec(),
                 r.texture.dirt.to_vec(),

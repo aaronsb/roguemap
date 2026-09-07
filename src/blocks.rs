@@ -220,13 +220,21 @@ impl Column {
     }
 }
 
-/// Whether two tiles' stacks merge into one building: the same kind and
-/// level count, a level above the ground, and a kind that merges.
-pub fn merges(a: Option<Stack>, b: Option<Stack>, kind_merges: impl Fn(u8) -> bool) -> bool {
+/// Whether two tiles' stacks are one laid thing: the same kind and level
+/// count, and a kind that merges. This is what the runs are labelled with,
+/// so a field or a road is one plot with an extent and an axis even though
+/// it has no walls.
+pub fn one_plot(a: Option<Stack>, b: Option<Stack>, kind_merges: impl Fn(u8) -> bool) -> bool {
     match (a, b) {
-        (Some(a), Some(b)) => a.kind == b.kind && a.levels == b.levels && a.levels > 0 && kind_merges(a.kind),
+        (Some(a), Some(b)) => a.kind == b.kind && a.levels == b.levels && kind_merges(a.kind),
         _ => false,
     }
+}
+
+/// Whether two tiles' stacks merge into one building: one plot, standing a
+/// level above the ground, so its walls and roof are shared.
+pub fn merges(a: Option<Stack>, b: Option<Stack>, kind_merges: impl Fn(u8) -> bool) -> bool {
+    one_plot(a, b, kind_merges) && a.is_some_and(|a| a.levels > 0)
 }
 
 /// Label the merged runs along one axis of a line of tiles: for each
@@ -345,6 +353,7 @@ mod tests {
         assert!(!merges(a, c, |_| true), "another kind does not merge");
         assert!(!merges(a, None, |_| true));
         assert!(!merges(ground, ground, |_| true), "ground kinds have no walls to share");
+        assert!(one_plot(ground, ground, |_| true), "but they are still one plot, with an extent and an axis");
         assert!(!merges(a, a, |k| k != 0), "a kind that does not merge keeps its walls");
     }
 

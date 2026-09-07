@@ -29,6 +29,7 @@ identity properties are in [properties.md](properties.md)):
 | material | by_biome | colours from `materials.toml`: the tile's local material, or a named one |
 | merge | true | whether same-kind neighbours share walls and roof |
 | ground | flatten | what the tile beneath becomes: none, flatten (a pad at the tile's height), pave, till |
+| ground_color, ground_pitch | none, 1.0 | the colour that ground takes and the metres between the rows of its texture: a field is turned earth with a furrow every two metres |
 | windows | [0.5, 1.0] | band within a level, as fractions of its height, where windows go; `[]` for none |
 | window_pitch | 1.0 | metres between window centres along a face |
 | door | true | one door at ground level on an open face |
@@ -90,9 +91,16 @@ the roof is continuous across them. A taller merged neighbour shows its
 wall above a shorter one's roof by itself, since the walk meets the taller
 column first.
 
-Ground kinds have no column: `pave` colours the top with the material's
-wall colour and the dirt texture pair, `till` draws the dirt glyph in
-alternating rows.
+Ground kinds have no column, but they lay a ground: the kind's
+`ground_color` in place of the terrain's colour, or the material's wall
+colour on a paved tile that names none, and a texture over it. `pave`
+carries the dirt pair scattered; `till` draws a furrow every
+`ground_pitch` metres, in the tileset's `furrow` stroke for the direction
+the rows run on screen. The rows follow the plot's longer axis, as a gable
+ridge follows the longer run, so a field reads as tilled rows at every
+zoom rather than as a smear (issue #4). Runs are labelled for a ground
+kind too (`one_plot`): its tiles share no walls, but they are one plot
+with an extent and an axis.
 
 ## Faces and glyphs
 
