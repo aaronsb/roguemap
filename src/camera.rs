@@ -179,6 +179,10 @@ pub struct Camera {
     /// direction a perspective eye looks along, within the range its
     /// projection allows.
     pub pitch: f32,
+    /// The angle the table was last left at, kept through a mode round
+    /// trip the way `zoom` is (ADR-009): `pitch` is what the camera is
+    /// doing now, and this is what the vantage was set to.
+    table_pitch: f32,
     /// How much taller than the pitch implies height is drawn; it
     /// multiplies `cos(pitch)` and so vanishes at the plan view.
     relief: f32,
@@ -328,6 +332,7 @@ impl Camera {
             angle: 0.0,
             yaw: (0.0, 1.0),
             pitch: Camera::TILT_RANGE.0,
+            table_pitch: Camera::TILT_RANGE.0,
             relief: Camera::RELIEF,
             detail: 1.0,
             foot: (1, 1),
@@ -362,6 +367,7 @@ impl Camera {
         cam.set_angle(yaw);
         cam.relief = relief;
         cam.pitch = tilt;
+        cam.table_pitch = tilt;
         cam.basis = Camera::table_basis(columns, tilt, relief);
         cam.detail = detail;
         cam.foot = Camera::cells_of(&cam.basis);
@@ -431,11 +437,11 @@ impl Camera {
 
     /// This view in another mode (an index into `MODES`): the yaw, the
     /// aimed point, the field-of-view override and the screen carry over.
-    /// A placement comes up at its own angle; the table keeps its zoom and
-    /// takes the angle it was switched from, clamped into the orthographic
-    /// range. Aimed on the screen it last knew. The free camera's aimed
-    /// point is its eye, so leaving it aims at what the eye looks at
-    /// (`free_target`) instead.
+    /// A placement comes up at its own angle; the table comes up at its
+    /// zoom and the angle it was left at, so switching there and back
+    /// lands where it was (ADR-009). Aimed on the screen it last knew.
+    /// The free camera's aimed point is its eye, so leaving it aims at
+    /// what the eye looks at (`free_target`) instead.
     pub fn in_mode(&self, index: usize) -> Camera {
         let mode = match index % Camera::MODES.len() {
             0 => Mode::Table,
@@ -452,13 +458,14 @@ impl Camera {
         }
         let point = if self.mode == Mode::Free { self.free_target() } else { self.anchor };
         let mut cam = if mode == Mode::Table { Camera::table(self.zoom) } else { Camera::in_placement(mode, Camera::placement_of(mode), self.angle) };
+        cam.table_pitch = self.table_pitch;
         cam.set_angle(self.angle);
         cam.fov_override = self.fov_override;
         cam.apply_fov();
         cam.screen = self.screen;
         cam.anchor = point;
         if mode == Mode::Table {
-            cam.pitch = self.pitch.clamp(Camera::TILT_RANGE.0, Camera::TILT_RANGE.1);
+            cam.pitch = cam.table_pitch.clamp(Camera::TILT_RANGE.0, Camera::TILT_RANGE.1);
             cam.preset(self.zoom);
             if self.screen != (0, 0) {
                 cam.look_at_point(point.0, point.1, point.2, self.screen.0, self.screen.1);
@@ -476,6 +483,7 @@ impl Camera {
     /// the shoulder view's thirty metres and looked at down the pitch.
     fn free_from(&self) -> Camera {
         let mut cam = Camera::in_placement(Mode::Free, Placement::FREE, self.angle);
+        cam.table_pitch = self.table_pitch;
         cam.fov_override = self.fov_override;
         if self.screen != (0, 0) {
             cam.screen = self.screen;
@@ -730,11 +738,14 @@ impl Camera {
 
     /// Set the angle above the ground in radians, clamped to the range the
     /// projection allows. The table tilts about whatever is at the screen
-    /// centre and keeps it there; a perspective view swings its eye about
-    /// the point it is aimed at.
+    /// centre, keeps it there and remembers the angle for a switch back;
+    /// a perspective view swings its eye about the point it is aimed at.
     pub fn set_pitch(&mut self, radians: f32) {
         let (lo, hi) = self.pitch_range();
         self.pitch = radians.clamp(lo, hi);
+        if self.mode == Mode::Table {
+            self.table_pitch = self.pitch;
+        }
         if self.is_perspective() {
             self.aim();
             return;
@@ -916,6 +927,7 @@ impl Camera {
         let mut cam = Camera::table(Camera::inset_zoom(self.zoom));
         if !self.is_perspective() {
             cam.pitch = self.pitch;
+            cam.table_pitch = self.pitch;
             cam.preset(cam.zoom);
         }
         cam.set_angle(self.angle);
@@ -1744,7 +1756,7 @@ mod tests {
     }
 
     #[test]
-    fn the_angle_clamps_to_its_projection_and_survives_a_zoom_step() {
+    fn the_angle_clamps_to_its_projection_and_survives_a_zoom_step_and_a_mode_round_trip() {
         let mut cam = Camera::table(1);
         cam.look_at_point(4.5, 4.5, 0.0, 120, 40);
         cam.set_pitch(2.0);
@@ -1763,14 +1775,17 @@ mod tests {
         // The label announces the angle only off the floor.
         assert_eq!(cam.view_label(), "1:2 near 60deg");
         assert_eq!(Camera::table(0).view_label(), "1:8 far");
-        // A vantage comes up at its own angle and the table takes the
-        // angle it is switched from, so a round trip through the chase
-        // view's thirty degrees lands on the table's floor.
+        // A placement comes up at its own angle, and the table at the
+        // one it was left at, kept the way its zoom is (ADR-009).
         let chase = cam.in_mode(1);
         assert!(chase.is_perspective() && chase.pitch_degrees() == 30);
         let back = chase.in_mode(0);
-        assert_eq!((back.pitch_degrees(), back.zoom), (30, cam.zoom));
-        assert_eq!(back.basis(), Camera::table(cam.zoom).basis());
+        assert_eq!((back.pitch_degrees(), back.zoom), (60, cam.zoom));
+        assert_eq!(back.basis(), cam.basis());
+        // The eye's own look is not the table's angle.
+        let mut looked = chase;
+        looked.set_pitch(-20.0 * DEG);
+        assert_eq!(looked.in_mode(0).pitch_degrees(), 60, "the table's angle, not the eye's");
         // The inset shares the angle; a perspective view's inset is at the
         // floor.
         assert_eq!((cam.inset().pitch, cam.inset().zoom), (cam.pitch, Camera::inset_zoom(cam.zoom)));
