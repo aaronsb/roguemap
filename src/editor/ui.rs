@@ -1,7 +1,9 @@
 //! The editor screen (ADR-003): a tables-and-rows pane on the left, the
 //! preview strip, the row form or art grid, and a status line. Below
 //! 120x50 the strip shows one tier and the panes shrink; 80x25 is the
-//! floor, as for the game.
+//! floor, as for the game. That one pane drops to a tier that fits when
+//! it is too short for the tier asked for (`preview::fitting_tier`) and
+//! its label says which tier it is drawn at and why.
 
 use super::fields::Kind;
 use super::keys::{self, Mode};
@@ -231,10 +233,15 @@ fn draw_previews(cv: &mut Canvas, ed: &Editor) {
     // Pane frames sit inside the strip; titles go on the line below the
     // top border so the strip title keeps the full width.
     for (i, (tier, r)) in l.panes.iter().enumerate() {
+        let mut label = format!(" {} ", pane_title(*tier));
         if let Some(p) = ed.preview.panes.get(i) {
             cv.blit(&p.canvas, r.x, r.y);
+            // A pane too short for the tier asked for drops to one that
+            // fits and says which, and what the asked-for tier wanted.
+            if p.shown != *tier {
+                label = format!(" {}  ({} needs {} of {} rows) ", pane_title(p.shown), pane_title(*tier), p.want_rows, r.h);
+            }
         }
-        let label = format!(" {} ", pane_title(*tier));
         let label = clip(&label, r.w);
         cv.text(r.x, r.y, &label, dim, bg);
         if i + 1 < l.panes.len() {

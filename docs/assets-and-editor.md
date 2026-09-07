@@ -138,6 +138,21 @@ density lights settings tilesets art`, where `seasons`, `surfaces` and
 `tree_styles.toml` load and save so the set round-trips, but have no pane;
 edit them by hand.
 
+In the strip the four tiers stand side by side, so the close panes are
+close-ups by design: a full-grown tree overflows `large 16x4` there and
+the smaller panes show it whole. The one pane of a small screen is the
+only view there is, so it drops to a tier that fits — the largest at or
+below the tier asked for whose subject stands whole in the pane, by the
+same rows per metre the game's zooms use, and never below `small`, since
+under 1.5 rows a metre a tree is a one-glyph billboard and the pane would
+show ground rather than the row being edited. The pane's label names the
+tier it is drawn at and, when it dropped, the tier asked for and the rows
+it wanted: at the 80 by 25 floor the pane is 59 by 11, so an oak asked
+for at `large 16x4` reads `small 4x1  (large 16x4 needs 88 of 11 rows)`
+while a campfire, being under a metre tall, keeps `large 16x4`. `t` still
+cycles all four tiers; what changes is which of them a short pane can
+honour.
+
 ### Keys
 
 | Key | Normal mode |
