@@ -12,7 +12,7 @@ use roguemap::canvas::Canvas;
 use roguemap::frame::{Flow, FrameCtx, Frames, Item, List};
 use roguemap::input::{self, Action, Held, Look, Mouse};
 use roguemap::map::Map;
-use roguemap::render::{Renderer, Scene};
+use roguemap::render::{RenderOptions, Renderer, Scene};
 use roguemap::settings::Settings;
 use roguemap::tileset::Tileset;
 use roguemap::world::{World, PLAYER};
@@ -139,20 +139,15 @@ impl App {
 
     /// Fly the free camera by the keys down (ADR-009): the rows go along
     /// the view direction, its pitch and all, so looking down and pressing
-    /// `w` descends, and the columns go across it. The pace is the
-    /// character's own speed, `World::RUN` times it with shift.
+    /// `w` descends, and the columns go across it. The keys sum through
+    /// `Camera::held_fly` as the walk's do through `held_heading`, and
+    /// the pace is the character's own speed, `World::RUN` times it with
+    /// shift.
     fn fly_held(&mut self, dt: f32) {
         if self.frames.focus().is_some() {
             self.held.clear();
         }
-        let (mut forward, mut right) = (0.0f32, 0.0f32);
-        for (dx, dy) in self.held.dirs() {
-            forward = (forward - dy.signum() as f32).clamp(-1.0, 1.0);
-            right = (right + dx.signum() as f32).clamp(-1.0, 1.0);
-        }
-        if forward == 0.0 && right == 0.0 {
-            return;
-        }
+        let Some((forward, right)) = Camera::held_fly(self.held.dirs()) else { return };
         let creatures = &self.map.assets.creatures;
         let pace = creatures[PLAYER as usize % creatures.len()].speed * if self.held.running() { World::RUN } else { 1.0 } * dt;
         self.cam.fly(forward * pace, right * pace);
@@ -160,16 +155,33 @@ impl App {
 
     /// Enter the free camera, or return to the mode it suspended
     /// (ADR-009). The mode is the `camera` settings row, which the popover
-    /// cycles too, so the row is what says whether the eye is free.
+    /// cycles too, so the row is what says whether the eye is free and
+    /// `apply_settings` is where either door lands.
     fn free_camera(&mut self) {
         let free = Camera::MODES.len() - 1;
-        if self.settings.get("camera") == free {
-            self.settings.set("camera", self.suspended.take().unwrap_or(0));
-            return;
+        let to = if self.settings.get("camera") == free { self.suspended.unwrap_or(0) } else { free };
+        self.settings.set("camera", to);
+    }
+
+    /// Push the settings into the map, the world and the camera, and
+    /// answer what the renderer needs. The `camera` row is where the free
+    /// camera is entered from, by `V` or by the popover cycling the row
+    /// (ADR-009), so this is where either door is seen: the character
+    /// stands where it was left, so its walk ends here and leaves no line
+    /// for a later tick to log, and the mode the eye suspended is kept
+    /// for the return.
+    fn apply_settings(&mut self) -> RenderOptions {
+        let before = self.cam.mode_index();
+        let opts = self.settings.apply(&mut self.map, &mut self.world, &mut self.cam);
+        if self.cam.mode_index() != before {
+            let free = !self.cam.addresses_character();
+            self.suspended = free.then_some(before);
+            if free {
+                self.world.stop_walk();
+                self.walking = false;
+            }
         }
-        self.suspended = Some(self.settings.get("camera"));
-        self.settings.set("camera", free);
-        self.world.stop_walk();
+        opts
     }
 
     fn resize(&mut self, w: i32, h: i32) {
@@ -205,7 +217,7 @@ impl App {
     /// `t`. A full-screen opaque frame covers the scene, so nothing is
     /// rendered under one.
     fn frame(&mut self, cv: &mut Canvas, t: f32) {
-        let opts = self.settings.apply(&mut self.map, &mut self.world, &mut self.cam);
+        let opts = self.apply_settings();
         ui::apply_settings(&mut self.frames, &self.settings);
         let corner = self.settings.get("inset");
         if corner != 0 {
@@ -457,5 +469,61 @@ fn main() -> std::io::Result<()> {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use roguemap::map::TILE_METRES;
+
+    fn session() -> (App, Canvas) {
+        let assets = Rc::new(Assets::load().expect("assets load"));
+        (App::new(assets, 7, 32, 120, 40, true), Canvas::new(120, 40))
+    }
+
+    /// Both doors into the free camera leave the walk behind (ADR-009):
+    /// `V`, and the popover's own `camera` row, which is cyclable.
+    #[test]
+    fn entering_the_free_camera_through_the_popover_ends_the_walk_too() {
+        let free = Camera::MODES.len() - 1;
+        for door in 0..2 {
+            let (mut app, mut cv) = session();
+            // Walking, in the chase view.
+            app.settings.set("camera", 1);
+            app.frame(&mut cv, 0.0);
+            app.held.press(KeyCode::Char('w'), (0, -1), false);
+            app.tick(0.04);
+            assert!(app.walking && app.world.player().expect("a player").walk.is_some(), "walking to start with");
+            if door == 0 {
+                app.scene_action(Action::FreeCamera, KeyCode::Char('V'));
+            } else {
+                app.settings.cycle("camera", free as i32 - 1);
+            }
+            app.frame(&mut cv, 0.0);
+            assert_eq!(app.settings.get("camera"), free, "door {door} reaches the free camera");
+            assert!(app.world.player().expect("a player").walk.is_none(), "door {door} leaves no frozen stride");
+            assert!(!app.walking, "door {door} leaves no walk to log when the eye comes back");
+            assert_eq!(app.suspended, Some(1), "door {door} returns to the view it left");
+        }
+    }
+
+    /// Two fly keys fly at the character's own pace (ADR-009), the way
+    /// two walk keys walk at it.
+    #[test]
+    fn two_fly_keys_fly_at_one_keys_pace() {
+        let dt = 0.04;
+        let (mut app, mut cv) = session();
+        app.scene_action(Action::FreeCamera, KeyCode::Char('V'));
+        app.frame(&mut cv, 0.0);
+        let creatures = &app.map.assets.creatures;
+        let pace = creatures[PLAYER as usize % creatures.len()].speed * dt;
+        let (bx, by, bz) = app.cam.eye();
+        app.held.press(KeyCode::Char('w'), (0, -1), false);
+        app.held.press(KeyCode::Char('d'), (1, 0), false);
+        app.tick(dt);
+        let (ax, ay, az) = app.cam.eye();
+        let flown = ((ax - bx) * TILE_METRES).hypot((ay - by) * TILE_METRES).hypot(az - bz);
+        assert!((flown - pace).abs() < 1e-4, "{flown} m is not the pace, {pace} m");
     }
 }

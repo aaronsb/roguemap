@@ -1232,6 +1232,21 @@ impl Camera {
         (len > 1e-3).then(|| (x / len, y / len))
     }
 
+    /// Forward and right for the fly keys down (ADR-009): the normalised
+    /// sum of what each one names, as `held_heading` is for the walk, so
+    /// two keys fly a diagonal at one key's pace and two opposite ones
+    /// are `None`. The keys name a direction on screen; what it is in the
+    /// world is the view's own axes, which `fly` applies.
+    pub fn held_fly(dirs: impl IntoIterator<Item = (i32, i32)>) -> Option<(f32, f32)> {
+        let (mut forward, mut right) = (0.0f32, 0.0f32);
+        for (dx, dy) in dirs {
+            forward -= dy.signum() as f32;
+            right += dx.signum() as f32;
+        }
+        let len = forward.hypot(right);
+        (len > 1e-3).then(|| (forward / len, right / len))
+    }
+
     /// Which way a figure walking along a map heading faces on screen:
     /// `None` when it walks straight toward or away from the camera, so
     /// the figure keeps the facing it had.
@@ -2346,6 +2361,19 @@ mod tests {
     /// The orthographic `eye_ray` is the table's own ray in the
     /// perspective form: down it to height zero is `ray`'s ground point,
     /// and along it is `ray`'s drift.
+    /// The fly keys normalise as the walk keys do (ADR-009).
+    #[test]
+    fn two_fly_keys_are_a_unit_diagonal() {
+        assert_eq!(Camera::held_fly([(0, -1)]), Some((1.0, 0.0)), "one key is the pace forward");
+        let two = Camera::held_fly([(0, -1), (1, 0)]).expect("two keys fly");
+        assert!((two.0.hypot(two.1) - 1.0).abs() < 1e-6, "{two:?} is not one key's pace");
+        assert!((two.0 - two.1).abs() < 1e-6, "and shares it between the two");
+        let diagonal = Camera::held_fly([(1, -1)]).expect("a diagonal key flies");
+        assert!((diagonal.0 - two.0).abs() < 1e-6 && (diagonal.1 - two.1).abs() < 1e-6, "a diagonal key is the two it stands for");
+        assert_eq!(Camera::held_fly([(1, 0), (-1, 0)]), None, "two opposite keys are nothing to fly toward");
+        assert_eq!(Camera::held_fly([]), None);
+    }
+
     #[test]
     fn the_orthographic_eye_ray_is_the_tables_own_ray() {
         for degrees in [30.0, 45.0, 70.0, 90.0] {
