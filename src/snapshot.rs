@@ -335,6 +335,26 @@ mod tests {
         assert_eq!(glyphs(&world_of(&[])), glyphs(&world_of(&["player_dx=-9999999"])));
     }
 
+    /// The tilt and the free eye of ADR-009, headless: the table's angle
+    /// and a detached eye that leaves the character where it stands.
+    #[test]
+    fn the_tilt_and_the_free_eye_draw_and_the_character_stays_put() {
+        let shot = |extra: &[&str]| {
+            let mut args = vec!["scene=scale", "zoom=3", "t=3", "tod=12", "open=stats"];
+            args.extend_from_slice(extra);
+            glyphs(&render(test_assets(), 120, 40, &args))
+        };
+        let table = shot(&[]);
+        assert_ne!(shot(&["tilt=90"]), table, "the table tilts to the plan view");
+        let free = shot(&["camera=free"]);
+        assert_ne!(free, table, "the eye has left the table");
+        // The stats pane reads the position back: the yardstick's person
+        // stands at the centre of a 24-tile fixture under either camera.
+        for frame in [&table, &free] {
+            assert!(frame.contains("25.00, 25.00 m"), "the character stands where it was spawned");
+        }
+    }
+
     #[test]
     fn a_walk_is_reproducible_and_moves_the_figure_into_its_stride() {
         let walk = |extra: &[&str]| {

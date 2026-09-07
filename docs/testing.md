@@ -13,9 +13,9 @@ is one command.
   `roguemap::snapshot::render`, and compares each with its reference in
   `tests/golden/<name>.frame`: width and height as u32 little-endian, then
   per cell a u32 codepoint and the foreground and background bytes. The
-  references are committed (about three quarters of a megabyte for
-  sixteen 120x40 frames). The comparison scores a frame by the percentage of identical
-  cells, the percentage with the same glyph, and the mean six-channel
+  references are committed (about nine tenths of a megabyte for nineteen
+  120x40 frames). The comparison scores a frame by the percentage of
+  identical cells, the percentage with the same glyph, and the mean six-channel
   colour distance; it passes at `GOLDEN_MIN_IDENTICAL` (default 98) and
   `GOLDEN_MAX_DISTANCE` (default 2.0), or with every cell identical under
   `GOLDEN_STRICT=1`. Every run prints the per-frame scores; a failure
@@ -34,21 +34,26 @@ is one command.
   stage 2, which `GOLDEN_STRICT=1` checks. `stride` (ADR-008) is the
   yardstick at 1:1 with the person 0.3 s into a walk to the right, on
   the third of the large tier's four poses; the frames with the player
-  at rest are unchanged to the bit by walking.
+  at rest are unchanged to the bit by walking. Two are the table
+  straight down (ADR-009): `plan`, the yardstick at 1:1 at 90 degrees,
+  and `overhead`, the cloud scene at 1:8 at 90, which is the parallax at
+  the plan view.
 - **Camera** (ADR-007). The general projection gives the old formulas'
   bits: the footprint-era `project` and `unproject` live in the test
   module and a lattice of 441 points by six heights, at every zoom and
   seven headings, projects and unprojects to exactly the same `f32`s
   through the basis; the walk's ray is the old walk's `p0` and drift to
   the bit and every point along it projects back to its cell. The
-  isometric pitch is what the footprint implies, 25.24 degrees for 4:1
-  and 43.31 for 2x1, every preset is orthographic, and the general
-  `Camera::orthographic` built from a preset's own pitch and scale gives
-  the preset's basis back within a few ulps and carries the preset; a
-  top-down view puts all its rows in ground depth and a view along the
-  ground all of them in height. The inset camera keeps the heading at the
-  other end of the scale; `forward`, `right`, `depth` and
-  `project_vector` are the yaw's sine and cosine, and a unit of ground
+  table at the floor tilt is each footprint preset's basis to the bit at
+  1:4, 1:2 and 1:1, and the far zoom's rows are exactly half the mid
+  zoom's with its rise unchanged; every preset is orthographic, and the
+  general `Camera::orthographic` built from a preset's own tilt, relief
+  and columns per metre gives the preset's basis back and carries the
+  preset, whatever the tilt; a top-down view puts all its rows in ground
+  depth and a view along the ground all of them in height. The inset
+  camera keeps the heading and the tilt at the other end of the scale;
+  `forward`, `right`, `depth` and `project_vector` are the yaw's sine and
+  cosine, and a unit of ground
   toward the camera is `b` rows; the footprint is the cells a pan slides
   by. Project then unproject returns the input at every zoom and several
   angles; `screen_dir_to_map` gives the eight compass steps; `tile_depth`
@@ -67,12 +72,12 @@ is one command.
   its pitch; the shoulder view puts the figure in the left half and the
   lower third; every mode in `MODES` builds and switching keeps the yaw
   and the aimed point; zoom halves and doubles the chase distance within
-  its range, the pitch clamps to its range and an isometric pitch does not
-  move, the field-of-view override carries across a mode switch and `None`
-  restores the preset's; the compass snap turns to the next diagonal
-  heading. Walking (ADR-008): a screen-space heading is the unit ground
-  vector under the key — the map diagonals at the compass view, away
-  from the eye for `w` in a chase view — and a map-axes heading the axis
+  its range, the pitch clamps to its range, the field-of-view override
+  carries across a mode switch and `None` restores the preset's; the
+  compass snap turns to the next diagonal heading. Walking (ADR-008): a
+  screen-space heading is the unit ground vector under the key — the map
+  diagonals at the compass view, away from the eye for `w` in a chase
+  view — and a map-axes heading the axis
   the key names; facing is the screen-space sign of the heading, right
   or left, and none straight toward or away from the camera. The camera
   settles on the figure: inside the middle third of the screen `follow`
@@ -80,6 +85,35 @@ is one command.
   ticks until the figure is back inside and then rests; a chase view
   closes `EASE` of the gap to the character each tick and converges, and
   the first-person eye snaps in one.
+- **The tilt** (ADR-009). At every tilt from 30 degrees to 90 and every
+  zoom, a metre of ground depth toward the camera is `sin(tilt)` of a
+  metre across in the cell's own pixels, a metre of height is `relief`
+  times `cos(tilt)` of it, a row of ground is `2 / sin(tilt)` columns,
+  and the detail scale is the floor tilt's number, so level of detail,
+  the sprite tier and the walk's step count do not move with the table.
+  Straight down the rise is exactly zero, the ray's drift is zero, a
+  column of world projects to one point and the detail scale is still
+  six rows at 1:1. The tilt clamps at both ends, survives a zoom step and
+  a mode round trip, and the cloud sample moves by C/(C − H) per tile of
+  pan at both ends of the range.
+- **Coupling** (ADR-009). Under `body-turns` a walk key is the view's own
+  heading and a walk in progress turns with the view; under `view-only`
+  it is the body's, which the view turning leaves alone, and a diagonal
+  key turns the body to the direction it names and walks it; under
+  `map axes` both couplings walk the way the key names. A turn key spends
+  the creature's `turn` in degrees a second and turns the body without
+  moving it, a tap turns the grace's worth, and `w` held with `a` walks a
+  half turn in a second that lands the figure a diameter to the left, a
+  curve of radius `speed / turn`. The rows of the keys down pace a body
+  and the columns turn it, two opposite keys cancelling as they do on
+  screen.
+- **The free camera** (ADR-009). Entering from the table puts the eye
+  thirty metres from the point under the screen centre, above the table's
+  plane and looking down the tilt, and entering from an eye takes the eye
+  it found; the character is drawn and does not move; flying ten metres
+  forward moves the eye ten metres and descends when the view looks down;
+  `follow` leaves it where it is however far the character walks; and
+  leaving it is a table again at the tilt it lent.
 - **Scale** (ADR-004). Each zoom's rows and columns per metre are an exact
   halving of the next (0.75, 1.5, 3, 6 rows and 1.41, 2.83, 5.66, 11.31
   columns), so a 2 m person is 1.5, 3, 6 and 12 rows; heights project
@@ -224,9 +258,10 @@ is one command.
   the wheel is a notch either way in both. `off` turns nothing whatever
   arrives and forgets where the pointer was. Moving the pointer right
   turns the view right — looking south and turning a quarter looks west —
-  the isometric pitch does not move, and a perspective pitch stops at the
-  ends of its range however far the pointer is dragged. The `mouse` row's
-  values are `MouseMode::NAMES` and each reads back as its mode.
+  its rows tilt the isometric table, fifteen rows down being fifteen
+  degrees steeper, and both the tilt and a perspective pitch stop at the
+  ends of their range however far the pointer is dragged. The `mouse`
+  row's values are `MouseMode::NAMES` and each reads back as its mode.
 - **Walking** (ADR-008). Over ticks of 40 ms with the key renewed each
   tick, the distance walked is the speed times the seconds to the
   centimetre, 2.8 m in two seconds at 1.4 m/s, and a run on a diagonal
@@ -266,10 +301,11 @@ is one command.
 - Settings: each row cycles through all values and wraps;
   `Settings::apply` pushes every row into the objects it governs,
   including the camera's mode and field of view; presets and rows agree
-  in length, the `camera` row's values are `Camera::MODES`, the `fog` row's
-  are `FogMode::NAMES`, the `fov` row is `preset` then rising whole
-  degrees, and its keys step from the camera's own field of view without
-  wrapping through `preset`.
+  in length, the `camera` row's values are `Camera::MODES`, the
+  `coupling` row's are `Coupling::NAMES`, the `fog` row's are
+  `FogMode::NAMES`, the `fov` row is `preset` then rising whole degrees,
+  and its keys step from the camera's own field of view without wrapping
+  through `preset`.
 - Traversal: `Camera::cell_step` makes a screen-space step at 45 degrees a
   diagonal map step and a map-axes step a cardinal one.
 - World map: `WorldMap::teleport` lands at the centre of the nearest land
@@ -278,7 +314,8 @@ is one command.
   same move the keys make, so a step off the island is refused; `walk=`
   gives the same frame twice, moves the figure into its stride, covers
   more ground with `run=1`, goes the other way for `a`, and walks nothing
-  in no time.
+  in no time; `tilt=` and `camera=free` render the table's angle and the
+  detached eye.
 
 ## Data
 

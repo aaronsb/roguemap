@@ -43,44 +43,66 @@ tundra and ice cap carry almost no `tree_density` (docs/properties.md).
 
 ## The four zooms
 
-Each zoom is a tile footprint in cells: a half width and a half height.
+Each zoom is columns per metre, each an exact halving of the next.
 `src/tileset.rs` names them.
 
 ```rust
-pub const ZOOMS: [(i32, i32); 4] = [(2, 1), (4, 1), (8, 2), (16, 4)];
+pub const ZOOMS: [f32; 4] = [SQRT_2, 2.0 * SQRT_2, 4.0 * SQRT_2, 8.0 * SQRT_2];
 pub const ZOOM_NAMES: [&str; 4] = ["far", "mid", "near", "close"];
 pub const ZOOM_RATIOS: [&str; 4] = ["1:8", "1:4", "1:2", "1:1"];
 ```
 
-Two numbers derived from the footprint carry the scale, and each is an
-exact halving of the next:
-
-| zoom | footprint | ratio | columns per metre | rows per metre | a 2 m person | pitch |
-|---|---|---|---|---|---|---|
-| close | 16x4 | 1:1 | 11.31 | 6 | 12 rows | 25.24 |
-| near | 8x2 | 1:2 | 5.66 | 3 | 6 rows | 25.24 |
-| mid | 4x1 | 1:4 | 2.83 | 1.5 | 3 rows | 25.24 |
-| far | 2x1 | 1:8 | 1.41 | 0.75 | one glyph | 43.31 |
+| zoom | ratio | columns per metre | rows per metre | a 2 m person | cells a tile spans |
+|---|---|---|---|---|---|
+| close | 1:1 | 11.31 | 6 | 12 rows | 32x8 |
+| near | 1:2 | 5.66 | 3 | 6 rows | 16x4 |
+| mid | 1:4 | 2.83 | 1.5 | 3 rows | 8x2 |
+| far | 1:8 | 1.41 | 0.75 | one glyph | 4x1 |
 
 `Camera::isometric(zoom)` builds a preset. `Camera::columns_per_metre` is
-`hw * sqrt(2) / TILE_METRES`, the ground scale that falls out of the
-isometric projection. `Camera::rows_per_metre` is `hw * 3.0 / 8.0`, chosen
-so the vertical scale agrees with the horizontal one. Heights project
-through the second rather than through one row per unit, which is what
-makes an 18 m oak 108 rows at 1:1 and 13 rows at 1:8, with the person
-standing under its canopy.
-
-The pitch is a number on the camera
-([ADR-007](adr/ADR-007-general-camera.md)): a metre of ground depth
-toward the camera is `hh * sqrt(2) / 2` rows and a metre of height
-`3 hw / 8`, so the view is pitched `atan(4 sqrt(2) hh / (3 hw))` above
-the horizon — 25.24 degrees for the three 4:1 footprints, a hair flatter
-than the 26.57 of classic 2:1 pixel isometry, and 43.31 for the far
-zoom's 2x1, which is the steeper view an overview wants and the only
-footprint a 1:8 tile can have in whole cells.
+the zoom's own number, the ground scale across the screen.
+`Camera::rows_per_metre` is how far up the screen a metre of height
+displaces a thing. Heights project through the second rather than through
+one row per unit, which is what makes an 18 m oak 108 rows at 1:1 and 13
+rows at 1:8, with the person standing under its canopy.
 
 `z` / `Z` step through the four. The status bar names the current one by
 both its ratio and its name, so the top line reads `1:2 near`.
+
+### The tilt and the relief
+
+Zoom is scale alone; the angle of the table is its own number
+([ADR-009](adr/ADR-009-camera-modes-and-controls.md)). `Camera::tilt` is
+the angle the ground plane draws at, from 30 degrees — today's isometric
+look, and `TILT_RANGE`'s floor — to 90, straight down. `Camera::relief`
+is how much taller than the tilt implies height is drawn, `sqrt 1.5`, the
+exaggeration the footprint presets always carried. The basis is those two
+and the scale:
+
+```
+cols = columns_per_metre * TILE_METRES
+rows = cols * CELL_ASPECT * sin(tilt)
+rise = relief * columns_per_metre * CELL_ASPECT * cos(tilt)
+```
+
+`CELL_ASPECT` is 0.5, the canonical cell's 8 pixels over 16. At the floor
+tilt these are the four presets' own numbers to the bit. `relief`
+multiplies `cos(tilt)`, so it vanishes with it: straight down `rise` is
+zero, nothing displaces, and the terrain reads through shading alone,
+while the cloud parallax stays at every tilt.
+
+`{` and `}` tilt the table five degrees a press and the mouse's rows tilt
+it too; `tilt=DEGREES` renders one headless. The status bar says the
+angle whenever the table is off its floor. A perspective view has no
+table, so its pitch is an eye's and its inset borrows the floor.
+
+Height on screen and detail on screen are two numbers under a tilt:
+`Camera::rows_per_metre` is the displacement, which goes to zero straight
+down, and `Camera::detail_rows` is the rows an upright thing facing the
+viewer draws as, which is the floor tilt's `rise` at every tilt. Level of
+detail, the sprite tier, the walk's sample count and the cloud-layer
+switch read the second, so a plan view resolves the ground exactly as
+finely as a tilted one.
 
 ## The perspective modes
 
@@ -170,9 +192,9 @@ in, so a turn is the cells moved times `Mouse::YAW_PER_COLUMN` = 2
 degrees of yaw a column and `Mouse::PITCH_PER_ROW` = 3 degrees of pitch a
 row — a row is worth more because a cell is twice as tall as it is wide.
 Moving right turns right and moving down looks down, through
-`Camera::rotate_by` and `Camera::pitch_by`; the isometric view has no
-pitch of its own, so rows do nothing there. The wheel narrows and widens
-a perspective view's field of view and steps the isometric zoom.
+`Camera::rotate_by` and `Camera::pitch_by`; on the isometric table the
+rows tilt it instead. The wheel narrows and widens a perspective view's
+field of view and steps the isometric zoom.
 
 A terminal has no pointer lock, so in `free` the turn stops when the
 pointer reaches the edge of the screen: lift the mouse and put it back
@@ -225,6 +247,33 @@ diagonal in map space at the compass view, turning with the camera, and
 forward or sideways from an eye. Along the map axes the heading is the
 axis the key names.
 
+### The two control schemes
+
+The `Coupling` setting is whether the body turns with the view
+([ADR-009](adr/ADR-009-camera-modes-and-controls.md)), and each value is
+a control scheme of its own.
+
+`body-turns`, the default, is what the game has always done and what
+Minecraft does: the four keys are the four screen directions, read
+against the view every tick, so the mouse steers a walk in progress and
+`a` and `d` strafe.
+
+`view-only` gives the body a yaw of its own, `Entity::yaw`, initialised
+to the view's. `w` and `s` pace it forward and back along that yaw, `a`
+and `d` turn it at the creature row's `turn` — degrees per second, the
+person's 180 — and the mouse turns the view alone. The turn is spent in
+`World::step_walk` on the same lease as the step, so `w` held with `a`
+walks a curve of radius `speed / turn`, and a tap turns the grace's
+worth. `y u b n` are screen diagonals and mean nothing against a body
+yaw, so they turn the body to the direction they name and walk it.
+`Traversal` says nothing under this coupling: the body's yaw is the
+frame.
+
+`make snap OUT=a.png ARGS="scene=scale zoom=3 t=3 tod=12
+coupling=view-only walk=wa,1.0"` walks a second of that curve, a half
+turn at the person's rate; `walk=KEYS,SECONDS` holds the whole set of
+keys through the game's own held-key set.
+
 The ground under a screen cell at each zoom is still the camera's to
 say, `Camera::cell_step`, which the snapshot's `player_dx` and
 `player_dy` (centimetres, through the same `try_move`) and the ADR-006
@@ -235,13 +284,14 @@ tests use:
 | close 1:1 | 8.8 cm | 35.4 cm |
 | near 1:2 | 17.7 cm | 70.7 cm |
 | mid 1:4 | 35.4 cm | 141.4 cm |
-| far 1:8 | 70.7 cm | 141.4 cm |
+| far 1:8 | 70.7 cm | 282.8 cm |
 
-Those are `TILE_CM / (hw * √2)` for a column and `TILE_CM / (hh * √2)`
-for a row; far and mid share a half height of one and so a row. At 1:1
-the figure walks about two thirds of a column a tick and at 1:8 two
-columns a second, so the same walk is a stride on screen up close and a
-crawl across the overview.
+A column is `TILE_CM / cols` and a row is `2 / sin(tilt)` columns of it —
+four at the floor tilt, as the table above reads, and two straight down —
+so the ground a cell covers is uniform across the scale. At 1:1 the
+figure walks about two thirds of a column a tick and at 1:8 two columns a
+second, so the same walk is a stride on screen up close and a crawl
+across the overview.
 
 ## Sprites at each scale
 
@@ -283,7 +333,10 @@ shows 1:1. When the main view is already at 1:1, the inset shows 1:8. The
 two views never share a level, so there is always a close reading and a
 far one on screen at once. A perspective view's inset is the isometric
 view at the other end from the preset nearest its scale: 1:8 beside the
-first-person view, 1:1 beside a chase view zoomed out.
+first-person view, 1:1 beside a chase view zoomed out. An isometric main
+view lends the inset its tilt as well as its heading, so the one thing
+that differs between the two panes is the scale; an eye has no tilt to
+lend, so its inset draws at the floor.
 
 The inset draws the scene alone: no HUD over it, and antialiasing and the
 cloud layer off. Its title carries the ratio it is drawing at, so it reads

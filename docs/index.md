@@ -41,7 +41,7 @@ terminal shows with the same font.
 |---|---|
 | [world.md](world.md) | The height field, relief in metres, rivers, climate, biomes, chunks and the world map |
 | [rendering.md](rendering.md) | The camera and its modes, the ray walk from above and from an eye, block and tree geometry, shadows, lighting, fog, antialiasing, level of detail, cost |
-| [scale.md](scale.md) | Metres, the four zooms and their ratios, movement, the inset view |
+| [scale.md](scale.md) | Metres, the four zooms and their ratios, the tilt, movement and its control schemes, the inset view |
 | [trees.md](trees.md) | The growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |
 | [frames.md](frames.md) | Frames over the scene: the HUD, settings, world map, inset, panes |
@@ -63,6 +63,8 @@ The catalogues and decision records the pages above lean on:
 | [ADR-005](adr/ADR-005-overlay-frames.md) | One frame system for everything drawn over the scene |
 | [ADR-006](adr/ADR-006-movement-by-screen-cell.md) | One keypress moves one screen cell, positions in centimetres |
 | [ADR-007](adr/ADR-007-general-camera.md) | A general camera, with the isometric view as a mode |
+| [ADR-008](adr/ADR-008-walking.md) | The figure walks over time, by the keys held down |
+| [ADR-009](adr/ADR-009-camera-modes-and-controls.md) | The table tilts, and who turns with the view |
 
 ## Running it
 
