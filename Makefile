@@ -100,6 +100,7 @@ screenshots: build ## Render the documentation screenshots into docs/screenshots
 	./snap.sh $(SHOTS)/settings.png popover=1 zoom=0
 	./snap.sh $(SHOTS)/ascii.png zoom=1 fill=1 cx=0 cy=0 t=3 tod=12 glyphs=ascii
 	./snap.sh $(SHOTS)/village.png fill=1 zoom=1 cx=130 cy=-8 t=3 tod=12 player=1
+	./snap.sh $(SHOTS)/fields.png fill=1 zoom=1 cx=136 cy=250 t=3 tod=12
 	./snap.sh $(SHOTS)/lsystem-stand-mid.png fill=1 zoom=1 cx=500 cy=-300 t=3 tod=12
 	./snap.sh $(SHOTS)/lsystem-stand-near.png fill=1 zoom=2 cx=500 cy=-300 t=3 tod=12
 	./snap.sh $(SHOTS)/lsystem-stand-close.png fill=1 zoom=3 cx=500 cy=-300 t=3 tod=12

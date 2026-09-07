@@ -34,12 +34,13 @@ Rendered by `make screenshots` through the headless snapshot pipeline.
 | ![scale-zclose](docs/screenshots/scale-zclose.png) The yardstick at 1:1: a 2 m person, an 18 m oak, a house | ![scale-zfar](docs/screenshots/scale-zfar.png) The same ground at 1:8 |
 | ![lsystem-stand-near](docs/screenshots/lsystem-stand-near.png) A boreal stand at 1:2, every spruce grown from its habit and outlined against the next | ![lsystem-stand-close](docs/screenshots/lsystem-stand-close.png) The same stand at 1:1: trunks, tiers and the gaps between them |
 | ![lsystem-stand-mid](docs/screenshots/lsystem-stand-mid.png) The same stand at 1:4: tiered spires with trunks in the gaps | ![filled](docs/screenshots/filled.png) The filled world at 1:4, its pines and oaks grown |
-| ![village](docs/screenshots/village.png) A village on the steppe at 1:4 | ![winter](docs/screenshots/winter.png) Winter after two days of storm |
+| ![village](docs/screenshots/village.png) A village on the steppe at 1:4 | ![fields](docs/screenshots/fields.png) Tilled fields and a pond at a forest edge, 1:4 |
+| ![winter](docs/screenshots/winter.png) Winter after two days of storm | ![lsystem-oak-winter](docs/screenshots/lsystem-oak-winter.png) The gnarled oak bare in winter |
 | ![night](docs/screenshots/night.png) Night, a campfire and lit windows | ![clouds](docs/screenshots/clouds.png) Above the clouds at the smallest zoom |
-| ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses | ![lsystem-oak-winter](docs/screenshots/lsystem-oak-winter.png) The gnarled oak bare in winter |
-| ![worldmap](docs/screenshots/worldmap.png) The world map | ![ascii](docs/screenshots/ascii.png) The ASCII glyph set |
+| ![steppe](docs/screenshots/steppe.png) Steppe with adobe houses | ![worldmap](docs/screenshots/worldmap.png) The world map |
+| ![ascii](docs/screenshots/ascii.png) The ASCII glyph set | ![settings](docs/screenshots/settings.png) The settings frame |
 | ![lsystem-oak](docs/screenshots/lsystem-oak.png) A gnarled oak in summer, from the `decurrent` habit | ![lsystem-conifer](docs/screenshots/lsystem-conifer.png) A spruce from the `excurrent` habit, its tiers flattened into sprays |
-| ![editor](docs/screenshots/editor.png) The asset editor | ![settings](docs/screenshots/settings.png) The settings frame |
+| ![editor](docs/screenshots/editor.png) The asset editor | |
 
 ## Run
 
