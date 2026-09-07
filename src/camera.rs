@@ -1094,7 +1094,7 @@ impl Camera {
             let (d, r, u) = self.view_axes();
             let v = ((x - self.eye.0) * TILE_METRES, (y - self.eye.1) * TILE_METRES, z - self.eye.2);
             let depth = v.0 * d.0 + v.1 * d.1 + v.2 * d.2;
-            if depth < 0.05 {
+            if depth < NEAR_DEPTH {
                 return (-1.0e5, -1.0e5);
             }
             let sx = self.ox + self.focal * (v.0 * r.0 + v.1 * r.1) / depth;
@@ -1329,6 +1329,41 @@ impl Camera {
         (u * c + v * s, -u * s + v * c)
     }
 
+    /// The ground displacement, in tiles, that carries the point
+    /// `(x, y, z)` `dx` columns and `dy` rows across the screen under a
+    /// perspective view. The camera slides along the ground with the
+    /// anchor, so the point's depth moves with it and the solve is at the
+    /// point's own depth: `ground_vector` answers for a direction at the
+    /// view's reference depth and is a different question. `None` where
+    /// no ground move does it — a point at the eye, a row past the
+    /// horizon, or a move that would carry the point behind the eye.
+    fn ground_shift(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32) -> Option<(f32, f32)> {
+        let (d, _, _) = self.view_axes();
+        let v = ((x - self.eye.0) * TILE_METRES, (y - self.eye.1) * TILE_METRES, z - self.eye.2);
+        let depth = v.0 * d.0 + v.1 * d.1 + v.2 * d.2;
+        if depth < NEAR_DEPTH {
+            return None;
+        }
+        let (sp, cp) = self.pitch.sin_cos();
+        let (sx, sy) = self.project(x, y, z);
+        // Where the point is asked to land, measured from the centre.
+        let (col, row) = (sx + dx - self.ox, sy + dy - self.oy);
+        // Sliding the camera along the ground under its own view moves
+        // the point up the screen toward the horizon, the row
+        // `-focal / 2 * tan(pitch)`, and no distance reaches it.
+        let den = self.focal / 2.0 * sp + row * cp;
+        if den.abs() < 1e-3 {
+            return None;
+        }
+        let along = depth * dy / den;
+        if depth - along * cp < NEAR_DEPTH {
+            return None;
+        }
+        let across = (col * along * cp - depth * dx) / self.focal;
+        let (s, c) = self.yaw;
+        Some(((across * c - along * s) / TILE_METRES, (-across * s - along * c) / TILE_METRES))
+    }
+
     /// Map step for a screen direction: the inverse projection of the
     /// direction, scaled so its larger component is one tile, rounded.
     pub fn screen_dir_to_map(&self, dx: i32, dy: i32) -> (i32, i32) {
@@ -1505,6 +1540,25 @@ impl Camera {
     /// closes each tick of `follow` (ADR-008).
     pub const EASE: f32 = 0.3;
 
+    /// The cells a figure at screen position `s` owes the dead zone on a
+    /// screen `n` cells across: none within the middle third, and the
+    /// signed count back to the nearer edge outside it. The position is
+    /// clamped before it is floored, so a projection that answers with
+    /// its off-screen sentinel or with a point a long way out asks for a
+    /// bounded step rather than saturating the cast and overflowing the
+    /// subtraction.
+    fn dead_zone_step(s: f32, n: i32) -> i32 {
+        let (lo, hi) = (n / 3, n - n / 3);
+        let s = s.clamp(-1.0e6, 1.0e6).floor() as i32;
+        if s < lo {
+            lo - s
+        } else if s > hi {
+            hi - s
+        } else {
+            0
+        }
+    }
+
     /// One tick of following the player (ADR-008): move `EASE` of what is
     /// left toward them and report whether the view has settled. A free
     /// camera follows nobody and is settled where it is (ADR-009). In the
@@ -1533,27 +1587,16 @@ impl Camera {
             self.look_at_point(ax + dx * Camera::EASE, ay + dy * Camera::EASE, az + dz * Camera::EASE, sw, sh);
             return false;
         }
-        // A figure behind the eye has no screen place to measure a dead
-        // zone from, so the anchor eases toward it until the projection
-        // can put it somewhere.
-        if self.is_perspective() && self.view_depth(x, y, z) <= 0.0 {
+        // A figure at the eye has no screen place to measure a dead zone
+        // from — `project` puts one there far off screen — so the anchor
+        // eases toward it until the projection can put it somewhere.
+        if self.is_perspective() && self.view_depth(x, y, z) < NEAR_DEPTH {
             let (ax, ay, az) = self.anchor;
             self.look_at_point(ax + (x - ax) * Camera::EASE, ay + (y - ay) * Camera::EASE, az + (z - az) * Camera::EASE, sw, sh);
             return false;
         }
         let (sx, sy) = self.project(x, y, z);
-        let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
-        let need = |s: i32, n: i32| {
-            let (lo, hi) = (n / 3, n - n / 3);
-            if s < lo {
-                lo - s
-            } else if s > hi {
-                hi - s
-            } else {
-                0
-            }
-        };
-        let (nx, ny) = (need(sx, sw), need(sy, sh));
+        let (nx, ny) = (Camera::dead_zone_step(sx, sw), Camera::dead_zone_step(sy, sh));
         if (nx, ny) == (0, 0) {
             return true;
         }
@@ -1568,11 +1611,27 @@ impl Camera {
         let (dx, dy) = (step(nx), step(ny));
         if self.is_perspective() {
             // The offset is the eye's own place, so the cells go into the
-            // anchor instead: the ground under that many cells, the other
-            // way, since sliding the centre back moves the figure on.
-            let (gx, gy) = self.ground_vector(-dx as f32, -dy as f32);
+            // anchor instead: the ground move that carries the figure
+            // those cells at its own depth. A row near the horizon buys
+            // its cells with a move longer than the figure is away, and
+            // past the horizon with no move at all; there the anchor
+            // eases toward the figure, which the view is aimed at and so
+            // brings it to the centre.
             let (ax, ay, az) = self.anchor;
-            self.anchor = (ax + gx, ay + gy, az);
+            let (tx, ty) = (x - ax, y - ay);
+            let reach = tx.hypot(ty);
+            let (gx, gy) = match self.ground_shift(x, y, z, dx as f32, dy as f32).filter(|(gx, gy)| gx.hypot(*gy) <= reach) {
+                Some(shift) => shift,
+                // The anchor is on the figure and the angle keeps it out
+                // of the zone: there is nothing left to ease.
+                None if reach < 1e-3 => return true,
+                None => (tx * Camera::EASE, ty * Camera::EASE),
+            };
+            // The height the view is aimed at eases after the ground the
+            // figure walks on, which the ground move cannot buy: a row is
+            // a depth and a height at once, and a figure below the aimed
+            // height sits under the horizon whatever the ground move.
+            self.anchor = (ax + gx, ay + gy, az + (z - az) * Camera::EASE);
             self.aim();
             return false;
         }
@@ -1641,6 +1700,11 @@ type V3 = (f32, f32, f32);
 /// Metres along a perspective ray that never meets the height asked for,
 /// standing in for the point under it.
 const UNPROJECT_FALLBACK: f32 = 400.0;
+
+/// The least depth a perspective projection divides by: five centimetres
+/// in front of the eye. Nearer than that a point has no screen place, and
+/// `project` answers with its off-screen sentinel.
+const NEAR_DEPTH: f32 = 0.05;
 
 /// The least vertical component a perspective ray keeps in its height
 /// form: a whisker of tilt, a tenth of a metre over a hundred, so that a
@@ -2872,8 +2936,104 @@ mod tests {
         assert!(ticks > 0 && eye.anchor_point() != anchor, "the anchor took the step, not the offset");
         let (x, y, z) = eye.entity_point(world.player().unwrap(), &map);
         let (px, py) = eye.project(x, y, z);
-        assert!(px >= (sw / 3) as f32 && px <= (sw - sw / 3) as f32, "back inside the zone at column {px}");
-        assert!(py >= (sh / 3) as f32 && py <= (sh - sh / 3) as f32, "and at row {py}");
+        // The zone is the cell the figure is drawn in, which is its
+        // position floored, as `dead_zone_step` reads it.
+        let (cx, cy) = (px.floor() as i32, py.floor() as i32);
+        assert!(cx >= sw / 3 && cx <= sw - sw / 3, "back inside the zone at column {cx}");
+        assert!(cy >= sh / 3 && cy <= sh - sh / 3, "and at row {cy}");
+    }
+
+    #[test]
+    fn the_dead_zone_step_is_total_whatever_the_projection_answers() {
+        // A point at the eye projects to the off-screen sentinel and one
+        // a whisker in front of the near plane much further out still, so
+        // the cast to a cell saturates and the step overflows unless the
+        // position is clamped first.
+        for s in [-1.0e5, 1.0e5, -3.0e38, 3.0e38, f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            for n in [25, 40, 80, 120, 400] {
+                let step = Camera::dead_zone_step(s, n);
+                let landed = (s.clamp(-1.0e6, 1.0e6).floor() as i32).saturating_add(step);
+                assert!(landed >= n / 3 && landed <= n - n / 3, "{s} on {n}: stepped to {landed}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_figure_inside_the_near_plane_eases_the_perspective_table_rather_than_reading_the_sentinel() {
+        let assets = crate::assets::test_assets();
+        let map = Map::synthetic(64, 64, assets, 0, |_, _| crate::map::Tile::flat(5));
+        let mut world = World::new(1);
+        world.spawn_player(&map, 32, 32, 0.0);
+        let (sw, sh) = (120, 40);
+        let mut table = Camera::table(0);
+        table.look_at_point(32.5, 32.5, 5.0, sw, sh);
+        let mut eye = table.in_projection(PERSP);
+        eye.look_at_entity(world.player().unwrap(), &map, sw, sh);
+        // Put the eye two centimetres behind the figure: in front of it,
+        // so the depth is positive, and inside the five centimetres
+        // `project` divides by, so it answers with the sentinel.
+        let (fx, fy, fz) = eye.anchor_point();
+        let (ex, ey, ez) = eye.eye();
+        let back = ((ex - fx) * TILE_METRES).hypot((ey - fy) * TILE_METRES).hypot(ez - fz);
+        let k = (back - 0.02) / back;
+        eye.look_at_point(fx - (ex - fx) * k, fy - (ey - fy) * k, fz - (ez - fz) * k, sw, sh);
+        let (x, y, z) = eye.entity_point(world.player().unwrap(), &map);
+        let depth = eye.view_depth(x, y, z);
+        assert!(depth > 0.0 && depth < NEAR_DEPTH, "the figure is {depth} m in front of the eye");
+        assert_eq!(eye.project(x, y, z), (-1.0e5, -1.0e5), "which the projection puts off screen");
+        let gap = |cam: &Camera| {
+            let (ax, ay, _) = cam.anchor_point();
+            (x - ax).hypot(y - ay)
+        };
+        let was = gap(&eye);
+        assert!(!eye.follow(&world, &map, sw, sh) && gap(&eye) < was, "the anchor eases toward the figure");
+        let mut ticks = 0;
+        while !eye.follow(&world, &map, sw, sh) {
+            ticks += 1;
+            assert!(ticks < 200, "never settles");
+        }
+        let (x, y, z) = eye.entity_point(world.player().unwrap(), &map);
+        let (px, py) = eye.project(x, y, z);
+        assert!(px.floor() as i32 >= sw / 3 && (px.floor() as i32) <= sw - sw / 3, "inside the zone at column {px}");
+        assert!(py.floor() as i32 >= sh / 3 && (py.floor() as i32) <= sh - sh / 3, "and at row {py}");
+    }
+
+    #[test]
+    fn the_perspective_tables_dead_zone_closes_at_every_angle_of_the_sphere_and_every_zoom() {
+        let assets = crate::assets::test_assets();
+        let map = Map::synthetic(64, 64, assets, 0, |_, _| crate::map::Tile::flat(5));
+        let mut world = World::new(1);
+        world.spawn_player(&map, 32, 32, 0.0);
+        let (sw, sh) = (120, 40);
+        for zoom in 0..ZOOMS.len() {
+            for deg in [-90.0, -45.0, -10.0, -1.0, 0.0, 1.0, 5.0, 15.0, 30.0, 60.0, 89.0, 90.0] {
+                let mut table = Camera::table(zoom);
+                table.look_at_point(32.5, 32.5, 5.0, sw, sh);
+                let mut eye = table.in_projection(PERSP);
+                eye.set_pitch(deg * DEG);
+                world.player_mut().unwrap().set_tile(32, 32);
+                eye.look_at_entity(world.player().unwrap(), &map, sw, sh);
+                let at = |cam: &Camera, world: &World| {
+                    let (x, y, z) = cam.entity_point(world.player().unwrap(), &map);
+                    cam.project(x, y, z)
+                };
+                assert!(eye.follow(&world, &map, sw, sh), "zoom {zoom} at {deg}: aimed at the figure and settled");
+                // Eighteen tiles out is off the screen at every one of
+                // the zooms, so every angle owes the dead zone a step.
+                world.player_mut().unwrap().set_tile(50, 14);
+                let mut ticks = 0;
+                while !eye.follow(&world, &map, sw, sh) {
+                    ticks += 1;
+                    let (ax, ay, _) = eye.anchor_point();
+                    assert!(ax.abs() < 1.0e4 && ay.abs() < 1.0e4, "zoom {zoom} at {deg}: the anchor ran to {ax}, {ay} on tick {ticks}");
+                    assert!(ticks < 200, "zoom {zoom} at {deg}: never settles, the figure at {:?}", at(&eye, &world));
+                }
+                let (px, py) = at(&eye, &world);
+                let (cx, cy) = (px.floor() as i32, py.floor() as i32);
+                assert!(cx >= sw / 3 && cx <= sw - sw / 3, "zoom {zoom} at {deg}: back inside the zone at column {cx}");
+                assert!(cy >= sh / 3 && cy <= sh - sh / 3, "zoom {zoom} at {deg}: and at row {cy}");
+            }
+        }
     }
 
     #[test]
