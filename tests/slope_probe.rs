@@ -1,6 +1,6 @@
-use std::rc::Rc;
 use roguemap::assets::Assets;
 use roguemap::map::{Map, TILE_METRES};
+use std::rc::Rc;
 
 /// The generated land's slope distribution, in metres of rise per metre of
 /// run. Earth's median land slope is 2 to 3 degrees, an Alpine hillside 25
