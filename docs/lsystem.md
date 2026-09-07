@@ -72,6 +72,7 @@ species in `[species.lsystem]`.
 | `asymmetry` | 0..1 | How one-sided the instance is: a seeded direction the trunk leans in, with limbs on that side longer and the far side shorter. A parkland tree keeps it low, a gnarled or wind-shaped one high. |
 | `jitter` | 0..1 | Small seeded noise on every branch's angle and length and every cluster's position. A healthy tree is symmetric but never exactly, so a live tree always carries some. The habits carry 0.09 to 0.12; a species with no habit falls back to 0.08. |
 | `prune_height` | 0..1 | Fraction of the grown tree's measured height with no live branches, because a tree self-prunes as it grows. The cut is capped at 0.95 of the height, and a cut that would leave a bare pole is discarded. |
+| `dead_whorls` | 0..8 | How many of the lowest whorls the prune left are already dead: bare grey branches with no foliage between the clean trunk and the live crown. A fraction picks between the whole numbers either side of it from the instance's seed, so `excurrent` at 1.5 leaves half a stand with one shed whorl and half with two. The last whorl is never shed. |
 | `depth` | 0..12 inclusive | How many times the rules are applied. |
 | `length` | > 0 metres | Length of a first-level `F`, before the model is scaled to `size`. |
 | `leaf_radius` | >= 0 metres | Radius of one `L` cluster, in final metres: a clump of leaves is about a metre across whatever shape its tree is, so this does not scale with the tree. |
@@ -203,6 +204,15 @@ time the chunk is generated.
 A bare or dead tree keeps the scale its leafy self had, so a winter oak
 is a bare oak and not a swollen one, and a dead one with a broken crown
 stands shorter than its neighbour.
+
+Deadwood is not only whole trees. `dead_whorls` kills the lowest whorls a
+living tree still carries: `Grammar::shed` gathers the limbs that leave
+the bole by the height they leave at, marks every segment of the lowest
+few `Segment::dead` and drops their clusters, along with the leader's own
+clusters below the lowest live whorl. `Segment::dead` is what
+`TreeModel::place` hands the ray walk as a dead volume and what the
+preview draws in `dead_bark`, the same grey a whole snag takes, so a live
+spruce carries a grey stub or two under its green tiers.
 
 ## The model
 

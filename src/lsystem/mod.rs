@@ -83,6 +83,9 @@ pub struct Segment {
     pub a: [f32; 3],
     pub b: [f32; 3],
     pub radius: f32,
+    /// Deadwood on a living tree: a branch of a shed whorl (`dead_whorls`),
+    /// which carries no foliage and takes the grey bark of a snag.
+    pub dead: bool,
 }
 
 /// One leaf cluster: an ellipsoid of foliage.
@@ -232,6 +235,10 @@ pub const BARE_TWIG: f32 = 0.35;
 /// Fraction of the bole's radius the branch cut never rises above, so a
 /// thin-trunked species keeps its trunk at every zoom.
 pub const BOLE_KEEP: f32 = 0.6;
+
+/// Most whorls a habit may shed (`Grammar::dead_whorls`). A tree carries a
+/// whorl or two of dead limbs under its crown, not a storey of them.
+pub const MAX_DEAD_WHORLS: f32 = 8.0;
 
 /// A tree as geometry: branch capsules and foliage ellipsoids, in metres,
 /// with the ground at `bounds.min[2]` and the trunk near the x-y origin.
@@ -533,7 +540,9 @@ impl TreeModel {
             // The lower end first, so `top` is the upper one and the walk
             // can drop a primitive by its top alone.
             let (a, b) = if s.a[2] <= s.b[2] { (put(s.a), put(s.b)) } else { (put(s.b), put(s.a)) };
-            out.push(crate::volume::Volume { cx: a.0, cy: a.1, h0: a.2, height: b.2 - a.2, run: (b.0 - a.0, b.1 - a.1), radius: s.radius * sx, ..blank });
+            // A shed whorl is deadwood on a living tree, so the walk greys
+            // it the way it greys a snag.
+            out.push(crate::volume::Volume { cx: a.0, cy: a.1, h0: a.2, height: b.2 - a.2, run: (b.0 - a.0, b.1 - a.1), radius: s.radius * sx, dead: blank.dead || s.dead, ..blank });
         }
         for l in &self.leaves {
             let c = put(l.centre);
@@ -547,7 +556,7 @@ impl TreeModel {
     pub fn bark(&self, live: Rgb) -> Rgb {
         match self.state {
             State::Alive => live,
-            State::Dead => live.lerp(Rgb(150, 146, 138), 0.55).scale(0.85),
+            State::Dead => dead_bark(live),
         }
     }
 
@@ -557,6 +566,13 @@ impl TreeModel {
     pub fn build(species: &Species, seed: u64, foliage: f32, state: State) -> Option<TreeModel> {
         species.tree_model(seed, Growth { foliage, state })
     }
+}
+
+/// Deadwood's bark: the live bark greyed and darkened. A whole snag takes
+/// it (`TreeModel::bark`), and so does one shed whorl on a living tree, so
+/// grey wood is grey wood wherever it stands.
+pub fn dead_bark(live: Rgb) -> Rgb {
+    live.lerp(Rgb(150, 146, 138), 0.55).scale(0.85)
 }
 
 /// One right-hand side of a rule, with its relative weight.
@@ -606,6 +622,13 @@ pub struct Grammar {
     /// Fraction of the tree's height carrying no live branches, `0..1`: a
     /// tree self-prunes as it grows and the lower limbs die away.
     pub prune_height: f32,
+    /// How many of the lowest surviving whorls are already dead, `0..=8`:
+    /// bare grey branches with no foliage between the clean trunk and the
+    /// live crown, the way a spruce carries a whorl or two of shed limbs.
+    /// A fraction picks between the whole numbers either side of it from
+    /// the instance's seed, so `1.5` leaves half a stand with one dead
+    /// whorl and half with two.
+    pub dead_whorls: f32,
     /// How flat a cluster on a level branch is, `0..=1`: 0 keeps every
     /// cluster round, 1 squashes one on a horizontal branch to nothing.
     /// Needles on a whorl branch are a spray, so a conifer's tiers read
@@ -617,7 +640,7 @@ pub struct Grammar {
 impl Grammar {
     /// Field defaults for a grammar written out by hand, so a species that
     /// gives only axiom and rules behaves like a plain L-system.
-    pub const PLAIN: Habit = Habit { droop: 0.0, leaf_density: 1.0, asymmetry: 0.0, jitter: 0.08, prune_height: 0.0, leaf_flat: 0.0 };
+    pub const PLAIN: Habit = Habit { droop: 0.0, leaf_density: 1.0, asymmetry: 0.0, jitter: 0.08, prune_height: 0.0, dead_whorls: 0.0, leaf_flat: 0.0 };
 }
 
 /// The habit knobs on their own, for defaulting and overriding.
@@ -628,6 +651,7 @@ pub struct Habit {
     pub asymmetry: f32,
     pub jitter: f32,
     pub prune_height: f32,
+    pub dead_whorls: f32,
     pub leaf_flat: f32,
 }
 
@@ -664,6 +688,9 @@ impl Grammar {
         }
         if self.prune_height >= 1.0 {
             return Err("prune_height 1 prunes the whole tree".to_string());
+        }
+        if !(0.0..=MAX_DEAD_WHORLS).contains(&self.dead_whorls) {
+            return Err(format!("dead_whorls {} is outside 0..{MAX_DEAD_WHORLS}", self.dead_whorls));
         }
         check_word("axiom", &self.axiom)?;
         for (what, rules) in [("rule", &self.rules), ("dead rule", &self.dead_rules)] {
@@ -771,6 +798,11 @@ impl Grammar {
         // Event counters, so every draw from the hash has its own stream.
         let (mut branches, mut clusters) = (0i64, 0i64);
         let mut skip = 0usize;
+        // Every limb that leaves the bole, with the height it leaves at and
+        // the geometry it grew, so `shed` can kill the lowest whorls once
+        // the walk knows which they are.
+        let mut limbs: Vec<Limb> = Vec::new();
+        let mut limb: Option<Limb> = None;
         let (droop_sin, droop_cos) = (self.droop.clamp(-1.0, 1.0) * self.angle).to_radians().sin_cos();
         for ch in word.chars() {
             if skip > 0 {
@@ -785,7 +817,7 @@ impl Grammar {
                 'F' | 'f' => {
                     let b = add(t.pos, scaled(t.frame[0], t.len));
                     if ch == 'F' {
-                        m.segments.push(Segment { a: t.pos, b, radius: t.rad.max(1e-4) });
+                        m.segments.push(Segment { a: t.pos, b, radius: t.rad.max(1e-4), dead: false });
                     }
                     t.pos = b;
                     // Inside a branch every segment bends a little further
@@ -805,6 +837,9 @@ impl Grammar {
                     if t.pos[2] < prune_z {
                         skip = 1;
                         continue;
+                    }
+                    if stack.is_empty() {
+                        limb = Some(Limb { z: t.pos[2], segments: m.segments.len()..m.segments.len(), leaves: m.leaves.len()..m.leaves.len() });
                     }
                     stack.push(t);
                     t.len *= self.taper;
@@ -832,6 +867,13 @@ impl Grammar {
                     if let Some(p) = stack.pop() {
                         t = p;
                     }
+                    if stack.is_empty() {
+                        if let Some(mut l) = limb.take() {
+                            l.segments.end = m.segments.len();
+                            l.leaves.end = m.leaves.len();
+                            limbs.push(l);
+                        }
+                    }
                 }
                 '!' => {
                     t.len *= self.taper;
@@ -857,8 +899,64 @@ impl Grammar {
                 _ => {}
             }
         }
+        self.shed(&mut m, &limbs, seed);
         m.rebound();
         m
+    }
+
+    /// Kill the lowest whorls the tree still carries: a spruce holds a
+    /// whorl or two of shed limbs between its clean trunk and its live
+    /// crown, bare grey branches with the needles long gone.
+    ///
+    /// A whorl is the limbs that leave the bole at one height, so the
+    /// whorls are `limbs` gathered by their height and read from the
+    /// bottom. The lowest `dead_whorls` of them keep their wood, marked
+    /// dead so a renderer greys it, and lose their clusters; the leader's
+    /// own clusters below the lowest live whorl go with them, since the
+    /// crown starts where the live limbs do. The last whorl is never shed,
+    /// so a young tree of few tiers keeps a crown.
+    fn shed(&self, m: &mut TreeModel, limbs: &[Limb], seed: u64) {
+        if self.dead_whorls <= 0.0 || m.state == State::Dead || limbs.is_empty() {
+            return;
+        }
+        // The whorl heights, lowest first. Limbs of one whorl leave the
+        // bole from the same turtle position, so their heights match to
+        // the millimetre.
+        let mut tiers: Vec<i32> = limbs.iter().map(|l| (l.z * 1e3).round() as i32).collect();
+        tiers.sort_unstable();
+        tiers.dedup();
+        // A fraction picks between the whole numbers either side of it, so
+        // one stand carries both one dead whorl and two.
+        let whole = self.dead_whorls.min(MAX_DEAD_WHORLS);
+        let n = whole.floor() as usize + usize::from(hash01(0, 9, seed) < whole.fract());
+        let Some(&cut) = tiers.get(n.min(tiers.len() - 1)) else { return };
+        let mut drop = vec![false; m.leaves.len()];
+        let mut on_a_limb = vec![false; m.leaves.len()];
+        for l in limbs {
+            let shed = ((l.z * 1e3).round() as i32) < cut;
+            for i in l.leaves.clone() {
+                on_a_limb[i] = true;
+                drop[i] |= shed;
+            }
+            if shed {
+                for s in &mut m.segments[l.segments.clone()] {
+                    s.dead = true;
+                }
+            }
+        }
+        // The leader's own clusters below the lowest live whorl belong to
+        // the shed part of the tree too; a live limb's clusters stay
+        // whatever height they hang at, since a whorl droops below where
+        // it left the trunk.
+        let cut_z = cut as f32 * 1e-3;
+        for (i, l) in m.leaves.iter().enumerate() {
+            drop[i] |= !on_a_limb[i] && l.centre[2] < cut_z;
+        }
+        let mut i = 0;
+        m.leaves.retain(|_| {
+            i += 1;
+            !drop[i - 1]
+        });
     }
 
     /// The model scaled to a species' `[w, d, h]` size in metres. A bare or
@@ -924,6 +1022,15 @@ fn pick(alts: &[Alternative], roll: u64) -> String {
     alts[0].replacement.clone()
 }
 
+/// One limb leaving the bole: the height it leaves at and the runs of
+/// segments and clusters it grew, which is everything `Grammar::shed`
+/// needs to gather the limbs into whorls and kill the lowest.
+struct Limb {
+    z: f32,
+    segments: std::ops::Range<usize>,
+    leaves: std::ops::Range<usize>,
+}
+
 /// Turtle state: where it is, the orthonormal frame `[heading, left, up]`
 /// it points with, and the length and radius the next `F` draws.
 #[derive(Clone, Copy)]
@@ -985,6 +1092,7 @@ mod tests {
             asymmetry: 0.0,
             jitter: 0.0,
             prune_height: 0.0,
+            dead_whorls: 0.0,
             leaf_flat: 0.0,
         }
     }
@@ -1006,6 +1114,7 @@ mod tests {
             asymmetry: 0.3,
             jitter: 0.1,
             prune_height: 0.1,
+            dead_whorls: 0.0,
             leaf_flat: 0.0,
         }
     }
@@ -1026,6 +1135,7 @@ mod tests {
             asymmetry: 0.0,
             jitter: 0.0,
             prune_height: 0.0,
+            dead_whorls: 0.0,
             leaf_flat: 0.0,
         }
     }
@@ -1219,7 +1329,7 @@ mod tests {
         assert_eq!(v.len(), m.segments.len() + m.leaves.len());
         assert!(matches!(v[v.len() - 1], Volume::Ellipsoid { .. }));
         let Volume::Cylinder { a, b, radius } = v[0] else { panic!("the first volume is a branch") };
-        assert_eq!(Segment { a, b, radius }, m.segments[0]);
+        assert_eq!(Segment { a, b, radius, dead: false }, m.segments[0]);
         // And every one of them places into the walk's own volume list.
         let at = Placement { species: 3, mx: 10, my: -4, cx: 10.5, cy: -3.5, ground: 12.0, spread: 1.0, height: 1.0, crown: (16.0, 9.0), shear: (0.0, 0.0), instance: crate::volume::instance(0) };
         let mut placed = Vec::new();
@@ -1261,6 +1371,7 @@ mod tests {
         assert!(bad(&|g| g.length = 0.0).contains("length"));
         assert!(bad(&|g| g.taper = 2.0).contains("taper"));
         assert!(bad(&|g| g.leaf_radius = -1.0).contains("leaf_radius"));
+        assert!(bad(&|g| g.dead_whorls = 20.0).contains("dead_whorls"));
         assert!(bad(&|g| {
             g.rules.insert('+', vec![alt("F", 1)]);
         })
@@ -1286,7 +1397,7 @@ mod tests {
         // a fourth stands alone two cells away.
         let near = [leaf(0.0, 0.1, 5.0, 0.4), leaf(0.9, 0.3, 5.2, 0.4), leaf(1.8, -0.2, 4.8, 0.4)];
         let lone = leaf(9.0, 9.0, 9.0, 0.4);
-        let mut m = TreeModel { segments: vec![Segment { a: [0.0; 3], b: [0.0, 0.0, 6.0], radius: 0.3 }], leaves: near.to_vec(), bounds: Bounds::default(), state: State::Alive };
+        let mut m = TreeModel { segments: vec![Segment { a: [0.0; 3], b: [0.0, 0.0, 6.0], radius: 0.3, dead: false }], leaves: near.to_vec(), bounds: Bounds::default(), state: State::Alive };
         m.leaves.push(lone);
         m.rebound();
         let s = m.simplify(4.0, 0.0);
@@ -1358,6 +1469,7 @@ mod tests {
             asymmetry: 0.0,
             jitter: 0.0,
             prune_height: 0.0,
+            dead_whorls: 0.0,
             leaf_flat,
         };
         let radii = |m: &TreeModel| {
@@ -1372,5 +1484,108 @@ mod tests {
         let (leader, branch) = radii(&flat(0.5).grow(1, [4.0, 4.0, 5.0], Growth::FULL));
         assert_eq!(leader, [0.6; 3], "the upright cluster keeps its height");
         assert!((branch[2] - 0.3).abs() < 0.02 && branch[0] == 0.6 && branch[1] == 0.6, "the level one keeps half: {branch:?}");
+    }
+
+    /// A conifer shaped like the `excurrent` habit but deterministic: a
+    /// leader that rises a metre a tier and puts out a whorl of two level
+    /// branches at each, every one carrying a cluster. No jitter and no
+    /// droop, so a whorl's branches sit at exactly one height and the
+    /// whorls can be counted.
+    fn conifer(dead_whorls: f32) -> Grammar {
+        Grammar {
+            axiom: "A".to_string(),
+            rules: BTreeMap::from([('A', vec![alt("F[&&&FL][|&&&FL]LA", 1)])]),
+            dead_rules: BTreeMap::new(),
+            depth: 6,
+            angle: 30.0,
+            length: 1.0,
+            taper: 1.0,
+            leaf_radius: 0.3,
+            droop: 0.0,
+            leaf_density: 1.0,
+            asymmetry: 0.0,
+            jitter: 0.0,
+            prune_height: 0.0,
+            dead_whorls,
+            leaf_flat: 0.0,
+        }
+    }
+
+    /// The heights of the whorls that stand dead, lowest first: the start
+    /// of every branch marked deadwood, to the millimetre.
+    fn shed(m: &TreeModel) -> Vec<i32> {
+        let mut zs: Vec<i32> = m.segments.iter().filter(|s| s.dead).map(|s| (s.a[2] * 1e3).round() as i32).collect();
+        zs.sort_unstable();
+        zs.dedup();
+        zs
+    }
+
+    #[test]
+    fn dead_whorls_strip_the_lowest_whorls_and_leave_the_crown_alone() {
+        let live = conifer(0.0).model(0, Growth::FULL);
+        assert!(shed(&live).is_empty(), "a habit that sheds nothing has no deadwood");
+        let m = conifer(2.0).model(0, Growth::FULL);
+        assert_eq!(shed(&m).len(), 2, "the two lowest whorls are dead");
+        assert_eq!(m.segments.len(), live.segments.len(), "shedding kills wood, it does not remove it");
+        // The dead whorls carry no foliage, and neither does the leader
+        // below the lowest live one: the crown starts where the live
+        // limbs do.
+        let lowest = m.leaves.iter().map(|l| l.centre[2]).fold(f32::MAX, f32::min);
+        let top_dead = *shed(&m).last().unwrap() as f32 * 1e-3;
+        assert!(lowest > top_dead, "every cluster is above the shed whorls: {lowest} against {top_dead}");
+        assert!(m.leaves.len() < live.leaves.len(), "the shed whorls' clusters are gone");
+        // And the whorl above them is untouched.
+        assert!(m.leaves.iter().filter(|l| l.centre[2] < top_dead + 1.5).count() >= 2, "the lowest live whorl keeps its foliage");
+    }
+
+    #[test]
+    fn a_fraction_sheds_one_whorl_or_two_from_the_seed() {
+        let counts: Vec<usize> = (0..12u64).map(|s| shed(&conifer(1.5).model(s, Growth::FULL)).len()).collect();
+        assert!(counts.iter().all(|&n| n == 1 || n == 2), "a whorl or two, never more: {counts:?}");
+        assert!(counts.contains(&1) && counts.contains(&2), "a stand carries both: {counts:?}");
+        // One seed is always one tree.
+        assert_eq!(conifer(1.5).model(3, Growth::FULL), conifer(1.5).model(3, Growth::FULL));
+    }
+
+    #[test]
+    fn the_last_whorl_is_never_shed_and_a_snag_is_dead_all_over() {
+        let mut g = conifer(MAX_DEAD_WHORLS);
+        g.depth = 3;
+        let m = g.model(0, Growth::FULL);
+        assert!(!m.leaves.is_empty(), "a young tree of few tiers keeps a crown");
+        assert!(!shed(&m).is_empty(), "and still sheds what it can");
+        // Standing deadwood is grey by its state, so no whorl of it is
+        // singled out.
+        let snag = conifer(2.0).model(0, Growth::DEAD);
+        assert!(snag.leaves.is_empty() && shed(&snag).is_empty(), "a snag is dead all over");
+    }
+
+    #[test]
+    fn a_grown_spruce_carries_bare_whorls_under_its_crown() {
+        let assets = crate::assets::Assets::embedded().expect("embedded assets load");
+        let sp = assets.species.iter().find(|s| s.name == "spruce").expect("the species set has a spruce");
+        let bare = sp.lsystem.clone().map(|mut g| {
+            g.dead_whorls = 0.0;
+            g
+        });
+        for seed in 0..8u64 {
+            let m = sp.tree_model(seed, Growth::FULL).expect("the spruce is an lsystem row");
+            let dead: Vec<f32> = m.segments.iter().filter(|s| s.dead).map(|s| s.a[2]).collect();
+            assert!(!dead.is_empty(), "seed {seed}: the excurrent habit sheds its lowest whorls");
+            // A whorl or two at the foot of the crown, not deadwood
+            // scattered through it.
+            let (bottom, top) = (dead.iter().copied().fold(f32::MAX, f32::min), dead.iter().copied().fold(f32::MIN, f32::max));
+            let height = m.bounds.max[2];
+            assert!(top < 0.45 * height, "seed {seed}: the deadwood is the bottom of the crown, {top} of {height}");
+            let lowest_leaf = m.leaves.iter().map(|l| l.centre[2]).fold(f32::MAX, f32::min);
+            assert!(!m.leaves.is_empty(), "seed {seed}: and there is still a crown");
+            assert!(lowest_leaf > bottom, "seed {seed}: no foliage below the shed whorls, {lowest_leaf} against {bottom}");
+            // The same tree that sheds nothing carries the clusters those
+            // whorls have lost.
+            let full = bare.as_ref().unwrap().grow(seed, sp.size, Growth::FULL);
+            assert!(m.leaves.len() < full.leaves.len(), "seed {seed}: {} clusters against {}", m.leaves.len(), full.leaves.len());
+            // The grey survives the level of detail the walk asks for.
+            assert!(m.simplify(0.33, 0.06).segments.iter().any(|s| s.dead), "seed {seed}: simplified, the stubs are still deadwood");
+        }
     }
 }

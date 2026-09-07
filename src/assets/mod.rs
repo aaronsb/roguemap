@@ -292,6 +292,7 @@ fn grammar(ctx: &Ctx, i: usize, s: &SpeciesRow, styles: &[Style]) -> Result<Opti
         asymmetry: row.asymmetry,
         jitter: row.jitter,
         prune_height: row.prune_height,
+        dead_whorls: row.dead_whorls,
         depth: row.depth,
         length: row.length,
         leaf_radius: row.leaf_radius,
@@ -333,6 +334,7 @@ fn grammar(ctx: &Ctx, i: usize, s: &SpeciesRow, styles: &[Style]) -> Result<Opti
                 asymmetry: row.asymmetry.unwrap_or(plain.asymmetry),
                 jitter: row.jitter.unwrap_or(plain.jitter),
                 prune_height: row.prune_height.unwrap_or(plain.prune_height),
+                dead_whorls: row.dead_whorls.unwrap_or(plain.dead_whorls),
                 leaf_flat: row.leaf_flat.unwrap_or(plain.leaf_flat),
             }
         }
@@ -385,6 +387,7 @@ fn styles(raw: &TreeStylesFile) -> Result<Vec<Style>, AssetError> {
                 asymmetry: p.asymmetry,
                 jitter: p.jitter,
                 prune_height: p.prune_height,
+                dead_whorls: p.dead_whorls,
                 depth: p.depth,
                 length: p.length,
                 leaf_radius: p.leaf_radius,

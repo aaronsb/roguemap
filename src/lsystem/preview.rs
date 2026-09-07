@@ -21,7 +21,7 @@ use crate::noise::hash01;
 use crate::palette::DIRT;
 use crate::tileset::Tileset;
 
-use super::{Growth, State, TreeModel};
+use super::{dead_bark, Growth, State, TreeModel};
 
 /// Mean annual temperature the previews stand in, in degrees Celsius: a
 /// temperate lowland, so a deciduous species is in full leaf in summer and
@@ -38,6 +38,9 @@ pub struct PreviewStyle {
     pub ground: Rgb,
     pub trunk: Rgb,
     pub trunk_glyph: Rgb,
+    /// Bark of a shed whorl: deadwood on a living tree.
+    pub dead_trunk: Rgb,
+    pub dead_trunk_glyph: Rgb,
     pub canopy: Rgb,
     pub canopy_glyph: Rgb,
     /// Canopy fill glyphs, sprinkled over the blobs.
@@ -63,6 +66,8 @@ impl Default for PreviewStyle {
             ground: Rgb(58, 50, 40),
             trunk: Rgb(92, 72, 56),
             trunk_glyph: Rgb(130, 104, 80),
+            dead_trunk: dead_bark(Rgb(92, 72, 56)),
+            dead_trunk_glyph: dead_bark(Rgb(130, 104, 80)),
             canopy: Rgb(56, 120, 62),
             canopy_glyph: Rgb(110, 176, 96),
             fill: vec!['▓', '▒'],
@@ -88,6 +93,8 @@ impl PreviewStyle {
             canopy_glyph,
             trunk,
             trunk_glyph,
+            dead_trunk: dead_bark(trunk),
+            dead_trunk_glyph: dead_bark(trunk_glyph),
             fill: vec![a.round_mid[1], a.pine_fill[0], a.pine_fill[1]],
             // round_top is the lower half of a crown's top row: lower left,
             // lower half, lower right; round_bot the upper half.
@@ -233,8 +240,11 @@ fn branch(cv: &mut Canvas, view: &View, s: &super::Segment, style: &PreviewStyle
     // The same metres are twice as many columns as rows.
     let cols = (2.0 * s.radius * view.cpm).max(0.25);
     let rows = cols * 0.5;
-    let fg = style.trunk_glyph.scale(lit);
-    let bg = style.trunk.scale(lit);
+    // A shed whorl is grey wood on a living tree, the colour a whole snag
+    // takes (`dead_bark`).
+    let (glyph, bark) = if s.dead { (style.dead_trunk_glyph, style.dead_trunk) } else { (style.trunk_glyph, style.trunk) };
+    let fg = glyph.scale(lit);
+    let bg = bark.scale(lit);
     let (dx, dy) = (bx - ax, by - ay);
     let steps = (dx.abs().max(dy.abs()) * 2.0).ceil().max(1.0) as i32;
     let thin = if dy.abs() * 2.0 < dx.abs() {
@@ -357,6 +367,7 @@ mod tests {
             asymmetry: 0.0,
             jitter: 0.08,
             prune_height: 0.0,
+            dead_whorls: 0.0,
             leaf_flat: 0.0,
         }
         .grow(3, [9.0, 9.0, 16.0], Growth::FULL)

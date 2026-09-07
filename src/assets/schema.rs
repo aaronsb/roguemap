@@ -353,6 +353,9 @@ pub struct LsystemRow {
     /// Fraction of the height with no live branches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prune_height: Option<f32>,
+    /// How many of the lowest surviving whorls stand dead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dead_whorls: Option<f32>,
     /// How flat a cluster on a level branch is, 0 round to 1 flat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_flat: Option<f32>,
@@ -401,6 +404,11 @@ pub struct StyleParamsRow {
     pub asymmetry: f32,
     pub jitter: f32,
     pub prune_height: f32,
+    /// How many of the lowest surviving whorls stand dead: bare grey
+    /// branches under the live crown. A habit that leaves it out sheds
+    /// none.
+    #[serde(default)]
+    pub dead_whorls: f32,
     pub depth: u8,
     pub length: f32,
     pub leaf_radius: f32,

@@ -22,6 +22,10 @@ leaf_density = 0.85
 asymmetry = 0.08
 jitter = 0.1
 prune_height = 0.18
+# A spruce or a fir carries a whorl or two of shed limbs between the clean
+# trunk and the live crown: bare grey branches with the needles gone. Half
+# a whorl either way, so a stand has both.
+dead_whorls = 1.5
 leaf_flat = 0.5
 depth = 10
 length = 1.0

@@ -39,6 +39,10 @@ pub struct Params {
     pub jitter: f32,
     /// Fraction of the height with no live branches.
     pub prune_height: f32,
+    /// How many of the lowest surviving whorls stand dead: bare grey
+    /// branches with no foliage. A fraction picks between the whole
+    /// numbers either side of it from the instance's seed.
+    pub dead_whorls: f32,
     /// Rewritings.
     pub depth: u8,
     /// Length of a first-level `F`, in metres.
@@ -122,6 +126,7 @@ impl Style {
             asymmetry: p.asymmetry,
             jitter: p.jitter,
             prune_height: p.prune_height,
+            dead_whorls: p.dead_whorls,
             leaf_flat: p.leaf_flat,
         })
     }
@@ -139,6 +144,7 @@ pub struct Overrides {
     pub asymmetry: Option<f32>,
     pub jitter: Option<f32>,
     pub prune_height: Option<f32>,
+    pub dead_whorls: Option<f32>,
     pub depth: Option<u8>,
     pub length: Option<f32>,
     pub leaf_radius: Option<f32>,
@@ -156,6 +162,7 @@ impl Overrides {
             asymmetry: self.asymmetry.unwrap_or(base.asymmetry),
             jitter: self.jitter.unwrap_or(base.jitter),
             prune_height: self.prune_height.unwrap_or(base.prune_height),
+            dead_whorls: self.dead_whorls.unwrap_or(base.dead_whorls),
             depth: self.depth.unwrap_or(base.depth),
             length: self.length.unwrap_or(base.length),
             leaf_radius: self.leaf_radius.unwrap_or(base.leaf_radius),
@@ -239,7 +246,7 @@ mod tests {
     use super::*;
 
     fn params() -> Params {
-        Params { branch_angle: 20.0, forks: 5, taper: 0.9, droop: 0.0, leaf_density: 1.0, asymmetry: 0.1, jitter: 0.08, prune_height: 0.2, depth: 6, length: 1.0, leaf_radius: 0.4, leaf_flat: 0.0 }
+        Params { branch_angle: 20.0, forks: 5, taper: 0.9, droop: 0.0, leaf_density: 1.0, asymmetry: 0.1, jitter: 0.08, prune_height: 0.2, dead_whorls: 0.0, depth: 6, length: 1.0, leaf_radius: 0.4, leaf_flat: 0.0 }
     }
 
     #[test]

@@ -34,12 +34,13 @@ parameter set and a rule set.
 A spruce from the `excurrent` habit. Its rule emits two whorls per
 rewriting with a taper between them, so a mature tree carries a tier about
 every metre and a half rather than one every two or three, and the tiers
-narrow into a spire.
+narrow into a spire. The grey tier under the green ones is a shed whorl:
+see `dead_whorls` below.
 
 ## Parameters
 
-A habit's `[style.params]` carries twelve numbers. A species overrides the
-ones it wants different.
+A habit's `[style.params]` carries thirteen numbers. A species overrides
+the ones it wants different.
 
 | Parameter | Range | What it does |
 |---|---|---|
@@ -51,6 +52,7 @@ ones it wants different.
 | `asymmetry` | 0..1 | how far the tree leans and favours one side |
 | `jitter` | 0..1 | how much each branch's angle and length wander |
 | `prune_height` | 0..1 | fraction of the tree's height below which branches are dropped |
+| `dead_whorls` | 0..8 | how many of the lowest whorls left standing are dead: bare grey branches, no foliage |
 | `depth` | ≤ 12 | rewriting generations |
 | `length` | > 0 | the first segment's length |
 | `leaf_radius` | ≥ 0 | the radius of one leaf cluster |
@@ -69,6 +71,16 @@ clusters. It moves branches; it never adds any.
 at 0.95. The word is walked twice: once to measure, once with the cut in
 place, dropping any bracketed branch that starts below it. If pruning
 would leave a bare pole, the unpruned tree is kept instead.
+
+**Dead whorls** are the shed tier or two a conifer carries between the
+bare trunk and the live crown. Where prune height drops the branches
+below the cut, this keeps them and kills them: the limbs that leave the
+bole at the lowest surviving heights lose their leaf clusters and take
+the grey bark of a snag, and the leader's own clusters below the lowest
+live whorl go with them, since the crown starts where the live limbs do.
+The count is a fraction, and each tree rounds it up or down from its own
+seed, so a stand carries both one shed whorl and two; the last whorl is
+never shed, so a sapling of few tiers keeps its crown.
 
 **Leaf density** does two jobs. In the grammar it decides which `L`
 symbols become clusters, and that is the grown crown's porosity: a
@@ -96,6 +108,7 @@ leaf_density = 0.85
 asymmetry = 0.08
 jitter = 0.1
 prune_height = 0.18
+dead_whorls = 1.5
 depth = 10
 length = 1.0
 leaf_radius = 0.85
@@ -154,6 +167,10 @@ The same gnarled oak at season 3. The crown is gone and the limb structure
 the `decurrent` habit grew is what is left.
 
 ## Dead trees
+
+A living tree carries deadwood too, in the whorls `dead_whorls` sheds:
+they take the same grey bark, one branch at a time rather than the whole
+model.
 
 Each species carries a `dead_chance`, 0.02 by default. A tile's seed
 decides whether the tree standing on it is a snag. A dead tree grows from

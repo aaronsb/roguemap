@@ -89,6 +89,14 @@ is one command.
   capsule under a coarse lattice; a bare tree keeps twigs down to
   `BARE_TWIG` of the cut a leafy one drops them at; `leaf_flat` halves the
   height of a cluster on a level branch and leaves an upright one round.
+  `dead_whorls` marks the lowest whorls of a deterministic conifer dead
+  without removing their wood, takes their clusters and the leader's
+  below them, leaves the whorl above untouched, never sheds the last
+  whorl and does nothing to a snag; a fraction sheds one whorl or two
+  from the seed and the same seed always the same. A spruce grown from
+  the embedded set carries deadwood in the bottom of its crown at every
+  seed, none of its foliage below it, fewer clusters than the same tree
+  with `dead_whorls = 0`, and stubs still marked dead once simplified.
 - **Crown seams.** With two pines on the camera's diagonal, every cell of
   the far crown beside a cell of the near one is darkened by `CROWN_SEAM`
   and a cell inside the far crown keeps its colour.
