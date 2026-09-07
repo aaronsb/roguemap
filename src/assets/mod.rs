@@ -909,6 +909,7 @@ impl Assets {
             check_hooks(&ctx, i, &c.name, &c.hooks)?;
             check_conditions(&ctx, i, &c.name, &c.conditions)?;
             non_negative(&ctx, i, &c.name, "speed", c.speed)?;
+            non_negative(&ctx, i, &c.name, "turn", c.turn)?;
             non_negative(&ctx, i, &c.name, "sight", c.sight)?;
             non_negative(&ctx, i, &c.name, "spacing", c.spacing)?;
             creatures.push(Creature {
@@ -920,6 +921,7 @@ impl Assets {
                 glyph: c.glyph,
                 can_enter,
                 speed: c.speed.unwrap_or(2.0),
+                turn: c.turn.unwrap_or(180.0),
                 diet: c.diet.clone(),
                 behaviour: c.behaviour.clone().unwrap_or_else(|| "idle".to_string()),
                 sight: c.sight.unwrap_or(16.0),
@@ -1180,7 +1182,7 @@ mod tests {
         assert_eq!(a.blocks.len(), 6);
         assert_eq!(a.creatures[0].name, "player");
         assert_eq!(a.tilesets.len(), 2);
-        assert_eq!(a.settings.len(), 15);
+        assert_eq!(a.settings.len(), 16);
         assert_eq!(a.frames.len(), 9);
         assert_eq!(a.editor_frames.len(), 8, "the editor's panes are frames too (ADR-005 step 6)");
         let fire = a.light("campfire").unwrap();
@@ -1317,6 +1319,7 @@ mod tests {
             assert!((0.1..=6.0).contains(&c.size[2]), "{}: {} m tall", c.name, c.size[2]);
             assert!(c.size[0] > 0.0 && c.size[1] > 0.0, "{}", c.name);
             assert!(c.sight <= 200.0 && c.speed <= 30.0, "{}: sight and speed are metres", c.name);
+            assert!(c.turn > 0.0 && c.turn <= 720.0, "{}: {} degrees a second is not a turn on the spot", c.name, c.turn);
         }
         for sp in &a.species {
             assert!((0.5..=40.0).contains(&sp.size[2]), "{}: {} m tall", sp.name, sp.size[2]);

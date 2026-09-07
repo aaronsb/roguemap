@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn the_inset_follows_the_player_and_names_the_ratio_it_draws_at() {
         let mut fx = Fixture::new();
-        fx.world.spawn_player(&fx.map, 2, 2);
+        fx.world.spawn_player(&fx.map, 2, 2, 0.0);
         let inset = Inset::default();
         let here = inset_cells(&inset, &fx, 24, 10);
 

@@ -20,6 +20,13 @@ values = ["isometric", "chase", "shoulder", "first-person"]
 default = 0
 
 [[setting]]
+key = "coupling"
+description = "Whether the body turns with the view (ADR-009): under body-turns a walk key is a screen direction read against the view every tick, so the mouse steers the walk and a and d strafe; under view-only w and s pace the body along its own facing, a and d turn it, and the mouse turns the view alone."
+label = "Coupling"
+values = ["body-turns", "view-only"]
+default = 0
+
+[[setting]]
 key = "fov"
 description = "The field of view of a perspective camera across the screen, in degrees; preset is the mode's own (60 for chase and first-person, 40 for shoulder). The isometric mode has none. < and > narrow and widen it while playing."
 label = "Field of view"

@@ -83,6 +83,10 @@ pub struct Walk {
     pub grace: f32,
     /// Speed multiplier: 1 walking, `World::RUN` running.
     pub factor: f32,
+    /// Which way the body turns as it walks, in multiples of the
+    /// creature's `turn` rate, left positive (ADR-009); zero under
+    /// `body-turns`, where the view turns instead.
+    pub turn: f32,
     /// The fraction of a centimetre a tick left over on each axis, owed
     /// to the next, so the distance walked is the speed times the time.
     carry: (f32, f32),
@@ -99,6 +103,10 @@ pub struct Entity {
     pub x_cm: i32,
     pub y_cm: i32,
     pub facing: Facing,
+    /// The way the body faces in map space (ADR-009), measured as the
+    /// camera's yaw is: under `view-only` the walk keys read against it,
+    /// and the turn keys spend the creature's `turn` into it.
+    pub yaw: f32,
     /// Metres walked on the walk under way, which picks the pose; zero at
     /// rest.
     pub walked: f32,
@@ -106,11 +114,23 @@ pub struct Entity {
 }
 
 impl Entity {
-    /// A creature standing at the centre of a tile, facing right, at rest.
-    pub fn at_tile(kind: u8, mx: i32, my: i32) -> Entity {
-        let mut e = Entity { kind, x_cm: 0, y_cm: 0, facing: Facing::Right, walked: 0.0, walk: None };
+    /// A creature standing at the centre of a tile, drawn facing right and
+    /// its body turned to `yaw`, at rest.
+    pub fn at_tile(kind: u8, mx: i32, my: i32, yaw: f32) -> Entity {
+        let mut e = Entity { kind, x_cm: 0, y_cm: 0, facing: Facing::Right, yaw, walked: 0.0, walk: None };
         e.set_tile(mx, my);
         e
+    }
+
+    /// The unit map vector the body faces: where a camera at its yaw looks.
+    pub fn heading(&self) -> (f32, f32) {
+        let (s, c) = self.yaw.sin_cos();
+        (-s, -c)
+    }
+
+    /// Turn the body to a map heading.
+    pub fn face(&mut self, dir: (f32, f32)) {
+        self.yaw = (-dir.0).atan2(-dir.1);
     }
 
     /// The walk-cycle pose to draw, of `n` in the art: `None` at rest,
@@ -506,10 +526,12 @@ impl World {
         }
     }
 
-    /// Put the player on the nearest land to a position.
-    pub fn spawn_player(&mut self, map: &Map, mx: i32, my: i32) {
+    /// Put the player on the nearest land to a position, its body turned
+    /// to `yaw`: the view's, so a walk under `view-only` starts where the
+    /// keys pointed under `body-turns` (ADR-009).
+    pub fn spawn_player(&mut self, map: &Map, mx: i32, my: i32, yaw: f32) {
         let (mx, my) = map.nearest_land(mx, my);
-        self.entities.push(Entity::at_tile(PLAYER, mx, my));
+        self.entities.push(Entity::at_tile(PLAYER, mx, my, yaw));
     }
 
     /// The player is the first entity, by convention.
@@ -552,20 +574,24 @@ impl World {
     /// when given and as before when not. A press on the same heading
     /// keeps the centimetre carry; a turn drops it.
     pub fn walk_toward(&mut self, dir: (f32, f32), run: bool, facing: Option<Facing>) {
-        self.walk_for(dir, run, facing, World::GRACE);
+        self.walk_for(dir, 0.0, run, facing, World::GRACE);
     }
 
-    /// The same with the lease given: the held-key set of the event loop
-    /// knows how long its keys have left, so it hands the walk that
-    /// instead of a whole grace (ADR-008).
-    pub fn walk_for(&mut self, dir: (f32, f32), run: bool, facing: Option<Facing>, grace: f32) {
+    /// The same with the lease given and a turn spent on it: the held-key
+    /// set of the event loop knows how long its keys have left, so it
+    /// hands the walk that instead of a whole grace (ADR-008), and under
+    /// `view-only` the turn keys hand it a `turn`, a multiple of the
+    /// creature's turn rate with left positive (ADR-009). A press on the
+    /// same heading keeps the centimetre carry, and so does a body turning
+    /// under itself, whose heading is its own yaw a tick later.
+    pub fn walk_for(&mut self, dir: (f32, f32), turn: f32, run: bool, facing: Option<Facing>, grace: f32) {
         let Some(p) = self.player_mut() else { return };
         let factor = if run { World::RUN } else { 1.0 };
         let carry = match p.walk {
-            Some(w) if w.dir == dir => w.carry,
+            Some(w) if w.dir == dir || turn != 0.0 => w.carry,
             _ => (0.0, 0.0),
         };
-        p.walk = Some(Walk { dir, grace, factor, carry });
+        p.walk = Some(Walk { dir, grace, factor, turn, carry });
         if let Some(f) = facing {
             p.facing = f;
         }
@@ -586,14 +612,19 @@ impl World {
     /// `speed * dt` metres along the heading in whole centimetres, the
     /// fraction carried, through `try_move`, so the tile the figure may
     /// not enter stops it — a diagonal refused as a whole slides along
-    /// whichever axis is open. The tick is cut to the grace left, so a
-    /// tap walks exactly `GRACE` seconds' worth. Returns whether the
-    /// figure is still walking afterwards.
+    /// whichever axis is open. The turn is spent on the same lease
+    /// (ADR-009): the body turns `turn` times the creature's rate and its
+    /// heading turns with it, so a pace held with a turn walks a curve of
+    /// radius `speed / turn`. The tick is cut to the grace left, so a tap
+    /// walks exactly `GRACE` seconds' worth and turns as much. Returns
+    /// whether the figure is still walking afterwards.
     pub fn step_walk(&mut self, map: &Map, dt: f32) -> bool {
         let Some(p) = self.player() else { return false };
         let Some(mut w) = p.walk else { return false };
         let dt = dt.min(w.grace).max(0.0);
-        let speed = map.assets.creatures[p.kind as usize % map.assets.creatures.len()].speed * w.factor;
+        let creature = &map.assets.creatures[p.kind as usize % map.assets.creatures.len()];
+        let speed = creature.speed * w.factor;
+        let turn = creature.turn.to_radians() * w.turn * dt;
         let cm = speed * dt * 100.0;
         let want = (w.dir.0 * cm + w.carry.0, w.dir.1 * cm + w.carry.1);
         let (sx, sy) = (want.0.round() as i32, want.1.round() as i32);
@@ -602,6 +633,11 @@ impl World {
         let p = self.player_mut().expect("the player was there a moment ago");
         w.carry = if moved { (want.0 - sx as f32, want.1 - sy as f32) } else { (0.0, 0.0) };
         w.grace -= dt;
+        if turn != 0.0 {
+            p.yaw += turn;
+            let (s, c) = turn.sin_cos();
+            w.dir = (w.dir.0 * c + w.dir.1 * s, w.dir.1 * c - w.dir.0 * s);
+        }
         p.walked += ((p.x_cm - from.0) as f32).hypot((p.y_cm - from.1) as f32) / 100.0;
         if w.grace <= 1e-6 {
             p.walk = None;
@@ -642,9 +678,11 @@ mod tests {
     use crate::blocks::Stack;
     use crate::camera::Camera;
     use crate::canvas::Canvas;
+    use crate::input::{walk_keys, Coupling, Held};
     use crate::map::Tile;
     use crate::render::{RenderOptions, Renderer, Scene};
     use crate::tileset::Tileset;
+    use crossterm::event::KeyCode;
 
     /// An 8x8 island of grass 5 m over the water with a pond at (5, 4).
     fn pond_map() -> Map {
@@ -655,7 +693,7 @@ mod tests {
     fn player_refuses_water_and_the_island_edge_and_moves_on_land() {
         let map = pond_map();
         let mut w = World::new(1);
-        w.spawn_player(&map, 4, 4);
+        w.spawn_player(&map, 4, 4, 0.0);
         assert_eq!(w.player().map(|p| p.tile()), Some((4, 4)));
         assert_eq!(w.player().map(|p| (p.x_cm, p.y_cm)), Some((900, 900)), "the spawn is the tile's centre");
         assert!(!w.try_move(&map, TILE_CM, 0), "a whole tile into the pond");
@@ -682,7 +720,7 @@ mod tests {
         // anywhere in its tile rather than at the centre.
         let map = pond_map();
         let mut w = World::new(1);
-        w.spawn_player(&map, 4, 4);
+        w.spawn_player(&map, 4, 4, 0.0);
         assert!(w.try_move(&map, 60, 0));
         assert!(w.try_move(&map, 39, 0));
         assert_eq!(w.player().map(|p| (p.x_cm, p.tile())), Some((999, (4, 4))), "a centimetre short of the pond");
@@ -693,9 +731,9 @@ mod tests {
         let (x, y) = w.player().unwrap().pos();
         assert!((x - 4.995).abs() < 1e-4 && (y - 4.9).abs() < 1e-4, "the point is fractional in tiles: {x}, {y}");
         // Negative positions still floor to their tile.
-        let e = Entity { x_cm: -1, y_cm: -TILE_CM, ..Entity::at_tile(0, 0, 0) };
+        let e = Entity { x_cm: -1, y_cm: -TILE_CM, ..Entity::at_tile(0, 0, 0, 0.0) };
         assert_eq!(e.tile(), (-1, -1));
-        assert_eq!(Entity::at_tile(0, -3, 2), Entity { x_cm: -500, y_cm: 500, ..e });
+        assert_eq!(Entity::at_tile(0, -3, 2, 0.0), Entity { x_cm: -500, y_cm: 500, ..e });
     }
 
     /// A flat plain of grass, sixty-four tiles square.
@@ -709,7 +747,7 @@ mod tests {
         let speed = map.assets.creatures[PLAYER as usize].speed;
         assert!((speed - 1.4).abs() < 1e-6, "the person walks at 1.4 m/s");
         let mut w = World::new(1);
-        w.spawn_player(&map, 32, 32);
+        w.spawn_player(&map, 32, 32, 0.0);
         let start = w.player().unwrap().metres();
         // A held key renews the lease every tick: two seconds is 2.8 m to
         // the centimetre, the fractions carried from tick to tick.
@@ -723,7 +761,7 @@ mod tests {
         assert!(p.walk.is_some() && (p.walked - 2.8).abs() < 0.0051, "{:?} after {} m", p.walk, p.walked);
         // Running is three times as far in the same time, on a diagonal too.
         let mut r = World::new(1);
-        r.spawn_player(&map, 32, 32);
+        r.spawn_player(&map, 32, 32, 0.0);
         let d = std::f32::consts::FRAC_1_SQRT_2;
         for _ in 0..25 {
             r.walk_toward((d, d), true, None);
@@ -735,7 +773,7 @@ mod tests {
         // A tap walks GRACE seconds' worth, 14 cm, over three ticks, then
         // rests with the distance zeroed.
         let mut t = World::new(1);
-        t.spawn_player(&map, 32, 32);
+        t.spawn_player(&map, 32, 32, 0.0);
         t.walk_toward((0.0, 1.0), false, None);
         let mut ticks = 1;
         while t.step_walk(&map, 0.04) {
@@ -756,17 +794,17 @@ mod tests {
     fn a_lease_is_the_walks_grace_and_letting_the_key_up_stops_it_on_the_tick() {
         let map = plain();
         let mut w = World::new(1);
-        w.spawn_player(&map, 32, 32);
+        w.spawn_player(&map, 32, 32, 0.0);
         let start = w.player().unwrap().metres();
         // The held-key set hands the walk what its keys have left, so a
         // lease shorter than the tick walks only its own worth.
-        w.walk_for((1.0, 0.0), false, Some(Facing::Right), 0.02);
+        w.walk_for((1.0, 0.0), 0.0, false, Some(Facing::Right), 0.02);
         assert!(!w.step_walk(&map, 0.04), "a spent lease ends the walk");
         let speed = map.assets.creatures[PLAYER as usize].speed;
         assert!((w.player().unwrap().metres().0 - start.0 - speed * 0.02).abs() < 0.0051);
         // Releasing the last key stops the figure where it stands, without
         // waiting out the grace, and rests its stride.
-        w.walk_for((1.0, 0.0), false, None, World::GRACE);
+        w.walk_for((1.0, 0.0), 0.0, false, None, World::GRACE);
         assert!(w.step_walk(&map, 0.04));
         let (x, y) = w.player().unwrap().metres();
         assert!(w.stop_walk(), "they were walking");
@@ -782,7 +820,7 @@ mod tests {
         // The pond is tile (5, 4): its edge is a metre east of the spawn.
         let map = pond_map();
         let mut w = World::new(1);
-        w.spawn_player(&map, 4, 4);
+        w.spawn_player(&map, 4, 4, 0.0);
         for _ in 0..60 {
             w.walk_toward((1.0, 0.0), false, None);
             w.step_walk(&map, 0.04);
@@ -805,9 +843,9 @@ mod tests {
 
     #[test]
     fn the_pose_cycles_by_distance_through_a_stride_and_rests_at_zero() {
-        let mut e = Entity::at_tile(0, 0, 0);
+        let mut e = Entity::at_tile(0, 0, 0, 0.0);
         assert_eq!(e.pose(4), None, "at rest");
-        e.walk = Some(Walk { dir: (1.0, 0.0), grace: 1.0, factor: 1.0, carry: (0.0, 0.0) });
+        e.walk = Some(Walk { dir: (1.0, 0.0), grace: 1.0, factor: 1.0, turn: 0.0, carry: (0.0, 0.0) });
         for (walked, pose) in [(0.0, 0), (0.17, 0), (0.18, 1), (0.36, 2), (0.6, 3), (0.71, 0), (1.05, 2)] {
             e.walked = walked;
             assert_eq!(e.pose(4), Some(pose), "{walked} m into a 0.7 m stride of four");
@@ -821,7 +859,7 @@ mod tests {
     fn facing_follows_the_press_and_persists_when_stopped() {
         let map = plain();
         let mut w = World::new(1);
-        w.spawn_player(&map, 32, 32);
+        w.spawn_player(&map, 32, 32, 0.0);
         assert_eq!(w.player().unwrap().facing, Facing::Right, "as the art is drawn");
         w.walk_toward((-1.0, 0.0), false, Some(Facing::Left));
         assert_eq!(w.player().unwrap().facing, Facing::Left);
@@ -831,6 +869,118 @@ mod tests {
         assert_eq!(w.player().unwrap().facing, Facing::Left, "and so does stopping");
         w.walk_toward((1.0, 0.0), true, Some(Facing::Right));
         assert_eq!(w.player().unwrap().facing, Facing::Right);
+    }
+
+    /// The keys down under each coupling (ADR-009): the yardstick is a
+    /// camera looking south, where the screen's up is north and the body
+    /// spawns facing it.
+    fn looking_south(map: &Map) -> Camera {
+        let mut cam = Camera::isometric(3);
+        cam.set_angle(0.0);
+        cam.look_at(32, 32, map, 120, 40);
+        cam
+    }
+
+    fn key(code: char, dir: (i32, i32)) -> Held {
+        let mut held = Held::new(true);
+        held.press(KeyCode::Char(code), dir, false);
+        held
+    }
+
+    #[test]
+    fn a_walk_key_reads_against_the_view_or_against_the_body() {
+        let map = plain();
+        let mut cam = looking_south(&map);
+        let forward = key('w', (0, -1));
+        let north = (0.0, -1.0);
+        let mut view = World::new(1);
+        view.spawn_player(&map, 32, 32, cam.angle());
+        let mut body = World::new(1);
+        body.spawn_player(&map, 32, 32, cam.angle());
+        assert!((body.player().unwrap().heading().1 + 1.0).abs() < 1e-6, "the body spawns facing where the view looks");
+        for (w, coupling) in [(&mut view, Coupling::BodyTurns), (&mut body, Coupling::ViewOnly)] {
+            walk_keys(w, &cam, coupling, true, &forward);
+            let dir = w.player().unwrap().walk.unwrap().dir;
+            assert!((dir.0 - north.0).abs() < 1e-4 && (dir.1 - north.1).abs() < 1e-4, "{coupling:?} walks away from the eye: {dir:?}");
+        }
+        // Turning the view turns a walk in progress under `body-turns`;
+        // under `view-only` the walk stays on the body's own yaw.
+        cam.rotate_by(std::f32::consts::FRAC_PI_2, 120, 40);
+        walk_keys(&mut view, &cam, Coupling::BodyTurns, true, &forward);
+        let turned = view.player().unwrap().walk.unwrap().dir;
+        assert!((turned.0 + 1.0).abs() < 1e-4 && turned.1.abs() < 1e-4, "the walk turned with the view: {turned:?}");
+        walk_keys(&mut body, &cam, Coupling::ViewOnly, true, &forward);
+        let held = body.player().unwrap().walk.unwrap().dir;
+        assert!((held.0 - north.0).abs() < 1e-4 && (held.1 - north.1).abs() < 1e-4, "the body walks where it faces: {held:?}");
+        // Along the map axes neither coupling reads the view, and a body
+        // facing north walks the same way the key names.
+        for coupling in [Coupling::BodyTurns, Coupling::ViewOnly] {
+            let mut w = World::new(1);
+            w.spawn_player(&map, 32, 32, 0.0);
+            walk_keys(&mut w, &cam, coupling, false, &forward);
+            let dir = w.player().unwrap().walk.unwrap().dir;
+            assert!((dir.0 - north.0).abs() < 1e-4 && (dir.1 - north.1).abs() < 1e-4, "{coupling:?} under map axes: {dir:?}");
+        }
+        // A diagonal key means nothing against a body yaw, so it turns the
+        // body to the direction it names and walks that.
+        let mut d = World::new(1);
+        d.spawn_player(&map, 32, 32, 0.0);
+        walk_keys(&mut d, &cam, Coupling::ViewOnly, false, &key('u', (1, -1)));
+        let p = *d.player().unwrap();
+        let root = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((p.heading().0 - root).abs() < 1e-4 && (p.heading().1 + root).abs() < 1e-4, "turned north-east: {:?}", p.heading());
+        assert_eq!(p.walk.unwrap().dir, p.heading(), "and walks it");
+    }
+
+    #[test]
+    fn a_turn_key_spends_the_creatures_turn_and_a_tap_turns_the_graces_worth() {
+        let map = plain();
+        let cam = looking_south(&map);
+        let rate = map.assets.creatures[PLAYER as usize].turn;
+        assert!((rate - 180.0).abs() < 1e-6, "the person turns at 180 degrees a second");
+        // Half a second on the turn key is a quarter turn to the left, and
+        // the body stands where it was: a turn is not a step.
+        let left = key('a', (-1, 0));
+        let mut w = World::new(1);
+        w.spawn_player(&map, 32, 32, 0.0);
+        let start = w.player().unwrap().metres();
+        for _ in 0..13 {
+            walk_keys(&mut w, &cam, Coupling::ViewOnly, true, &left);
+            w.step_walk(&map, 0.04);
+        }
+        let p = *w.player().unwrap();
+        assert!((p.yaw.to_degrees() - rate * 0.52).abs() < 0.01, "{} degrees after 0.52 s", p.yaw.to_degrees());
+        assert_eq!(p.metres(), start, "turning on the spot walks nowhere");
+        // A tap turns the grace's worth and no more, whichever way.
+        let mut t = World::new(1);
+        t.spawn_player(&map, 32, 32, 0.0);
+        walk_keys(&mut t, &cam, Coupling::ViewOnly, true, &key('d', (1, 0)));
+        while t.step_walk(&map, 0.04) {}
+        assert!((t.player().unwrap().yaw.to_degrees() + rate * World::GRACE).abs() < 0.01, "{}", t.player().unwrap().yaw.to_degrees());
+    }
+
+    #[test]
+    fn a_pace_held_with_a_turn_walks_a_curve_of_radius_speed_over_turn() {
+        let map = plain();
+        let cam = looking_south(&map);
+        let creature = &map.assets.creatures[PLAYER as usize];
+        let radius = creature.speed / creature.turn.to_radians();
+        let mut held = key('w', (0, -1));
+        held.press(KeyCode::Char('a'), (-1, 0), false);
+        let mut w = World::new(1);
+        w.spawn_player(&map, 32, 32, 0.0);
+        let start = w.player().unwrap().metres();
+        // A second of it is a half turn at 180 degrees a second, which
+        // lands the figure a diameter to the left of where it started.
+        for _ in 0..25 {
+            walk_keys(&mut w, &cam, Coupling::ViewOnly, true, &held);
+            w.step_walk(&map, 0.04);
+        }
+        let p = *w.player().unwrap();
+        let (dx, dy) = (p.metres().0 - start.0, p.metres().1 - start.1);
+        assert!((p.yaw.to_degrees() - 180.0).abs() < 0.01, "half a turn: {} degrees", p.yaw.to_degrees());
+        assert!((dx.hypot(dy) - 2.0 * radius).abs() < 0.02, "{} m across a curve of radius {radius} m", dx.hypot(dy));
+        assert!(dx < 0.0 && dy.abs() < 0.1, "to the left of a walk north: {dx}, {dy}");
     }
 
     #[test]
@@ -969,7 +1119,7 @@ mod tests {
     fn player_never_walks_into_generated_water() {
         let map = Map::new(32, 32, 7, test_assets());
         let mut w = World::new(7);
-        w.spawn_player(&map, 16, 16);
+        w.spawn_player(&map, 16, 16, 0.0);
         let p = *w.player().unwrap();
         assert_ne!(map.get(p.mx(), p.my()).unwrap().terrain, Terrain::Water);
         for _ in 0..600 {

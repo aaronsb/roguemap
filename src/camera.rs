@@ -2073,7 +2073,7 @@ mod tests {
         let assets = crate::assets::test_assets();
         let map = Map::synthetic(64, 64, assets, 0, |_, _| crate::map::Tile::flat(5));
         let mut world = World::new(1);
-        world.spawn_player(&map, 32, 32);
+        world.spawn_player(&map, 32, 32, 0.0);
         let (sw, sh) = (120, 40);
         let mut cam = Camera::isometric(3);
         cam.look_at_entity(world.player().unwrap(), &map, sw, sh);
@@ -2139,7 +2139,7 @@ mod tests {
         let assets = crate::assets::test_assets();
         let map = Map::synthetic(16, 16, assets.clone(), 0, |_, _| crate::map::Tile::flat(5));
         let mut world = World::new(1);
-        world.spawn_player(&map, 8, 8);
+        world.spawn_player(&map, 8, 8, 0.0);
         let p = world.player().unwrap();
         let (x, y) = p.pos();
         let person = assets.creatures[p.kind as usize].size[2];

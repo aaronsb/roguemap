@@ -240,6 +240,8 @@ pub struct Creature {
     pub can_enter: Vec<Terrain>,
     /// Metres per second.
     pub speed: f32,
+    /// Degrees per second the body turns on the spot (ADR-009).
+    pub turn: f32,
     pub diet: Vec<String>,
     pub behaviour: String,
     /// Perception range in tiles.

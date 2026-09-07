@@ -6,11 +6,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
+use crossterm::event::KeyCode;
+
 use crate::assets::Assets;
 use crate::blocks::Stack;
 use crate::camera::Camera;
 use crate::canvas::Canvas;
 use crate::frame::{FrameCtx, Frames};
+use crate::input::{self, Coupling, Held};
 use crate::map::{FixtureSpec, Flora, Map, Terrain};
 use crate::render::{FogMode, Renderer, Scene};
 use crate::settings::Settings;
@@ -68,8 +71,9 @@ impl SnapArgs {
 /// ADR-009), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
 /// character stands on; a perspective view's default is cx, cy), walk
-/// (`KEY,SECONDS`: hold a walk key that long in 40 ms ticks, ADR-008)
-/// with run (1 for the run speed).
+/// (`KEYS,SECONDS`: hold those walk keys that long in 40 ms ticks,
+/// ADR-008) with run (1 for the run speed), coupling (body-turns or
+/// view-only: whether the body turns with the view, ADR-009).
 pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> Canvas {
     let a = SnapArgs::parse(args);
     let (sw, sh) = (w as i32, h as i32);
@@ -100,6 +104,11 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     // in degrees, fov= through its row where the row lists the value.
     let mode = a.text("camera").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).unwrap_or(0);
     settings.set("camera", mode);
+    // coupling=body-turns|view-only is whether the body turns with the
+    // view (ADR-009), which is what the walk keys below mean.
+    if let Some(c) = a.text("coupling").and_then(|c| Coupling::NAMES.iter().position(|n| *n == c)) {
+        settings.set("coupling", c);
+    }
     let fov = a.kv.get("fov").and_then(|v| v.parse::<f32>().ok());
     if let Some(fov) = fov {
         settings.set_fov_near(fov);
@@ -175,12 +184,12 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
                 map.set_stack(mx + 3 + dx, my - 1 + dy, Some(Stack { kind: house, levels: 1 }));
             }
         }
-        world.spawn_player(&map, mx, my);
+        world.spawn_player(&map, mx, my, cam.angle());
     } else if a.flag("player") || cam.is_perspective() {
         // A perspective view is placed from the character, so it always
         // has one, standing at the view centre; px, py put them elsewhere.
         let (px, py) = if cam.is_perspective() { (cx, cy) } else { (map.w as i32 / 2, map.h as i32 / 2) };
-        world.spawn_player(&map, a.num("px", px as f32) as i32, a.num("py", py as f32) as i32);
+        world.spawn_player(&map, a.num("px", px as f32) as i32, a.num("py", py as f32) as i32, cam.angle());
     }
     // player_dx / player_dy walk the player from the spawn, in centimetres,
     // the way a run of keypresses would, so a stepped figure is reproducible.
@@ -196,21 +205,23 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     if let Some(p) = world.player().filter(|_| cam.is_perspective()) {
         cam.look_at_entity(p, &map, sw, sh);
     }
-    // walk=KEY,SECONDS holds a walk key (w, a, s, d) for that long in
-    // 40 ms ticks of the same walk and camera follow the game runs
-    // (ADR-008), with run=1 for the run speed, so a frame mid-stride is
+    // walk=KEYS,SECONDS holds walk keys (w, a, s, d and the diagonals) for
+    // that long in 40 ms ticks of the same held-key set, walk and camera
+    // follow the game runs (ADR-008, ADR-009), with run=1 for the run
+    // speed, so a frame mid-stride — or mid-curve under view-only — is
     // reproducible.
-    if let Some((key, secs)) = a.text("walk").and_then(|w| w.split_once(',')) {
-        let key = key.chars().next().unwrap_or('d');
+    if let Some((keys, secs)) = a.text("walk").and_then(|w| w.split_once(',')) {
         let ticks = (secs.parse::<f32>().unwrap_or(0.0) / TICK).round().max(0.0) as usize;
-        if let Some(crate::input::Action::Walk(dx, dy)) = crate::input::lookup(crate::input::SCENE, crossterm::event::KeyCode::Char(key), false) {
-            let heading = cam.heading(settings.screen_space(), dx, dy);
-            let facing = cam.facing_of(heading);
-            for _ in 0..ticks {
-                world.walk_toward(heading, a.flag("run"), facing);
-                world.step_walk(&map, TICK);
-                cam.follow(&world, &map, sw, sh);
+        let mut held = Held::new(true);
+        for key in keys.chars() {
+            if let Some((dir, run)) = input::lookup(input::SCENE, KeyCode::Char(key), false).and_then(Held::movement) {
+                held.press(KeyCode::Char(key), dir, run || a.flag("run"));
             }
+        }
+        for _ in 0..ticks {
+            input::walk_keys(&mut world, &cam, settings.coupling(), settings.screen_space(), &held);
+            world.step_walk(&map, TICK);
+            cam.follow(&world, &map, sw, sh);
         }
     }
     let t = a.num("t", 0.0);

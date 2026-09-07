@@ -68,7 +68,7 @@ impl App {
         settings.apply(&mut map, &mut world, &mut cam);
         cam.set_zoom(Camera::fitting_zoom(&map, sw, sh), sw, sh);
         cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
-        world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
+        world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2, cam.angle());
         let inset_corner = settings.get("inset").max(1);
         App {
             map,
@@ -113,22 +113,18 @@ impl App {
         self.held.tick(dt);
     }
 
-    /// Point the walk where the keys down say (ADR-008): the normalised
-    /// sum of what each one means, which is a diagonal for two of them and
-    /// nothing for two opposite ones, held for as long as their leases
-    /// have left. With no key down the figure stops on this tick.
+    /// Point the walk where the keys down say (ADR-008, ADR-009): under
+    /// `body-turns` the normalised sum of what each key means on screen,
+    /// read against the view every tick; under `view-only` a pace and a
+    /// turn about the body's own yaw. With no key down the figure stops on
+    /// this tick.
     fn walk_held(&mut self) {
         // A focused frame owns the keyboard, so the figure stands still
         // under one; the keys count again when it closes.
         if self.frames.focus().is_some() {
             self.held.clear();
         }
-        let Some(dir) = self.cam.held_heading(self.settings.screen_space(), self.held.dirs()) else {
-            self.world.stop_walk();
-            return;
-        };
-        self.world.walk_for(dir, self.held.running(), self.cam.facing_of(dir), self.held.grace());
-        self.settling = true;
+        self.settling |= input::walk_keys(&mut self.world, &self.cam, self.settings.coupling(), self.settings.screen_space(), &self.held);
     }
 
     fn resize(&mut self, w: i32, h: i32) {
