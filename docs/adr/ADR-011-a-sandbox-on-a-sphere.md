@@ -378,8 +378,8 @@ different renderer.
   | 1, the plumbing | none | the sag is zero, the reach is today's `far`, and the far pass is not built. `GOLDEN_STRICT=1` says so |
   | 2, the step cap | `chase`, `shoulder`, `firstperson` | the cap bites past 104 m, where the fade has already taken three quarters of the colour. The fuzzy comparison may pass all three |
   | 3, the curvature on | the far-zoom frames and the 1:8 insets | below |
-  | 4, the three distances | `chase`, `shoulder`, `firstperson` | an atmosphere over kilometres fades their far ground far less than 120 m does |
-  | 5, the far tier | `firstperson` | the island's surroundings become sea to a horizon where they were sky |
+  | 4, the three distances | `settings` | its new `reach` row. The atmosphere lands dark, so the perspective frames hold |
+  | 5, the far tier | `chase`, `shoulder`, `firstperson`, then `firstperson` again | the atmosphere turned on fades their far ground far less than 120 m does; and the island's surroundings become sea to a horizon where they were sky. Plus `horizon` and `shore`, new |
 
   Stage 3 is the one to predict carefully. The sea surface sits exactly on
   0.0, which is on the walk's height lattice, so a millimetre of sag moves
