@@ -215,6 +215,19 @@ and is visible. The angle is kept across the switch back, as ADR-009
 keeps the tilt across a mode round trip, so the pair of switches returns
 the view it left only when the angle was inside both ranges.
 
+**The vantage's angle is remembered, as its zoom is.** One field for the
+angle is what the camera is doing now, which is not what a vantage was
+left at. ADR-009 decided the second: the tilt is "kept through a zoom
+step and through a round trip into a perspective mode and back, the way
+the zoom already is", and a player who tilts the table, enters the chase
+view to look at something and comes back set that angle deliberately. So
+the table carries a remembered angle beside its zoom, written whenever
+the table's angle is set and restored when a vantage switch lands on the
+table. A placement comes up at its own angle, as it always has, and
+`pitch` stays one live field under one clamp per projection. The build
+found this: merging the field without the memory returns a table tilted
+to 60 at 30 after a trip through the chase view.
+
 `relief` stays an orthographic idea and stays on the table: a perspective
 view has no vertical exaggeration to give, and the relief multiplies a
 cosine the perspective basis takes from the eye. ADR-009's zeroing of
@@ -251,7 +264,11 @@ things at the limits, checked:
   the number ADR-009 pinned — for the table under either projection. The
   level of detail, the sprite tier and the walk's step count then move
   with neither the tilt nor the projection, which is ADR-009's rule with
-  one word added.
+  one word added. A residue survives it where a placement pushes its
+  screen centre past the character: the shoulder view's `depth_ref`
+  projects that push onto the view direction, so its detail scale still
+  moves a little with the angle. What the correction removes is the
+  cosine.
 - An upward ray costs less than a level one. `Renderer::ray_march`
   bounds `t1` by `(grid.max_top - ez) / dz` when the ray climbs, so it
   stops at the tallest geometry in the grid rather than at `sc.far`, and
@@ -420,9 +437,11 @@ hexagonal event grid stay where ADR-009 left them.
   re-recorded, and every other decision here stands unaltered.
 - `Camera::tilt`, `tilt_degrees` and `set_tilt` fold into `pitch`,
   `pitch_degrees` and `set_pitch`, with the clamp read from the
-  projection. `pitch_by` loses its branch. The snapshot's `tilt=` becomes
-  `pitch=`; the two shot lines that carry `tilt=90` (`plan` and
-  `overhead`) say `pitch=90` and render the same frames to the bit.
+  projection. `pitch_by` loses its branch. The table's remembered angle
+  stays a field of its own beside `zoom`, which `in_mode` restores when
+  it lands on the table. The snapshot's `tilt=` becomes `pitch=`; the two
+  shot lines that carry `tilt=90` (`plan` and `overhead`) say `pitch=90`
+  and render the same frames to the bit.
 - `Camera::in_projection(index)` is `in_mode`'s sibling: it keeps the
   yaw, the anchor, the zoom, the angle and the field-of-view override,
   clamps the angle into the new projection's range, and returns the

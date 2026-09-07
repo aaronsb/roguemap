@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(wind.values[0], "auto");
         // The camera row's values are the camera's own modes (ADR-007).
         assert_eq!(a.setting("camera").unwrap().values, Camera::MODES);
-        assert_eq!(a.setting("camera").unwrap().values[a.setting("camera").unwrap().default as usize], "isometric");
+        assert_eq!(a.setting("camera").unwrap().values[a.setting("camera").unwrap().default as usize], "table");
         // The fog row's values are the renderer's fog modes, and the field
         // of view row is `preset` then whole degrees, rising.
         assert_eq!(a.setting("fog").unwrap().values, FogMode::NAMES);
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(world.day_secs, DAY_LENGTHS[s.get("day_length")]);
         assert!(opts.aa && opts.clouds, "the defaults draw everything");
         assert_eq!(opts.fog, FogMode::Perspective);
-        assert!(!cam.is_perspective() && cam.mode_index() == 0, "the default camera is the isometric mode");
+        assert!(!cam.is_perspective() && cam.mode_index() == 0, "the default camera is the table");
 
         s.set("view", 1);
         s.set("clock", 1);
@@ -279,7 +279,7 @@ mod tests {
         assert!((cam.fov_degrees() - 60.0).abs() < 1e-3, "preset gives the chase view its own sixty degrees");
         s.set("camera", 0);
         s.apply(&mut map, &mut world, &mut cam);
-        assert!(!cam.is_perspective(), "and back to the isometric mode");
+        assert!(!cam.is_perspective(), "and back to the table");
         // The fov keys step the row's degrees from wherever the camera
         // shows and never wrap through `preset`.
         s.set("camera", 2);

@@ -92,7 +92,7 @@ pub const SCENE: &[Binding] = &[
     Binding { shift: false, keys: &[(Char('L'), Toggle("history"))], label: "L", help: "history" },
     Binding { shift: false, keys: &[(Char('C'), Toggle("conversation"))], label: "C", help: "talk" },
     Binding { shift: false, keys: &[(Char('x'), Toggle("inset"))], label: "x", help: "inset" },
-    Binding { shift: false, keys: &[(Char('{'), Pitch(-5.0)), (Char('}'), Pitch(5.0))], label: "{ }", help: "tilt" },
+    Binding { shift: false, keys: &[(Char('{'), Pitch(-5.0)), (Char('}'), Pitch(5.0))], label: "{ }", help: "look" },
     Binding { shift: false, keys: &[(Char('<'), Step("fov", -1)), (Char('>'), Step("fov", 1))], label: "< >", help: "fov" },
     // The roguelike diagonals, so one key is a diagonal in a terminal that
     // cannot report two keys held at once (ADR-008); the capitals run.
@@ -623,7 +623,7 @@ mod tests {
         // Forty-five columns right is a quarter turn at two degrees each.
         let Some(Look::Turn(yaw, _)) = m.event(at(MouseEventKind::Drag(Left), 55, 10), MouseMode::Drag) else { panic!("a drag turns") };
         assert_eq!(yaw, -90.0);
-        let mut cam = Camera::isometric(3);
+        let mut cam = Camera::table(3);
         cam.set_angle(0.0);
         assert_eq!(cam.forward(), (0.0, 1.0), "a yaw of zero looks south");
         cam.rotate_by(yaw.to_radians(), 120, 40);
@@ -632,26 +632,26 @@ mod tests {
         // The rows tilt the table from its floor of 30 degrees to straight
         // down and no further (ADR-009); a chase view pitches instead, and
         // stops at the end of its range.
-        assert_eq!(cam.tilt_degrees(), 30);
+        assert_eq!(cam.pitch_degrees(), 30);
         cam.pitch_by((5.0 * Mouse::PITCH_PER_ROW).to_radians());
-        assert_eq!(cam.tilt_degrees(), 45, "fifteen rows down is fifteen degrees steeper");
+        assert_eq!(cam.pitch_degrees(), 45, "fifteen rows down is fifteen degrees steeper");
         for _ in 0..40 {
             cam.pitch_by((10.0 * Mouse::PITCH_PER_ROW).to_radians());
         }
-        assert_eq!(cam.tilt_degrees(), 90, "however far the pointer is dragged down");
+        assert_eq!(cam.pitch_degrees(), 90, "however far the pointer is dragged down");
         for _ in 0..80 {
             cam.pitch_by((-10.0 * Mouse::PITCH_PER_ROW).to_radians());
         }
-        assert_eq!(cam.tilt_degrees(), 30, "and up");
+        assert_eq!(cam.pitch_degrees(), 30, "and up");
         let mut chase = Camera::chase(std::f32::consts::FRAC_PI_4);
         for _ in 0..40 {
             chase.pitch_by((10.0 * Mouse::PITCH_PER_ROW).to_radians());
         }
-        assert_eq!(chase.pitch_degrees(), 85, "however far the pointer is dragged down");
+        assert_eq!(chase.pitch_degrees(), 90, "however far the pointer is dragged down");
         for _ in 0..80 {
             chase.pitch_by((-10.0 * Mouse::PITCH_PER_ROW).to_radians());
         }
-        assert_eq!(chase.pitch_degrees(), -80, "and up");
+        assert_eq!(chase.pitch_degrees(), -90, "and up");
     }
 
     /// The keys down against a body that carries its own yaw (ADR-009).
@@ -691,7 +691,7 @@ mod tests {
         let scene = help_line(SCENE, "  ");
         assert!(scene.len() > 120, "the scene help line already runs past 120 columns");
         assert_eq!(&scene[..120], " tab settings  m world map  wasd/hjkl walk  arrows pan  shift+arrows run  c centre  r/R ( ) rotate  z/Z zoom  v fill  g ");
-        for entry in ["yubn diagonals", "V free camera"] {
+        for entry in ["{ } look", "yubn diagonals", "V free camera"] {
             assert!(scene.find(entry).is_some_and(|at| at > 120), "{entry}: an entry added to the table falls past the columns the golden frames pin");
         }
         for frame in ["inventory", "stats", "history", "conversation"] {
