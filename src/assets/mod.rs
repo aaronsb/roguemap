@@ -32,7 +32,8 @@ mod embedded {
 }
 
 /// The table files every asset set must have, in load order.
-pub const TABLES: [&str; 11] = ["biomes.toml", "species.toml", "materials.toml", "props.toml", "blocks.toml", "creatures.toml", "surfaces.toml", "lights.toml", "settings.toml", "ui.toml", "tree_styles.toml"];
+pub const TABLES: [&str; 12] =
+    ["biomes.toml", "species.toml", "materials.toml", "props.toml", "blocks.toml", "creatures.toml", "surfaces.toml", "lights.toml", "settings.toml", "ui.toml", "tree_styles.toml", "editor-ui.toml"];
 
 /// Where a set of assets came from.
 #[derive(Clone, Debug, PartialEq)]
@@ -168,6 +169,8 @@ pub struct Raw {
     pub settings: SettingsFile,
     pub ui: UiFile,
     pub tree_styles: TreeStylesFile,
+    /// The editor's panes, the same shape as `ui`.
+    pub editor_ui: UiFile,
     /// (relative path, file).
     pub tilesets: Vec<(String, TilesetFile)>,
 }
@@ -186,6 +189,9 @@ pub struct Assets {
     pub settings: Vec<SettingItem>,
     /// Overlay frames (ADR-005).
     pub frames: Vec<FrameSpec>,
+    /// The asset editor's panes, the same system over its own content
+    /// kinds (ADR-005 step 6).
+    pub editor_frames: Vec<FrameSpec>,
     /// Growth habits for L-system species (docs/lsystem.md).
     pub styles: Vec<Style>,
     pub tilesets: Vec<TilesetSpec>,
@@ -402,6 +408,48 @@ fn styles(raw: &TreeStylesFile) -> Result<Vec<Style>, AssetError> {
     Ok(out)
 }
 
+/// Resolve one table of overlay frames (ADR-005): `ui.toml` for the game
+/// and `editor-ui.toml` for the editor, which share the row shape and
+/// differ only in the content kinds their code supplies.
+fn frame_rows(ctx: &Ctx, rows: &[FrameRow], kinds: &[&str], category: &str) -> Result<Vec<FrameSpec>, AssetError> {
+    let names: Vec<&str> = rows.iter().map(|f| f.name.as_str()).collect();
+    unique(ctx, &names)?;
+    let mut frames = Vec::new();
+    for (i, f) in rows.iter().enumerate() {
+        described(ctx, i, &f.name, &f.identity)?;
+        let content = f.content.clone().unwrap_or_else(|| f.name.clone());
+        if !kinds.contains(&content.as_str()) {
+            return Err(ctx.row(i, &f.name, format!("unknown content kind {content:?}; code supplies {}", kinds.join(", "))));
+        }
+        let key = match &f.key {
+            None => None,
+            Some(k) => Some(parse_key(k).ok_or_else(|| ctx.row(i, &f.name, format!("unknown key {k:?}; name a key as \"tab\", \"esc\", \"enter\", \"space\" or one character")))?),
+        };
+        if f.size.min_cols < 0 || f.size.min_rows < 0 {
+            return Err(ctx.row(i, &f.name, "minimum size is negative"));
+        }
+        if [f.margin.left, f.margin.top, f.margin.right, f.margin.bottom].iter().any(|n| *n < 0) {
+            return Err(ctx.row(i, &f.name, "margin is negative"));
+        }
+        frames.push(FrameSpec {
+            name: f.name.clone(),
+            identity: Identity::from_row(&f.identity, category),
+            title: f.title.clone(),
+            content,
+            anchor: f.anchor,
+            size: f.size,
+            margin: f.margin,
+            border: f.border,
+            background: f.background,
+            z: f.z,
+            priority: f.priority,
+            show: f.show,
+            key,
+        });
+    }
+    Ok(frames)
+}
+
 fn described(ctx: &Ctx, i: usize, row: &str, id: &IdentityRow) -> Result<(), AssetError> {
     if id.description.trim().is_empty() {
         return Err(ctx.row(i, row, "missing description"));
@@ -538,6 +586,7 @@ impl Assets {
             settings: parse(TABLES[8], text(TABLES[8])?)?,
             ui: parse(TABLES[9], text(TABLES[9])?)?,
             tree_styles: parse(TABLES[10], text(TABLES[10])?)?,
+            editor_ui: parse(TABLES[11], text(TABLES[11])?)?,
             tilesets: {
                 let mut v = Vec::new();
                 for (p, t) in &files {
@@ -951,39 +1000,10 @@ impl Assets {
             settings.push(SettingItem { key: s.key.clone(), identity: Identity::from_row(&s.identity, "settings"), label: s.label.clone(), values: s.values.clone(), default: s.default, shortcut: s.shortcut });
         }
 
-        // ui frames
-        let ctx = Ctx { file: TABLES[9], table: "frame" };
-        let frame_names: Vec<&str> = raw.ui.frame.iter().map(|f| f.name.as_str()).collect();
-        unique(&ctx, &frame_names)?;
-        let mut frames = Vec::new();
-        for (i, f) in raw.ui.frame.iter().enumerate() {
-            described(&ctx, i, &f.name, &f.identity)?;
-            let content = f.content.clone().unwrap_or_else(|| f.name.clone());
-            if !crate::ui::CONTENT_KINDS.contains(&content.as_str()) {
-                return Err(ctx.row(i, &f.name, format!("unknown content kind {content:?}; code supplies {}", crate::ui::CONTENT_KINDS.join(", "))));
-            }
-            let key = match &f.key {
-                None => None,
-                Some(k) => Some(parse_key(k).ok_or_else(|| ctx.row(i, &f.name, format!("unknown key {k:?}; name a key as \"tab\", \"esc\", \"enter\", \"space\" or one character")))?),
-            };
-            if f.size.min_cols < 0 || f.size.min_rows < 0 {
-                return Err(ctx.row(i, &f.name, "minimum size is negative"));
-            }
-            frames.push(FrameSpec {
-                name: f.name.clone(),
-                identity: Identity::from_row(&f.identity, "ui"),
-                title: f.title.clone(),
-                content,
-                anchor: f.anchor,
-                size: f.size,
-                border: f.border,
-                background: f.background,
-                z: f.z,
-                priority: f.priority,
-                show: f.show,
-                key,
-            });
-        }
+        // ui frames, for the game and for the editor's panes: one shape,
+        // one loader, a content kind list each.
+        let frames = frame_rows(&Ctx { file: TABLES[9], table: "frame" }, &raw.ui.frame, &crate::ui::CONTENT_KINDS, "ui")?;
+        let editor_frames = frame_rows(&Ctx { file: TABLES[11], table: "frame" }, &raw.editor_ui.frame, &crate::editor::ui::CONTENT_KINDS, "editor ui")?;
 
         // tilesets
         if raw.tilesets.is_empty() {
@@ -1002,7 +1022,7 @@ impl Assets {
         }
         let tilesets = raw.tilesets.iter().map(|(_, t)| t.clone()).collect();
 
-        Ok(Assets { biomes, species, materials, props, blocks, creatures, surfaces, lights, settings, frames, styles: tree_styles, tilesets, art, koppen, source, raw, files })
+        Ok(Assets { biomes, species, materials, props, blocks, creatures, surfaces, lights, settings, frames, editor_frames, styles: tree_styles, tilesets, art, koppen, source, raw, files })
     }
 
     /// The files this set was loaded from, as (relative path, contents).
@@ -1039,6 +1059,7 @@ impl Assets {
             (TABLES[8].to_string(), ser(&self.raw.settings)),
             (TABLES[9].to_string(), ser(&self.raw.ui)),
             (TABLES[10].to_string(), ser(&self.raw.tree_styles)),
+            (TABLES[11].to_string(), ser(&self.raw.editor_ui)),
         ];
         for (p, t) in &self.raw.tilesets {
             out.push((p.clone(), ser(t)));
@@ -1149,6 +1170,7 @@ mod tests {
         assert_eq!(a.tilesets.len(), 2);
         assert_eq!(a.settings.len(), 11);
         assert_eq!(a.frames.len(), 9);
+        assert_eq!(a.editor_frames.len(), 8, "the editor's panes are frames too (ADR-005 step 6)");
         let fire = a.light("campfire").unwrap();
         assert!(fire.radius > 0.0 && fire.intensity > 0.0);
         let fire_ix = a.lights.iter().position(|l| l.name == "campfire");
@@ -1359,6 +1381,19 @@ mod tests {
 
         let e = replace_in("ui.toml", "name = \"stats\"", "name = \"inventory\"").unwrap_err();
         assert!(e.msg.contains("duplicate name"), "{e}");
+
+        // The editor's table goes through the same loader over its own
+        // content kinds, so a game kind is unknown there and the other way
+        // about.
+        let e = replace_in("editor-ui.toml", "content = \"strip\"", "content = \"worldmap\"").unwrap_err();
+        assert_eq!(e.file, "editor-ui.toml");
+        assert!(e.msg.contains("unknown content kind \"worldmap\""), "{e}");
+
+        let e = replace_in("ui.toml", "content = \"worldmap\"", "content = \"strip\"").unwrap_err();
+        assert!(e.msg.contains("unknown content kind \"strip\""), "{e}");
+
+        let e = replace_in("editor-ui.toml", "margin = { left = 20, bottom = 1 }", "margin = { left = -20 }").unwrap_err();
+        assert!(e.msg.contains("margin is negative"), "{e}");
 
         let e = replace_in("art/player/tiny.txt", "@", "\t@").unwrap_err();
         assert_eq!((e.file.as_str(), e.line), ("art/player/tiny.txt", Some(2)));

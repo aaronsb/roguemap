@@ -1,7 +1,9 @@
 //! The asset editor (ADR-003), headless: the document model, field
-//! descriptors, key tables, fixtures and previews, and the screen layout.
+//! descriptors, key tables, fixtures and previews, and the screen's panes.
 //! `Editor` is the state machine: it consumes `Action`s and draws into a
 //! `Canvas`; `src/bin/roguemap-edit.rs` is the terminal loop around it.
+//! The panes are frames — rows of `assets/editor-ui.toml` placed by
+//! `src/frame.rs` (ADR-005) — and `ui.rs` says what goes inside them.
 
 pub mod document;
 pub mod fields;
@@ -15,6 +17,7 @@ use std::rc::Rc;
 use crate::assets::schema::TIERS;
 use crate::assets::{ArtFile, Assets, Tier};
 use crate::canvas::Canvas;
+use crate::frame::Panes;
 use crate::tileset::Tileset;
 use document::{Document, SaveError};
 use fields::{Field, Kind, TableKind};
@@ -143,6 +146,10 @@ pub struct Editor {
     pub quit: bool,
     pub sw: i32,
     pub sh: i32,
+    /// The screen's panes: the rows of `assets/editor-ui.toml` with the
+    /// content kind each names (ADR-005).
+    pub panes: Panes<Editor>,
+    /// Where the panes ended up, resolved on every resize.
     pub layout: Layout,
     fixture: Option<Fixture>,
     preview_stale: bool,
@@ -156,6 +163,7 @@ impl Editor {
         let tilesets = Tileset::all(&assets);
         let settings = PreviewSettings { biome: assets.biomes.iter().position(|b| b.koppen == "Cf").unwrap_or(0), ..PreviewSettings::default() };
         let n = doc.table_count();
+        let panes = ui::panes(&assets);
         let mut ed = Editor {
             doc,
             assets,
@@ -175,6 +183,7 @@ impl Editor {
             quit: false,
             sw,
             sh,
+            panes,
             layout: Layout::default(),
             fixture: None,
             preview_stale: true,
@@ -191,10 +200,19 @@ impl Editor {
         Ok(Editor::new(doc, assets, sw, sh))
     }
 
+    /// Lay the panes out for a screen size and give the previews the tiles
+    /// the strip left them. Twice, because the strip's own minimum decides
+    /// the collapse and what is under it is sized to what the surviving
+    /// strip leaves: the first pass settles which strip showed, the second
+    /// sizes the form to it.
     pub fn resize(&mut self, w: i32, h: i32) {
         self.sw = w;
         self.sh = h;
-        self.layout = ui::layout(w, h, self.doc.table_count(), self.settings.tier);
+        for _ in 0..2 {
+            let placed = self.panes.layout(w, h, self);
+            let layout = ui::resolve(&self.panes, &placed, self);
+            self.layout = layout;
+        }
         let sizes: Vec<(Tier, i32, i32)> = self.layout.panes.iter().map(|(t, r)| (*t, r.w, r.h)).collect();
         self.preview.resize(&sizes, self.layout.small);
         self.preview_stale = true;
@@ -960,8 +978,13 @@ impl Editor {
 
     // Drawing
 
-    /// Render the previews if anything changed, then the screen.
+    /// Render the previews if anything changed, then the screen. The panes
+    /// are laid out for the canvas, so a canvas of another size than the
+    /// last resize lays them out again first.
     pub fn draw(&mut self, cv: &mut Canvas, t: f32) {
+        if (self.sw, self.sh) != (cv.w, cv.h) {
+            self.resize(cv.w, cv.h);
+        }
         let subject = self.subject();
         let key = (subject, self.settings.clone());
         if self.fixture_key.as_ref() != Some(&key) {

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::biome::{Cover, Form, SizeClass};
 use crate::blocks::{Ground, Roof};
 use crate::canvas::Rgb;
-use crate::frame::{Anchor, Background, Border, Show, Size};
+use crate::frame::{Anchor, Background, Border, Margin, Show, Size};
 use crate::map::Terrain;
 use crate::volume::Shape;
 
@@ -702,9 +702,11 @@ pub struct SettingRow {
     pub shortcut: Option<char>,
 }
 
-// ui.toml
+// ui.toml and editor-ui.toml
 
-/// The overlay frames of ADR-005, one row per frame.
+/// The overlay frames of ADR-005, one row per frame. The game's frames and
+/// the editor's panes are two files of this one shape; each names the
+/// content kinds its own code supplies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiFile {
     pub frame: Vec<FrameRow>,
@@ -739,6 +741,10 @@ pub struct FrameRow {
     pub show: Show,
     pub background: Background,
     pub size: Size,
+    /// Cells left clear at the screen's edges before the anchor places the
+    /// frame, so a screen of panes can tile.
+    #[serde(default, skip_serializing_if = "Margin::is_zero")]
+    pub margin: Margin,
 }
 
 // tilesets/*.toml

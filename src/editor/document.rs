@@ -30,9 +30,13 @@ pub enum FileKind {
     Surfaces,
     Lights,
     Settings,
-    /// The overlay frames of ADR-005. Held so the set round-trips and
-    /// validates; the editor has no pane for them yet.
+    /// The game's overlay frames of ADR-005. Held so the set round-trips
+    /// and validates; the editor has no pane for them yet.
     Ui,
+    /// The editor's own panes, the same shape (ADR-005 step 6). The screen
+    /// they lay out is the one being edited, so they are kept and written
+    /// back rather than edited here.
+    EditorUi,
     /// `tree_styles.toml`; not an editable table either, but kept and
     /// written back so a save does not lose it.
     TreeStyles,
@@ -53,6 +57,7 @@ impl FileKind {
             p if p == TABLES[8] => FileKind::Settings,
             p if p == TABLES[9] => FileKind::Ui,
             p if p == TABLES[10] => FileKind::TreeStyles,
+            p if p == TABLES[11] => FileKind::EditorUi,
             p if p.starts_with("tilesets/") && p.ends_with(".toml") => FileKind::Tileset,
             _ => return None,
         })
@@ -71,7 +76,7 @@ impl FileKind {
             FileKind::Surfaces => render_as::<SurfacesFile>(root),
             FileKind::Lights => render_as::<LightsFile>(root),
             FileKind::Settings => render_as::<SettingsFile>(root),
-            FileKind::Ui => render_as::<UiFile>(root),
+            FileKind::Ui | FileKind::EditorUi => render_as::<UiFile>(root),
             FileKind::TreeStyles => render_as::<TreeStylesFile>(root),
             FileKind::Tileset => render_as::<TilesetFile>(root),
         }
@@ -91,7 +96,7 @@ impl FileKind {
             (FileKind::Surfaces, _) => check_as::<DensityRow>(row),
             (FileKind::Lights, _) => check_as::<LightRow>(row),
             (FileKind::Settings, _) => check_as::<SettingRow>(row),
-            (FileKind::Ui, _) => check_as::<FrameRow>(row),
+            (FileKind::Ui | FileKind::EditorUi, _) => check_as::<FrameRow>(row),
             (FileKind::TreeStyles, _) => check_as::<StyleRow>(row),
             (FileKind::Tileset, _) => check_as::<TilesetFile>(row),
         }

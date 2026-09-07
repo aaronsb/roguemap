@@ -1,0 +1,135 @@
+# The asset editor's panes as frames (ADR-005 step 6). The same row shape
+# as ui.toml, over the content kinds src/editor/ui.rs supplies.
+#
+# The screen tiles from the top left: the table and row lists hold a
+# twenty-cell left column, the preview strip and the form take the rest,
+# and the status line owns the last row, which the lists and the form
+# leave clear with a bottom margin. Each pane draws a line along its top,
+# which carries its title, and one down its right, so a neighbour's edge
+# is never drawn twice.
+#
+# The collapse is the strip's own show rule: the four tiers want a screen
+# of 120 by 45, which is the tallest of them with a form under it, and on
+# anything smaller the frame is dropped and the one-tier "pane" behind it
+# shows instead. Priority does the rest: the strip outranks the pane and
+# is opaque, so the two never both draw.
+#
+# anchor      top_left top top_right left centre right bottom_left bottom
+#             bottom_right full
+# size        cols and rows are whole cells, a fraction of the screen, or
+#             "fill" (the whole axis) or "auto" (what the content asks
+#             for); min_cols and min_rows drop the frame when they do not
+#             fit
+# margin      cells kept clear at the screen edges before the anchor
+# border      none line double chrome top_right
+# background  none, opaque, or { tint = 0.0..1.0 }; only opaque frames
+#             hide the ones below them
+# z           draw order, lowest first
+# priority    which frame survives when two overlap
+# show        always, zoomed_out, zoomed_in, on_key, never,
+#             { min_columns = N } or { min_size = { columns, rows } }
+# content     the content kind code supplies; the frame's name by default
+
+[[frame]]
+name = "tables"
+description = "The list of tables down the left, as many rows as the screen affords, the current one marked."
+title = "tables"
+content = "tables"
+anchor = "top_left"
+border = "top_right"
+z = 10
+priority = 50
+show = "always"
+background = "opaque"
+size = { cols = 20, rows = "auto", min_cols = 12, min_rows = 5 }
+
+[[frame]]
+name = "rows"
+description = "The rows of the current table under the table list, with the art files each row names listed under it."
+title = "rows"
+content = "rows"
+anchor = "bottom_left"
+border = "top_right"
+z = 10
+priority = 50
+show = "always"
+background = "opaque"
+size = { cols = 20, rows = "auto", min_cols = 12, min_rows = 3 }
+margin = { bottom = 1 }
+
+[[frame]]
+name = "strip"
+description = "The preview strip: the four sprite tiers side by side over the fixture, drawn by the game's own renderer. It wants a screen of 120 by 45, which is the strip at its full height with a form under it; on anything smaller the one-tier pane shows instead."
+content = "strip"
+anchor = "top_right"
+border = "top_right"
+z = 10
+priority = 60
+show = { min_size = { columns = 120, rows = 45 } }
+background = "opaque"
+size = { cols = "fill", rows = "auto", min_cols = 40, min_rows = 10 }
+margin = { left = 20 }
+
+[[frame]]
+name = "pane"
+description = "The one preview pane of a small screen, at the tier `t` picked or the largest below it whose subject stands whole in the pane. It ranks below the strip, which hides it wherever the strip fits."
+content = "pane"
+anchor = "top_right"
+border = "top_right"
+z = 10
+priority = 50
+show = "always"
+background = "opaque"
+size = { cols = "fill", rows = "auto", min_cols = 20, min_rows = 5 }
+margin = { left = 20 }
+
+[[frame]]
+name = "form"
+description = "The selected row's fields under the preview: one line per field, the value column live while a field is being edited."
+content = "form"
+anchor = "bottom_right"
+border = "top_right"
+z = 10
+priority = 50
+show = "always"
+background = "opaque"
+size = { cols = "fill", rows = "auto", min_cols = 20, min_rows = 3 }
+margin = { left = 20, bottom = 1 }
+
+[[frame]]
+name = "grid"
+description = "The art grid in the form's place while grid mode is on: the sprite's rows with a column ruler, the centre column marked and the base rows banded."
+content = "grid"
+anchor = "bottom_right"
+border = "top_right"
+z = 20
+priority = 50
+show = "always"
+background = "opaque"
+size = { cols = "fill", rows = "auto", min_cols = 20, min_rows = 3 }
+margin = { left = 20, bottom = 1 }
+
+[[frame]]
+name = "picker"
+description = "The glyph picker in the form's place while picker mode is on: the tileset's roles and the Legacy Computing block, two cells to a glyph."
+content = "picker"
+anchor = "bottom_right"
+border = "top_right"
+z = 20
+priority = 50
+show = "always"
+background = "opaque"
+size = { cols = "fill", rows = "auto", min_cols = 20, min_rows = 3 }
+margin = { left = 20, bottom = 1 }
+
+[[frame]]
+name = "status"
+description = "The last row: the mode, the file the row lives in, whether anything is unsaved, and either the generated key help or the last message."
+content = "status"
+anchor = "bottom"
+border = "none"
+z = 100
+priority = 50
+show = "always"
+background = "none"
+size = { cols = "fill", rows = 1 }

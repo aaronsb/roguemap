@@ -7,6 +7,7 @@ use crate::assets::schema::TIERS;
 use crate::assets::Tier;
 use crate::camera::{rows_per_metre_of, Camera};
 use crate::canvas::Canvas;
+use crate::frame::Rect;
 use crate::render::{RenderOptions, Renderer, Scene};
 use crate::tileset::{Tileset, ZOOMS};
 
@@ -16,6 +17,30 @@ pub const PANE_SIZES: [(Tier, i32, i32); 4] = [(Tier::Tiny, 14, 9), (Tier::Small
 /// The nominal interior size of a tier's pane.
 pub fn pane_size(tier: Tier) -> (i32, i32) {
     PANE_SIZES.iter().find(|(t, _, _)| *t == tier).map(|&(_, w, h)| (w, h)).unwrap_or((56, 34))
+}
+
+/// The tiles inside the preview strip's interior: the four tiers side by
+/// side, scaled down together when the strip is narrower than their
+/// nominal widths, or the one tier of a small screen taking the lot.
+pub fn tiles(strip: Rect, tier: Tier, one: bool) -> Vec<(Tier, Rect)> {
+    if strip.is_empty() {
+        return Vec::new();
+    }
+    if one {
+        return vec![(tier, strip)];
+    }
+    let sizes = PANE_SIZES;
+    let avail = strip.w - (sizes.len() as i32 - 1);
+    let nominal: i32 = sizes.iter().map(|s| s.1).sum();
+    let scale = if avail >= nominal { 1.0 } else { avail as f32 / nominal as f32 };
+    let mut x = strip.x;
+    let mut out = Vec::new();
+    for &(t, pw, ph) in &sizes {
+        let pw = ((pw as f32 * scale).floor() as i32).max(6);
+        out.push((t, Rect { x, y: strip.y, w: pw, h: ph.min(strip.h) }));
+        x += pw + 1;
+    }
+    out
 }
 
 /// The pane title: the tier and the tile size it is drawn at, named as

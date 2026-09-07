@@ -58,7 +58,14 @@ impl Rect {
 
     /// The rectangle shrunk by `n` cells on every side.
     pub fn inset(&self, n: i32) -> Rect {
-        Rect { x: self.x + n, y: self.y + n, w: self.w - 2 * n, h: self.h - 2 * n }
+        self.inset_sides(n, n, n, n)
+    }
+
+    /// The rectangle shrunk by a different amount on each side, left, top,
+    /// right and bottom: what a border that draws only some of its edges
+    /// leaves for the content.
+    pub fn inset_sides(&self, l: i32, t: i32, r: i32, b: i32) -> Rect {
+        Rect { x: self.x + l, y: self.y + t, w: self.w - l - r, h: self.h - t - b }
     }
 }
 
@@ -113,10 +120,30 @@ pub struct Size {
     pub min_rows: i32,
 }
 
+/// Cells kept clear at the screen's edges before a frame is placed, so a
+/// screen of panes can tile: the editor's right-hand panes leave the left
+/// column to the table and row lists, and its lists leave the last row to
+/// the status line. Zero on every side for a frame free of the whole
+/// screen, which is every frame of the game.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Margin {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl Margin {
+    pub fn is_zero(&self) -> bool {
+        *self == Margin::default()
+    }
+}
+
 impl Size {
-    /// Cells on one axis: the extent resolved against the screen, never
-    /// below the minimum and never over the screen. `preferred` is what
-    /// the content asked for, including the border.
+    /// Cells on one axis: the extent resolved against the area the frame
+    /// is placed in, never below the minimum and never over that area.
+    /// `preferred` is what the content asked for, including the border.
     fn axis(e: Extent, screen: i32, min: i32, preferred: Option<i32>) -> i32 {
         let n = match e {
             Extent::Cells(c) => c,
@@ -138,6 +165,10 @@ pub enum Border {
     /// Rounded corners, for panes that are part of the furniture rather
     /// than modal windows.
     Chrome,
+    /// A line along the top, which carries the title, and one down the
+    /// right: a pane tiled from the top left, whose neighbours draw the
+    /// edges it leaves out. The editor's screen is four of these.
+    TopRight,
 }
 
 impl Border {
@@ -146,15 +177,19 @@ impl Border {
     pub fn glyphs(self) -> Option<[char; 8]> {
         Some(match self {
             Border::None => return None,
-            Border::Line => ['┌', '─', '┐', '│', '│', '└', '─', '┘'],
+            Border::Line | Border::TopRight => ['┌', '─', '┐', '│', '│', '└', '─', '┘'],
             Border::Double => ['╔', '═', '╗', '║', '║', '╚', '═', '╝'],
             Border::Chrome => ['╭', '─', '╮', '│', '│', '╰', '─', '╯'],
         })
     }
 
-    /// Cells the border takes on each side.
-    pub fn pad(self) -> i32 {
-        i32::from(self != Border::None)
+    /// Cells the border takes on each side: left, top, right, bottom.
+    pub fn pads(self) -> (i32, i32, i32, i32) {
+        match self {
+            Border::None => (0, 0, 0, 0),
+            Border::TopRight => (0, 1, 1, 0),
+            _ => (1, 1, 1, 1),
+        }
     }
 }
 
@@ -183,17 +218,25 @@ pub enum Show {
     Never,
     /// Only on a screen at least this wide.
     MinColumns(i32),
+    /// Only on a screen at least this wide and this tall: what the
+    /// editor's four-tier preview strip asks for before it gives way to
+    /// the one pane behind it.
+    MinSize {
+        columns: i32,
+        rows: i32,
+    },
 }
 
 impl Show {
-    /// Whether the rule lets the frame show at this screen width and zoom.
-    pub fn allows(self, cols: i32, zoom: usize, zooms: usize) -> bool {
+    /// Whether the rule lets the frame show on this screen at this zoom.
+    pub fn allows(self, cols: i32, rows: i32, zoom: usize, zooms: usize) -> bool {
         match self {
             Show::Always | Show::OnKey => true,
             Show::Never => false,
             Show::ZoomedOut => zoom * 2 < zooms,
             Show::ZoomedIn => zoom * 2 >= zooms,
             Show::MinColumns(n) => cols >= n,
+            Show::MinSize { columns, rows: r } => cols >= columns && rows >= r,
         }
     }
 
@@ -233,6 +276,8 @@ pub struct FrameSpec {
     pub content: String,
     pub anchor: Anchor,
     pub size: Size,
+    /// Cells left clear at the screen's edges before the anchor places it.
+    pub margin: Margin,
     pub border: Border,
     pub background: Background,
     /// Draw order; focused frames draw last.
@@ -384,17 +429,24 @@ impl Layout {
 
     fn place(it: &Placement, lc: &LayoutCtx) -> Option<Rect> {
         let s = it.spec;
-        if !it.open || !s.show.allows(lc.cols, lc.zoom, lc.zooms) {
+        if !it.open || !s.show.allows(lc.cols, lc.rows, lc.zoom, lc.zooms) {
             return None;
         }
-        let pad = 2 * s.border.pad();
-        let w = Size::axis(s.size.cols, lc.cols, s.size.min_cols, it.preferred.map(|p| p.0 + pad));
-        let h = Size::axis(s.size.rows, lc.rows, s.size.min_rows, it.preferred.map(|p| p.1 + pad));
+        // The frame is sized and anchored inside the screen less its
+        // margins, which is the whole screen unless a row reserves an edge.
+        let m = s.margin;
+        let (area_w, area_h) = (lc.cols - m.left - m.right, lc.rows - m.top - m.bottom);
+        if area_w <= 0 || area_h <= 0 {
+            return None;
+        }
+        let (pl, pt, pr, pb) = s.border.pads();
+        let w = Size::axis(s.size.cols, area_w, s.size.min_cols, it.preferred.map(|p| p.0 + pl + pr));
+        let h = Size::axis(s.size.rows, area_h, s.size.min_rows, it.preferred.map(|p| p.1 + pt + pb));
         if w <= 0 || h <= 0 || w < s.size.min_cols || h < s.size.min_rows {
             return None;
         }
-        let (x, y) = Layout::anchor_at(s.anchor, w, h, lc.cols, lc.rows);
-        Some(Rect { x, y, w, h })
+        let (x, y) = Layout::anchor_at(s.anchor, w, h, area_w, area_h);
+        Some(Rect { x: x + m.left, y: y + m.top, w, h })
     }
 
     /// The top-left corner an anchor puts a `w` by `h` frame at.
@@ -447,20 +499,32 @@ pub fn draw_chrome(cv: &mut Canvas, rect: Rect, spec: &FrameSpec, title: &str) {
         }
     }
     if let Some(g) = spec.border.glyphs() {
+        // Only the sides the border draws, and a corner only where the two
+        // sides that meet there are both drawn.
+        let (l, t, r, b) = spec.border.pads();
         let (x1, y1) = (rect.right() - 1, rect.bottom() - 1);
         for x in rect.x..=x1 {
-            cv.put(x, rect.y, g[1], edge, fill);
-            cv.put(x, y1, g[6], edge, fill);
+            if t > 0 {
+                cv.put(x, rect.y, g[1], edge, fill);
+            }
+            if b > 0 {
+                cv.put(x, y1, g[6], edge, fill);
+            }
         }
         for y in rect.y..=y1 {
-            cv.put(rect.x, y, g[3], edge, fill);
-            cv.put(x1, y, g[4], edge, fill);
+            if l > 0 {
+                cv.put(rect.x, y, g[3], edge, fill);
+            }
+            if r > 0 {
+                cv.put(x1, y, g[4], edge, fill);
+            }
         }
-        cv.put(rect.x, rect.y, g[0], edge, fill);
-        cv.put(x1, rect.y, g[2], edge, fill);
-        cv.put(rect.x, y1, g[5], edge, fill);
-        cv.put(x1, y1, g[7], edge, fill);
-        if !title.is_empty() && rect.w > 5 {
+        for (on, x, y, ch) in [(l > 0 && t > 0, rect.x, rect.y, g[0]), (r > 0 && t > 0, x1, rect.y, g[2]), (l > 0 && b > 0, rect.x, y1, g[5]), (r > 0 && b > 0, x1, y1, g[7])] {
+            if on {
+                cv.put(x, y, ch, edge, fill);
+            }
+        }
+        if t > 0 && !title.is_empty() && rect.w > 5 {
             cv.text(rect.x + 2, rect.y, &clip(&format!(" {title} "), rect.w - 3), label, fill);
         }
     }
@@ -918,7 +982,8 @@ impl Frames {
             c.focused = self.focus == Some(i);
             let title = f.content.title(&f.spec.title, &c);
             draw_chrome(cv, rect, &f.spec, title.as_deref().unwrap_or(&f.spec.title));
-            let inner = rect.inset(f.spec.border.pad());
+            let (l, t, r, b) = f.spec.border.pads();
+            let inner = rect.inset_sides(l, t, r, b);
             if !inner.is_empty() {
                 f.content.draw(cv, inner, &c);
             }
@@ -945,6 +1010,109 @@ impl Frames {
     }
 }
 
+// Frames over a host of their own.
+
+/// What a frame draws when its content reads a host of its own rather than
+/// the scene. The game's `Content` draws from `FrameCtx`; the editor's
+/// panes draw from the `Editor`, whose modes and cursor are the state they
+/// show. The rows come from a table of the same shape as `assets/ui.toml`
+/// and `Layout` places them by the same rules.
+pub trait Pane<H> {
+    /// Draw into the frame's interior, inside any border.
+    fn draw(&self, cv: &mut Canvas, rect: Rect, host: &H);
+
+    /// Whether the frame is open, from the host's own state: the editor's
+    /// mode decides which of the form, the art grid and the glyph picker
+    /// holds the bottom right.
+    fn open(&self, host: &H) -> bool {
+        let _ = host;
+        true
+    }
+
+    /// The interior size the content would like, for `auto` extents.
+    fn preferred(&self, host: &H) -> Option<(i32, i32)> {
+        let _ = host;
+        None
+    }
+
+    /// What the top border says, given the row's own title.
+    fn title(&self, row: &str, host: &H) -> Option<String> {
+        let _ = (row, host);
+        None
+    }
+}
+
+/// What code hands `Panes::new`: a pane for a content kind, or `None` when
+/// it supplies no such kind.
+pub type PaneFor<H> = dyn Fn(&str) -> Option<Box<dyn Pane<H>>>;
+
+/// Every frame of one screen over a host: the rows from the table, a pane
+/// per content kind, and the layout and chrome of this module. Focus and
+/// key routing are the host's own, so this is `Frames` without the state.
+pub struct Panes<H> {
+    frames: Vec<(FrameSpec, Box<dyn Pane<H>>)>,
+}
+
+impl<H> Panes<H> {
+    /// Build the set from the loaded rows, asking `pane_for` for a pane per
+    /// content kind. An unknown kind is an error naming the frame.
+    pub fn new(specs: &[FrameSpec], pane_for: &PaneFor<H>) -> Result<Panes<H>, String> {
+        let mut frames = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let pane = pane_for(&spec.content).ok_or_else(|| format!("frame {:?}: unknown content kind {:?}", spec.name, spec.content))?;
+            frames.push((spec.clone(), pane));
+        }
+        Ok(Panes { frames })
+    }
+
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    pub fn specs(&self) -> impl Iterator<Item = &FrameSpec> {
+        self.frames.iter().map(|(s, _)| s)
+    }
+
+    pub fn index(&self, name: &str) -> Option<usize> {
+        self.frames.iter().position(|(s, _)| s.name == name)
+    }
+
+    /// Place the frames on a screen of `cols` by `rows`.
+    pub fn layout(&self, cols: i32, rows: i32, host: &H) -> Layout {
+        let items: Vec<Placement> = self.frames.iter().map(|(s, p)| Placement { spec: s, open: p.open(host), preferred: p.preferred(host) }).collect();
+        Layout::resolve(&items, &LayoutCtx { cols, rows, zoom: 0, zooms: 1, focus: None })
+    }
+
+    /// What a frame left for its content, or `None` when it did not survive
+    /// the layout.
+    pub fn interior(&self, layout: &Layout, name: &str) -> Option<Rect> {
+        let i = self.index(name)?;
+        let rect = layout.rect(i)?;
+        let (l, t, r, b) = self.frames[i].0.border.pads();
+        Some(rect.inset_sides(l, t, r, b))
+    }
+
+    /// Draw every frame that survived layout, chrome then content.
+    pub fn draw(&self, cv: &mut Canvas, host: &H) {
+        let layout = self.layout(cv.w, cv.h, host);
+        for &i in &layout.order {
+            let Some(rect) = layout.rect(i) else { continue };
+            let (spec, pane) = &self.frames[i];
+            let title = pane.title(&spec.title, host);
+            draw_chrome(cv, rect, spec, title.as_deref().unwrap_or(&spec.title));
+            let (l, t, r, b) = spec.border.pads();
+            let inner = rect.inset_sides(l, t, r, b);
+            if !inner.is_empty() {
+                pane.draw(cv, inner, host);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -957,6 +1125,7 @@ mod tests {
             content: name.to_string(),
             anchor,
             size,
+            margin: Margin::default(),
             border: Border::None,
             background: Background::Opaque,
             z: priority,
@@ -1005,6 +1174,49 @@ mod tests {
         assert_eq!(place(&[bordered], &ctx(80, 25)).rect(0), Some(Rect::new((80 - 12) / 2, (25 - 5) / 2, 12, 5)));
     }
 
+    /// A screen of tiled panes, which is the editor's shape: margins keep
+    /// an edge clear, and a border that draws only its top and right lets
+    /// the panes meet without sharing a cell or doubling a line.
+    #[test]
+    fn margins_and_part_borders_tile_a_screen() {
+        let (cols, rows) = (80, 25);
+        let mut tables = spec("tables", Anchor::TopLeft, size(Extent::Cells(20), Extent::Named(ExtentName::Auto)), 50);
+        tables.border = Border::TopRight;
+        // The row list leaves the last row to the status line.
+        let mut list = spec("rows", Anchor::BottomLeft, size(Extent::Cells(20), Extent::Named(ExtentName::Auto)), 50);
+        list.border = Border::TopRight;
+        list.margin = Margin { bottom: 1, ..Margin::default() };
+        // The strip takes what is right of the left column.
+        let mut strip = spec("strip", Anchor::TopRight, size(Extent::Named(ExtentName::Fill), Extent::Named(ExtentName::Auto)), 50);
+        strip.border = Border::TopRight;
+        strip.margin = Margin { left: 20, ..Margin::default() };
+        let mut status = spec("status", Anchor::Bottom, size(Extent::Named(ExtentName::Fill), Extent::Cells(1)), 50);
+        status.background = Background::None;
+        let specs = [tables, list, strip, status];
+        let wants = [Some((19, 7)), Some((19, 15)), Some((59, 11)), None];
+        let items: Vec<Placement> = specs.iter().zip(wants).map(|(s, p)| Placement { spec: s, open: true, preferred: p }).collect();
+        let l = Layout::resolve(&items, &ctx(cols, rows));
+        assert_eq!(l.rect(0), Some(Rect::new(0, 0, 20, 8)), "one row for the top edge, one column for the right");
+        assert_eq!(l.rect(1), Some(Rect::new(0, 8, 20, 16)), "the margin holds it off the status row");
+        assert_eq!(l.rect(2), Some(Rect::new(20, 0, 60, 12)), "the margin leaves the left column alone");
+        assert_eq!(l.rect(3), Some(Rect::new(0, 24, 80, 1)));
+        assert_eq!(l.order.len(), 4, "tiled panes never overlap, so none of them hides another");
+        // The interiors are what is left inside those edges, and they meet
+        // exactly: nothing is drawn twice and no cell is left unpainted.
+        let inner = |i: usize| {
+            l.rect(i).map(|r| {
+                let (a, b, c, d) = specs[i].border.pads();
+                r.inset_sides(a, b, c, d)
+            })
+        };
+        assert_eq!(inner(0), Some(Rect::new(0, 1, 19, 7)));
+        assert_eq!(inner(1), Some(Rect::new(0, 9, 19, 15)));
+        assert_eq!(inner(2), Some(Rect::new(20, 1, 59, 11)));
+        assert_eq!(Border::TopRight.pads(), (0, 1, 1, 0));
+        assert_eq!(Border::Line.pads(), (1, 1, 1, 1));
+        assert_eq!(Border::None.pads(), (0, 0, 0, 0));
+    }
+
     #[test]
     fn frames_that_do_not_fit_are_dropped() {
         let mut wide = spec("wide", Anchor::Centre, size(Extent::Fraction(0.5), Extent::Cells(10)), 1);
@@ -1044,10 +1256,12 @@ mod tests {
 
     #[test]
     fn show_rules_gate_on_width_and_zoom() {
-        assert!(Show::Always.allows(1, 0, 7) && !Show::Never.allows(1000, 0, 7));
-        assert!(Show::MinColumns(100).allows(120, 0, 7) && !Show::MinColumns(100).allows(80, 0, 7));
-        assert!(Show::ZoomedOut.allows(80, 0, 7) && !Show::ZoomedOut.allows(80, 6, 7));
-        assert!(Show::ZoomedIn.allows(80, 6, 7) && !Show::ZoomedIn.allows(80, 0, 7));
+        assert!(Show::Always.allows(1, 1, 0, 7) && !Show::Never.allows(1000, 1000, 0, 7));
+        assert!(Show::MinColumns(100).allows(120, 25, 0, 7) && !Show::MinColumns(100).allows(80, 25, 0, 7));
+        let strip = Show::MinSize { columns: 120, rows: 45 };
+        assert!(strip.allows(120, 45, 0, 7) && !strip.allows(119, 45, 0, 7) && !strip.allows(120, 44, 0, 7));
+        assert!(Show::ZoomedOut.allows(80, 25, 0, 7) && !Show::ZoomedOut.allows(80, 25, 6, 7));
+        assert!(Show::ZoomedIn.allows(80, 25, 6, 7) && !Show::ZoomedIn.allows(80, 25, 0, 7));
         assert!(Show::Always.starts_open() && !Show::OnKey.starts_open() && !Show::Never.starts_open());
         let mut hidden = spec("inset", Anchor::BottomRight, size(Extent::Cells(20), Extent::Cells(8)), 1);
         hidden.show = Show::Never;
