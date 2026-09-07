@@ -173,8 +173,17 @@ well as how low the ground: a tile at sea level is beach where water lies
 within `SHORE_TILES` (three), a tile a metre up only where the water is
 its neighbour. A basin that happens to sit at sea level inland is grass
 like the plain around it. The continuous surface follows the tiles: below
-0.45 m it is sand where the tile it stands on or one beside it is sand or
-water, and below 1.3 m where the water is within a step.
+0.45 m it is sand where the tile it stands on or one beside it is sand,
+and below 1.3 m where the water is within a step.
+
+The drawn surface is flattened to sea level over water, so at that clamp
+the height alone cannot tell the sea from the beach beside it and the
+shore band would paint the whole ocean sand (issue #25). What decides is
+the field before the clamp: the walk carries it to the hit as the bed
+under the surface, and a point is water where that bed lies below sea
+level. The shoreline is then the field's own crossing of sea level rather
+than a tile edge, and the bed is also the depth the water is coloured by,
+from `water_shallow` at the waterline to `water_deep` at `FLOOR`.
 
 ![steppe](screenshots/steppe.png)
 

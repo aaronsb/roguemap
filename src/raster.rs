@@ -257,13 +257,21 @@ impl Renderer {
     /// stack.
     #[inline]
     fn surface_height(&self, sc: &Scene, x: f32, y: f32) -> f32 {
+        self.bed_height(sc, x, y).max(SEA as f32)
+    }
+
+    /// The same surface before the sea-level clamp: under water this is the
+    /// bed, and the walk carries it to the hit so the shoreline is the
+    /// field's own crossing of sea level rather than a tile edge.
+    #[inline]
+    fn bed_height(&self, _sc: &Scene, x: f32, y: f32) -> f32 {
         let grid = self.grid();
         if let Some(g) = grid.geo(ifloor(x), ifloor(y)) {
             if g.flat {
                 return g.base;
             }
         }
-        self.field_height(sc, x, y)
+        grid.sample(x, y) + grid.fields.detail(x, y)
     }
 
     /// The continuous field alone, for gradients.
@@ -472,10 +480,11 @@ impl Renderer {
                 }
             }
             if zf <= geo.hmax {
-                let h = self.surface_height(sc, x, y);
+                let bed = self.bed_height(sc, x, y);
+                let h = bed.max(SEA as f32);
                 if h >= zf {
                     let tile = *grid.tile(mx, my)?;
-                    return Some(self.terrain_hit(sc, tile, mx, my, x, y, h, s, c));
+                    return Some(self.terrain_hit(sc, tile, mx, my, x, y, h, bed, s, c));
                 }
             }
             prev = Some((mx, my, geo));
@@ -486,7 +495,7 @@ impl Renderer {
 
     /// A terrain crossing: gradient for shading and cliff faces.
     #[allow(clippy::too_many_arguments)]
-    fn terrain_hit(&self, sc: &Scene, tile: Tile, mx: i32, my: i32, x: f32, y: f32, h: f32, s: f32, c: f32) -> Hit {
+    fn terrain_hit(&self, sc: &Scene, tile: Tile, mx: i32, my: i32, x: f32, y: f32, h: f32, bed: f32, s: f32, c: f32) -> Hit {
         let e = 0.25;
         // Metres of rise per metre of run, so the slope reads the same at
         // every zoom and the cliff threshold is an angle.
@@ -506,7 +515,7 @@ impl Renderer {
             let face = if (s * c > 0.0) == x_face { FACE_RIGHT } else { FACE_LEFT };
             (face, ((slope - CLIFF) * 1.5).ceil().clamp(1.0, 6.0) as i32)
         };
-        Hit { tile, mx, my, x, y, h, face, below, sun, kind: HitKind::Terrain, which: 0, nsx: 0.0 }
+        Hit { tile, mx, my, x, y, h, bed, face, below, sun, kind: HitKind::Terrain, which: 0, nsx: 0.0 }
     }
 
     /// A geometry crossing as a hit: walls take the screen side their face
@@ -536,20 +545,21 @@ impl Renderer {
             HitKind::Terrain => 0.0,
         };
         let nsx = screen_x_of(cand.normal, sc.cam);
-        Some(Hit { tile, mx: cand.mx, my: cand.my, x, y, h: cand.z, face, below: 0, sun, kind: cand.kind, which: cand.which, nsx })
+        Some(Hit { tile, mx: cand.mx, my: cand.my, x, y, h: cand.z, bed: cand.z, face, below: 0, sun, kind: cand.kind, which: cand.which, nsx })
     }
 
     /// Unlit colour of a top surface at a fractional ground point: the
     /// continuous fields decide water, sand, earth and rock through the tile,
     /// and the field's slope shades it toward or away from the sun.
     fn field_color(&self, sc: &Scene, hit: &Hit) -> Rgb {
-        let h = hit.h;
         let grid = self.grid();
-        let kind = sc.map.surface_kind(h, hit.tile.temp as f32, || self.beach(sc, hit.x, hit.y), || self.shore(sc, hit.x, hit.y), || grid.fields.patch(hit.x, hit.y));
+        let kind = self.surface_kind(sc, hit);
         let mut t = hit.tile;
         t.terrain = kind;
         let mut c = if kind == Terrain::Water {
-            t.z = (h.floor() as i32).min(SEA - 1);
+            // The drawn surface is flat at sea level, so what colours it is
+            // the bed under it.
+            t.z = (hit.bed.floor() as i32).min(SEA - 1);
             surface_color(&t, &sc.pal, sc.world, sc.assets)
         } else {
             // The tile's colour for this kind, worked out once per frame:
@@ -580,12 +590,26 @@ impl Renderer {
         c
     }
 
-    /// Whether a ground point lies on or beside sand or water, as
-    /// `Map::beach` answers it, from the frame's grid wherever the tiles are
-    /// in it.
+    /// The surface kind at a terrain hit, as `Map::surface_at` decides it
+    /// but from the frame's grid and cached fields. A point is water where
+    /// the field under it lies below sea level, so the shoreline is the
+    /// field's own crossing and not a tile edge.
+    fn surface_kind(&self, sc: &Scene, hit: &Hit) -> Terrain {
+        let grid = self.grid();
+        sc.map.surface_kind(hit.h, hit.tile.temp as f32, hit.bed < SEA as f32, || self.beach(sc, hit.x, hit.y), || self.shore(sc, hit.x, hit.y), || grid.fields.patch(hit.x, hit.y))
+    }
+
+    /// The largest water body touching a tile, for a fringe cell whose own
+    /// tile carries none.
+    fn body_beside(&self, sc: &Scene, x: i32, y: i32) -> u16 {
+        [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().filter_map(|(dx, dy)| self.tile_at(sc, x + dx, y + dy)).map(|t| t.body_size).max().unwrap_or(0)
+    }
+
+    /// Whether a ground point lies on or beside sand, as `Map::beach`
+    /// answers it, from the frame's grid wherever the tiles are in it.
     fn beach(&self, sc: &Scene, xf: f32, yf: f32) -> bool {
         let (x, y) = (xf.floor() as i32, yf.floor() as i32);
-        let sandy = |x: i32, y: i32| self.tile_at(sc, x, y).map(|t| matches!(t.terrain, Terrain::Sand | Terrain::Water)).unwrap_or(false);
+        let sandy = |x: i32, y: i32| self.tile_at(sc, x, y).map(|t| t.terrain == Terrain::Sand).unwrap_or(false);
         sandy(x, y) || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| sandy(x + dx, y + dy))
     }
 
@@ -868,7 +892,14 @@ impl Renderer {
                 }
                 // Texture follows the continuous surface kind, not the tile's.
                 let mut tile = hit.tile;
-                tile.terrain = sc.map.surface_at(hit.x, hit.y, hit.h, tile.temp as f32);
+                tile.terrain = self.surface_kind(sc, hit);
+                if tile.terrain == Terrain::Water && tile.body_size == 0 {
+                    // Water over a tile the generator called land: the fringe
+                    // where the field dips under sea level inside a shore
+                    // tile. Its waves and its reeds belong to the body beside
+                    // it, so the sea's edge is not read as a calm pond.
+                    tile.body_size = self.body_beside(sc, hit.mx, hit.my);
+                }
                 let (ch, glyph) = texture(sc, &tile, hit, base, sx, sy);
                 (base, ch, glyph)
             }
@@ -1072,6 +1103,39 @@ mod tests {
                 let hit = r.ray(&sc, x as f32 + 0.5, y as f32 + 0.5).unwrap_or_else(|| panic!("close: no hit at ({x}, {y})"));
                 assert!((hit.h - 6.5).abs() < 0.5 && hit.tile.z == 6, "close cell ({x}, {y}): h {}", hit.h);
             }
+        }
+    }
+
+    #[test]
+    fn a_water_tile_draws_as_water_at_sea_level_and_the_land_beside_it_does_not() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let world = World::new(1);
+        // A basin four metres under the sea in a plain two metres over it.
+        let mut map = Map::synthetic(24, 24, assets, 3, |x, y| Tile::flat(if (8..16).contains(&x) && (8..16).contains(&y) { -4 } else { 2 }));
+        map.bounded = false;
+        let (w, h) = (120, 40);
+        for zoom in 0..4 {
+            let mut cam = Camera::new();
+            cam.set_zoom(zoom, w, h);
+            cam.look_at(12, 12, &map, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            let r = prepared(&sc, w, h);
+            let (sx, sy) = cam.project(12.0, 12.0, SEA as f32);
+            let hit = r.ray(&sc, sx, sy).unwrap_or_else(|| panic!("zoom {zoom}: no hit over the basin"));
+            assert_eq!(hit.tile.terrain, Terrain::Water, "zoom {zoom}: the basin's tiles are water");
+            assert!((hit.h - SEA as f32).abs() < 1e-4, "zoom {zoom}: the drawn surface is flat at sea level (h {})", hit.h);
+            assert!(hit.bed < SEA as f32, "zoom {zoom}: and the bed under it is below (bed {})", hit.bed);
+            assert_eq!(r.surface_kind(&sc, &hit), Terrain::Water, "zoom {zoom}: so the surface is water, not the sand band over it");
+            // The plain outside the basin is above the band and dry.
+            let mut cam = Camera::new();
+            cam.set_zoom(zoom, w, h);
+            cam.look_at(3, 3, &map, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            let r = prepared(&sc, w, h);
+            let (px, py) = cam.project(3.0, 3.0, 2.5);
+            let land = r.ray(&sc, px, py).unwrap_or_else(|| panic!("zoom {zoom}: no hit over the plain"));
+            assert!(land.bed > SEA as f32 && r.surface_kind(&sc, &land) != Terrain::Water, "zoom {zoom}: the plain is not water");
         }
     }
 

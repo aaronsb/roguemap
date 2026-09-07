@@ -565,15 +565,22 @@ impl Map {
         fbm(xf * 0.13, yf * 0.13, self.seed ^ 0x51, 3)
     }
 
-    /// Whether a position lies on or beside a beach: a tile of sand or of
-    /// water within a step. The tiles already carry the shore test
+    /// Whether a position lies on or beside a beach: a tile of sand within
+    /// a step. The tiles already carry the shore test
     /// (`terrain_for`), so the continuous surface asks them rather than
     /// walking the field again, and the sand at sea level stops where the
     /// beach does instead of pooling in an inland basin.
     fn beach(&self, xf: f32, yf: f32) -> bool {
         let (x, y) = (xf.floor() as i32, yf.floor() as i32);
-        let sandy = |x: i32, y: i32| self.get(x, y).map(|t| matches!(t.terrain, Terrain::Sand | Terrain::Water)).unwrap_or(false);
+        let sandy = |x: i32, y: i32| self.get(x, y).map(|t| t.terrain == Terrain::Sand).unwrap_or(false);
         sandy(x, y) || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| sandy(x + dx, y + dy))
+    }
+
+    /// Whether the tile under a position is water, which is what tells the
+    /// sea from the sand where the drawn surface sits at the sea-level
+    /// clamp.
+    fn wet(&self, xf: f32, yf: f32) -> bool {
+        self.get(xf.floor() as i32, yf.floor() as i32).map(|t| t.terrain == Terrain::Water).unwrap_or(false)
     }
 
     /// Whether a position lies within a tile of water, for beaches.
@@ -585,18 +592,20 @@ impl Map {
 
     /// Surface kind at a fractional position from the continuous fields.
     pub fn surface_at(&self, xf: f32, yf: f32, h: f32, temp: f32) -> Terrain {
-        self.surface_kind(h, temp, || self.beach(xf, yf), || self.shore(xf, yf), || self.patch(xf, yf))
+        self.surface_kind(h, temp, self.wet(xf, yf), || self.beach(xf, yf), || self.shore(xf, yf), || self.patch(xf, yf))
     }
 
     /// The surface kind from a height and the climate, asking for the
     /// beach, the shore and the dirt patch only where they decide: the walk answers
     /// them from its frame grid and cached fields (`Fields`), the map from
-    /// its chunks.
-    pub fn surface_kind(&self, h: f32, temp: f32, beach: impl FnOnce() -> bool, shore: impl FnOnce() -> bool, patch: impl FnOnce() -> f32) -> Terrain {
+    /// its chunks. `wet` is whether the tile under the point is water: the
+    /// drawn surface is flattened to sea level over water, so at the clamp
+    /// the height alone cannot tell the sea from the beach beside it.
+    pub fn surface_kind(&self, h: f32, temp: f32, wet: bool, beach: impl FnOnce() -> bool, shore: impl FnOnce() -> bool, patch: impl FnOnce() -> f32) -> Terrain {
         if let Some(f) = &self.fixture {
             return f.terrain;
         }
-        if h < SEA as f32 {
+        if h < SEA as f32 || (wet && h <= SEA as f32) {
             Terrain::Water
         } else if (h < SEA as f32 + 0.45 && beach()) || (h < SEA as f32 + 1.3 && shore()) {
             Terrain::Sand
@@ -1185,5 +1194,11 @@ mod tests {
         assert!(water_within(&m, bx, by, SHORE_TILES), "this one has water within the band");
         assert_eq!(b.terrain, Terrain::Sand, "so it is a beach");
         assert_eq!(m.surface_at(bx as f32 + 0.5, by as f32 + 0.5, b.hf.max(SEA as f32), b.temp as f32), Terrain::Sand);
+        // The lake itself is water, not the sand band: the drawn surface is
+        // flattened to sea level over it, so the height alone cannot say.
+        let r = SHORE_TILES;
+        let (wx, wy) = (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (bx + dx, by + dy))).find(|&(x, y)| m.get(x, y).unwrap().terrain == Terrain::Water).expect("the lake is within the band");
+        let l = m.get(wx, wy).unwrap();
+        assert_eq!(m.surface_at(wx as f32 + 0.5, wy as f32 + 0.5, l.hf.max(SEA as f32), l.temp as f32), Terrain::Water);
     }
 }

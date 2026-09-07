@@ -142,6 +142,10 @@ pub(crate) struct Hit {
     pub y: f32,
     /// Surface height at the hit.
     pub h: f32,
+    /// The field under the drawn surface, before the sea-level clamp: over
+    /// water it is the bed, which says the point is submerged and how deep.
+    /// Only a terrain hit carries it; anything else repeats `h`.
+    pub bed: f32,
     pub face: u8,
     /// Steepness bands for cliff shading, 0 on gentle ground.
     pub below: i32,
