@@ -17,7 +17,7 @@ fn round_u8(v: f32) -> u8 {
     // to a byte; the sum may round up across an integer where `v` sits just
     // under a half, which the exact comparison against `r - 0.5` undoes.
     let r = (v + 0.5) as i32;
-    let r = if v < r as f32 - 0.5 { r - 1 } else { r };
+    let r = if v < r as f32 - 0.5 { r.saturating_sub(1) } else { r };
     r.clamp(0, 255) as u8
 }
 
@@ -126,5 +126,31 @@ impl Canvas {
     /// Write the cell dump to a file.
     pub fn dump(&self, path: &str) -> std::io::Result<()> {
         self.write_to(std::io::BufWriter::new(std::fs::File::create(path)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_rounding_is_the_library_rounding() {
+        // Every value a blend can produce, and the ones just under a half,
+        // where the shifted sum rounds up before it is floored.
+        for i in 0..=255_000 {
+            let v = i as f32 / 1000.0;
+            assert_eq!(round_u8(v), v.round() as u8, "{v}");
+        }
+        for v in [-0.6, -0.3, 0.49999997, 0.5, 1.4999999, 2.5, 254.49999, 254.5, 255.4, 256.0, 1e9, f32::NAN, f32::INFINITY, -f32::INFINITY] {
+            assert_eq!(round_u8(v), v.round() as u8, "{v}");
+        }
+        let (a, b) = (Rgb(12, 200, 77), Rgb(250, 3, 128));
+        for i in 0..=100 {
+            let t = i as f32 / 100.0;
+            let m = |p: u8, q: u8| (p as f32 + (q as f32 - p as f32) * t).round() as u8;
+            assert_eq!(a.lerp(b, t), Rgb(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2)), "lerp at {t}");
+            let s = |p: u8| (p as f32 * t * 1.7).round().clamp(0.0, 255.0) as u8;
+            assert_eq!(b.scale(t * 1.7), Rgb(s(b.0), s(b.1), s(b.2)), "scale by {}", t * 1.7);
+        }
     }
 }

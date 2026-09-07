@@ -458,6 +458,20 @@ impl World {
 mod tests {
     use super::*;
     use crate::assets::test_assets;
+
+    #[test]
+    fn cloud_shadows_over_a_range_are_the_cloud_shadow_to_the_bit() {
+        let mut w = World::new(3);
+        w.tod = 15.0;
+        w.cloud_offset = (12.5, -7.25);
+        w.weather.cover = 0.6;
+        let c = w.cloud_shadows_over(-20, 30, 60, 90);
+        for i in 0..1500 {
+            // Inside the range and beyond it.
+            let (x, y) = (-40.0 + i as f32 * 0.08, 20.0 + (i as f32 * 0.05).cos() * 60.0);
+            assert_eq!(c.at(x, y).to_bits(), w.cloud_shadow(x, y).to_bits(), "at ({x}, {y})");
+        }
+    }
     use crate::blocks::Stack;
     use crate::camera::Camera;
     use crate::canvas::Canvas;

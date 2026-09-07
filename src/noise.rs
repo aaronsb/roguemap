@@ -125,9 +125,7 @@ impl FbmCache {
                 let i = ly as usize * layer.w + lx as usize;
                 (layer.v[i], layer.v[i + 1], layer.v[i + layer.w], layer.v[i + layer.w + 1])
             } else {
-                let lseed = self.seed.wrapping_add(o as u64 * 7919);
-                let (xi, yi) = (xi as i64, yi as i64);
-                (hash01(xi, yi, lseed), hash01(xi + 1, yi, lseed), hash01(xi, yi + 1, lseed), hash01(xi + 1, yi + 1, lseed))
+                self.corners(o, xi, yi)
             };
             let top = a + (b - a) * fx;
             let bot = c + (d - c) * fx;
@@ -137,6 +135,17 @@ impl FbmCache {
             freq *= 2.0;
         }
         sum / norm
+    }
+
+    /// The four corner hashes of octave `o` around a lattice point outside
+    /// the cached rectangle, as `value` would hash them. Kept out of line
+    /// so the common path stays small enough to inline.
+    #[cold]
+    #[inline(never)]
+    fn corners(&self, o: usize, xi: i32, yi: i32) -> (f32, f32, f32, f32) {
+        let lseed = self.seed.wrapping_add(o as u64 * 7919);
+        let (xi, yi) = (xi as i64, yi as i64);
+        (hash01(xi, yi, lseed), hash01(xi + 1, yi, lseed), hash01(xi, yi + 1, lseed), hash01(xi + 1, yi + 1, lseed))
     }
 }
 
@@ -155,6 +164,27 @@ mod tests {
             let x = i as f32 * 0.37 - 300.0;
             let v = fbm(x, x * 0.61, 11, 4);
             assert!((0.0..1.0).contains(&v));
+        }
+    }
+
+    #[test]
+    fn iceil_agrees_with_ceil() {
+        for i in -400..400 {
+            let x = i as f32 * 0.37;
+            assert_eq!(iceil(x), x.ceil() as i32, "{x}");
+        }
+        assert_eq!(iceil(2.0), 2);
+        assert_eq!(iceil(-0.5), 0);
+        assert_eq!(iceil(0.001), 1);
+    }
+
+    #[test]
+    fn cached_fbm_is_the_hashed_fbm_to_the_bit() {
+        let cache = FbmCache::new(-3.0, 2.0, 40.0, 50.0, 0xD7, 3);
+        for i in 0..3000 {
+            // Inside the rectangle and well outside it.
+            let (x, y) = (-10.0 + i as f32 * 0.021, 1.0 + (i as f32 * 0.037).sin() * 60.0);
+            assert_eq!(cache.fbm(x, y).to_bits(), fbm(x, y, 0xD7, 3).to_bits(), "at ({x}, {y})");
         }
     }
 

@@ -1044,6 +1044,7 @@ mod tests {
             assert_eq!(m.climate(x, y).biome, 5);
         }
         assert_eq!(m.detail(3.3, 4.4, 3), 0.0);
+        assert_eq!(m.fields(0, 0, 8, 8, 3).detail(3.3, 4.4), 0.0, "nor from the cached fields");
         assert_eq!(m.surface_at(3.3, 4.4, 0.0, -30.0), Terrain::Grass);
         assert!(m.get(12, 0).is_none());
         let mut t = m.get(6, 6).unwrap();
@@ -1054,6 +1055,19 @@ mod tests {
         assert!(m.ceiling(6, 6) as f32 >= t.top(&m.assets), "the ceiling covers the placed tree's crown");
         m.set_tile(40, 40, t);
         assert!(m.get(40, 40).is_none());
+    }
+
+    #[test]
+    fn cached_fields_are_the_map_fields_to_the_bit() {
+        let m = Map::new(32, 32, 7, test_assets());
+        let f = m.fields(100, -50, 140, -10, 3);
+        for i in 0..2000 {
+            // Inside the tile range and beyond it.
+            let (x, y) = (95.0 + i as f32 * 0.027, -55.0 + (i as f32 * 0.019).sin() * 30.0);
+            assert_eq!(f.detail(x, y).to_bits(), m.detail(x, y, 3).to_bits(), "detail at ({x}, {y})");
+            assert_eq!(f.patch(x, y).to_bits(), m.patch(x, y).to_bits(), "patch at ({x}, {y})");
+        }
+        assert_eq!(m.fields(0, 0, 8, 8, 0).detail(3.3, 4.4), 0.0, "no octaves at the overview, no detail");
     }
 
     #[test]

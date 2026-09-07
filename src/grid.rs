@@ -357,12 +357,10 @@ impl HeightGrid {
         // shadow mask alone (docs/structures.md, "Volumes are stand-ins").
         let mut volumes: Vec<Volume> = Vec::new();
         let mut crowns: Vec<u32> = Vec::new();
-        let mut counts = vec![0u32; n];
-        // The per-tile ceiling and volume span are gathered in arrays of
-        // their own rather than in `geo`, so registering a hundred thousand
-        // primitives touches four bytes a tile and not a whole row of it.
-        let mut tops: Vec<f32> = geo.iter().map(|g| g.top).collect();
-        let mut vspans = vec![0.0f32; n];
+        // The per-tile count, ceiling and volume span are gathered in one
+        // small record apart from `geo`, so registering a hundred thousand
+        // primitives touches twelve bytes a tile and not a whole row of it.
+        let mut regs: Vec<(u32, f32, f32)> = geo.iter().map(|g| (0, g.top, 0.0)).collect();
         /// A volume the walk never meets: only the shadow mask sweeps it.
         const UNREGISTERED: (i32, i32, i32, i32) = (0, 0, -1, -1);
         let mut spans: Vec<(i32, i32, i32, i32)> = Vec::new();
@@ -466,9 +464,10 @@ impl HeightGrid {
                             let row = (ty - y0) * w - x0;
                             for tx in span.0..=span.2 {
                                 let j = (row + tx) as usize;
-                                counts[j] += 1;
-                                tops[j] = tops[j].max(vtop);
-                                vspans[j] = vspans[j].max(vspan);
+                                let r = &mut regs[j];
+                                r.0 += 1;
+                                r.1 = r.1.max(vtop);
+                                r.2 = r.2.max(vspan);
                             }
                         }
                         spans.push(span);
@@ -477,15 +476,16 @@ impl HeightGrid {
             }
         }
         cache.sweep();
-        let mut vol_index = vec![Bucket { top: 0.0, h0: 0.0, cx: 0.0, cy: 0.0, r2: 0.0, v: 0, cluster: false }; counts.iter().sum::<u32>() as usize];
+        let mut vol_index = vec![Bucket { top: 0.0, h0: 0.0, cx: 0.0, cy: 0.0, r2: 0.0, v: 0, cluster: false }; regs.iter().map(|r| r.0).sum::<u32>() as usize];
         let mut start = 0u32;
         let mut starts = vec![0u32; n];
         for (i, g) in geo.iter_mut().enumerate() {
-            g.vol = (start, counts[i]);
-            g.top = tops[i];
-            g.vspan = vspans[i];
+            let (count, top, vspan) = regs[i];
+            g.vol = (start, count);
+            g.top = top;
+            g.vspan = vspan;
             starts[i] = start;
-            start += counts[i];
+            start += count;
         }
         // Tallest first, so a walk can stop testing once the rest are below
         // its segment. A stand of grown trees is a hundred thousand
@@ -546,6 +546,7 @@ impl HeightGrid {
 
     /// Bilinear sample of the smooth height between tile centres, the
     /// corners clamped to the grid.
+    #[inline]
     pub(crate) fn sample(&self, xf: f32, yf: f32) -> f32 {
         let (gx, gy) = (xf - 0.5, yf - 0.5);
         let (ix, iy) = (ifloor(gx), ifloor(gy));

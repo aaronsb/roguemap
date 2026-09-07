@@ -255,6 +255,7 @@ impl Renderer {
     /// Height of the drawn surface at a ground point: the continuous field,
     /// flattened to sea level over water and to the pad under a flattened
     /// stack.
+    #[inline]
     fn surface_height(&self, sc: &Scene, x: f32, y: f32) -> f32 {
         let grid = self.grid();
         if let Some(g) = grid.geo(ifloor(x), ifloor(y)) {
@@ -266,6 +267,7 @@ impl Renderer {
     }
 
     /// The continuous field alone, for gradients.
+    #[inline]
     fn field_height(&self, _sc: &Scene, x: f32, y: f32) -> f32 {
         let grid = self.grid();
         let h = grid.sample(x, y) + grid.fields.detail(x, y);
@@ -421,13 +423,21 @@ impl Renderer {
         // Two screen rows per step, which is about a tile of ground at
         // every zoom: fine enough that a step cannot cross a terrace.
         let steps = (rpm / 2.0).ceil().max(1.0) as i32;
+        // A sample's height is its index over the steps; where the steps
+        // are a power of two the reciprocal multiplies to the same value,
+        // and the walk takes half a million samples a frame.
+        let z_of = {
+            let inv = 1.0 / steps as f32;
+            let exact = (steps as u32).is_power_of_two();
+            move |j: i32| if exact { j as f32 * inv } else { j as f32 / steps as f32 }
+        };
         let bottom = ((zlo.max(FLOOR)) * steps as f32).floor() as i32;
         let mut i = iceil(top * steps as f32);
-        let mut z_prev = i as f32 / steps as f32;
+        let mut z_prev = z_of(i);
         let mut prev: Option<(i32, i32, &Geo)> = None;
         let mut scan = Scan { mx: i32::MIN, my: i32::MIN, at: 0 };
         while i >= bottom {
-            let zf = i as f32 / steps as f32;
+            let zf = z_of(i);
             i -= 1;
             let (x, y) = (p0.0 + d.0 * zf, p0.1 + d.1 * zf);
             let (mx, my) = (ifloor(x), ifloor(y));
@@ -447,7 +457,7 @@ impl Renderer {
                 if next < i {
                     i = next;
                     prev = None;
-                    z_prev = next as f32 / steps as f32;
+                    z_prev = z_of(next);
                     continue;
                 }
             }

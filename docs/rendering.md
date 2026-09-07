@@ -51,7 +51,8 @@ jumps straight down to that ceiling, so open sky costs nothing.
 
 At each sample the walk tests the geometry over the segment just
 descended, then the field itself: the bilinear sample between tile centres
-plus `Map::detail`. The first crossing found is the nearest to the camera,
+plus `Map::detail`, from a noise lattice hashed once for the frame (see
+"Once a frame"). The first crossing found is the nearest to the camera,
 so it returns immediately; a walk that reaches the bottom returns sky.
 
 A terrain hit takes its face from the gradient. Below `CLIFF = 1.5`
@@ -251,6 +252,43 @@ it, cactus arms appear only at 1:1, and wind is off at the overview.
 Nothing is placed per level of detail; the block kind, the species and the
 adjacency rules produce all of it.
 
+## Once a frame
+
+The walk is bound by latency — dependent loads and float chains — rather
+than by instruction count, so whatever it asks for at every sample or
+every hit is worked out once a frame wherever the answer is the same.
+Every item below gives the same bytes as evaluating in place; the golden
+frames hold to the bit.
+
+- `Map::fields` hashes the lattices of the detail and dirt-patch noise
+  over the grid's tile range (`noise::FbmCache`), so a field the walk
+  samples a hundred thousand times a frame interpolates from memory with
+  the arithmetic `fbm` would do. The cloud field under the light pass is
+  cached the same way (`World::cloud_shadows_over`).
+- The surface colour of a tile is worked out once per surface kind
+  (`Renderer::colors`): a hit and the six sub-rays around it share the
+  tile, and `surface_color` depends on nothing else. Water keeps its
+  depth colour per hit.
+- `Scene` carries the frame's daylight and a snow table by whole-degree
+  temperature; each tile's `Geo` carries its block's ceiling and whether
+  it is on the map, so a sample reads one record; the sprite and prop
+  passes and the shore test read tiles from the grid rather than the
+  chunk map.
+- Rounding is integer conversion (`round_u8`, `ifloor`, `iceil`) rather
+  than the library calls, which were a tenth of a frame between them; the
+  bucket scan multiplies by the reciprocal of the stroke length against a
+  stored squared radius, widened by a few ulps so the exact solver still
+  sees every entry it saw.
+
+What did not pay, and why: skipping samples tile by tile or over a 3x3
+window, because the ground path drifts about a tile per metre of height,
+so a tile is one to three samples of travel at every zoom and the skip
+costs what it saves; and testing several samples over a tile as one
+segment, because the entries that survive the stroke test must then be
+solved sample by sample to keep the walk's answers, which costs more than
+the scan it saves. The block ceiling at eight tiles is the coarse level
+that works.
+
 ## Cost
 
 The only instrument in the code is the snapshot renderer's `frames=N`,
@@ -263,20 +301,24 @@ which renders N frames and prints the mean:
 
 At 168x71 with the inset open, seed 7, on the boreal stand at
 `cx=500 cy=-300` — the densest forest in the world — a frame takes about
-15.5 ms at 1:8, 15.9 at 1:4, 16.5 at 1:2 and 18.7 at 1:1. Over the filled
-world at the origin: 12.2, 16.2, 15.3 and 16.3. Part of the cost at the
-two outer zooms is the inset itself, which draws at 1:1. The event loop
-polls on a 40 ms tick, so the budget is 25 frames a second and every
-measurement above sits inside it. The first frame after a camera move is
-dearer than the rest, because the trees that came into view are grown on
-it.
+11.8 ms at 1:8, 14.5 at 1:4, 15.2 at 1:2 and 17.2 at 1:1. Over the filled
+world at 1:4: the origin 13.3, the village 15.5, the origin in winter
+16.3. Part of the cost at the two outer zooms is the inset itself, which
+draws at 1:1. The budget is 16 ms a frame (issue #1); the stand at 1:1 and
+the winter origin sit just over it. The event loop polls on a 40 ms tick,
+so 25 frames a second is the ceiling either way. The first frame after a
+camera move is dearer than the rest, because the trees that came into view
+are grown on it.
 
-Most of a frame is the walk itself, and most of the walk is steps through
-air and terrain samples; the trees are a smaller share than their count
-suggests, because the tile index rejects a primitive on its distance from
-the segment's ground stroke and solves a leaf cluster from the index
-entry alone, without reading the cluster. What the grown trees do cost is
-rays that used to stop on a stand-in and now pass through a real gap —
-between the tiers of a spruce, or through a bare oak — down to the
-terrain, so a winter scene at 1:4 is a few milliseconds dearer than a
-summer one.
+Where the time goes now: in an open scene it is the walk's samples through
+air between the block ceiling and the ground, the terrain samples and the
+four gradient taps every hit takes, and the sub-rays of the edge cells,
+which are more than half as many as the primary rays. In the stand at 1:1
+it is the bucket scan: about a dozen index entries per geometry call, set
+by the leaf clusters' own spans rather than by the branches, and the
+sub-rays at crown edges, which pass through the gaps to the ground. The
+trees are still a smaller share than their count suggests, because the
+index rejects a primitive on its distance from the segment's ground stroke
+and solves a leaf cluster from the index entry alone. A winter scene at
+1:4 is dearer than a summer one because rays pass through bare crowns to
+the terrain.

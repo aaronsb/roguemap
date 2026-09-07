@@ -126,6 +126,12 @@ is one command.
   boulder's shadow stops where a thing twice as tall still reaches; at the
   overview a prop casts nothing. Both run on a plain of sand under a cover
   no prop asks for, so the only occluders are the ones the test places.
+- **Once a frame.** The cached noise lattice (`noise::FbmCache`) gives
+  `fbm`'s value to the bit inside and outside its rectangle; `Map::fields`
+  gives `Map::detail` and `Map::patch` to the bit, and no detail with no
+  octaves or on a fixture; the cloud shadow over a range is `cloud_shadow`
+  to the bit; `round_u8` is `round() as u8` for every channel value,
+  including the ones just under a half; `iceil` is `ceil`.
 - **Antialiasing.** The sextant map is a bijection onto U+1FB00..U+1FB3B
   plus the two half blocks; quantising six identical colours yields no
   glyph; two colours split three and three yield the expected pattern.
