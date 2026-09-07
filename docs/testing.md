@@ -30,14 +30,18 @@ is one command.
   mask to be built at a zoom where props cast. Three are perspective
   views (ADR-007 stage 2): `chase` at the boreal stand's edge, `shoulder`
   over the village, and `firstperson` on the island's river shore, pitched
-  five degrees down. Every isometric frame is unchanged to the bit by
+  five degrees down. Every orthographic frame is unchanged to the bit by
   stage 2, which `GOLDEN_STRICT=1` checks. `stride` (ADR-008) is the
   yardstick at 1:1 with the person 0.3 s into a walk to the right, on
   the third of the large tier's four poses; the frames with the player
   at rest are unchanged to the bit by walking. Two are the table
   straight down (ADR-009): `plan`, the yardstick at 1:1 at 90 degrees,
   and `overhead`, the cloud scene at 1:8 at 90, which is the parallax at
-  the plan view.
+  the plan view. Two are the overview with an eye in it (ADR-010):
+  `tabletop`, the island at 1:8 at the floor angle under a perspective
+  projection, where the parallel edges converge; and `vista`, the filled
+  world at 1:8 at five degrees, the low-angle overview the projection
+  axis exists for.
 - **Camera** (ADR-007). The general projection gives the old formulas'
   bits: the footprint-era `project` and `unproject` live in the test
   module and a lattice of 441 points by six heights, at every zoom and
@@ -101,6 +105,30 @@ is one command.
   six rows at 1:1. The tilt clamps at both ends, survives a zoom step and
   a mode round trip, and the cloud sample moves by C/(C − H) per tile of
   pan at both ends of the range.
+- **The projection** (ADR-010). A vantage states one scale at its
+  reference distance under either projection, at every zoom and at 80,
+  120 and 168 columns, and the perspective table's eye stands
+  `focal / columns` metres from the point it looks at. A vantage's detail
+  scale moves with neither the projection nor the angle, so the level of
+  detail, the sprite tier and the walk's step count are the same in both.
+  An orthographic camera clamps its angle into 30 to 90 and a perspective
+  one into the full sphere, so a level overview switched to orthographic
+  comes up at the floor and the shoulder view's twenty degrees draws at
+  thirty; a round trip through the row keeps the yaw, the zoom, the
+  angle, the basis and the ground under the screen centre, and the
+  table's remembered angle survives it. The row's first value is the
+  projection the vantage has always had, and the row says nothing to
+  `first-person` or `free`, whose eye is their own anchor. At -90 and 90
+  the view axes stay orthonormal with the up vector flat, so turning the
+  yaw rolls the image about its centre rather than moving it. The zoom,
+  the pan and the follow ask the vantage: the table steps its preset
+  under either projection and a placement halves its distance, only the
+  orthographic table slides an offset, and the perspective table's dead
+  zone is spent into the anchor. The cloud plane is sampled over a hit on
+  the far side of it from the eye, so an overview above the plane keeps
+  its parallax over the ground and an eye under it draws none over the
+  ground at all. The settings row's values are `Projection::NAMES`, and
+  `Settings::apply` pushes the vantage first and the projection second.
 - **Coupling** (ADR-009). Under `body-turns` a walk key is the view's own
   heading and a walk in progress turns with the view; under `view-only`
   it is the body's, which the view turning leaves alone, and a diagonal
@@ -182,7 +210,7 @@ is one command.
   near zoom, its stand-in beside them for the shadow mask. From a
   first-person eye a pine twelve metres off is grown and one seventy-five
   metres off is its stand-in cone alone, and the walk meets each; the
-  isometric mid zoom grows both.
+  table's mid zoom grows both.
 - **Grown models** (`src/lsystem/mod.rs`). A merged cluster is no smaller
   than its biggest member and no wider on any axis than the box its
   members fill or the screen they would cover side by side, and a cluster
@@ -239,7 +267,7 @@ is one command.
   at midnight is the night floor. Fog (#21) is nothing at the eye,
   everything at the distance and rises through it, keeping most of the
   colour half way; a scene carries it for a perspective eye and not for
-  the isometric view unless asked, the shoulder view sees half as far
+  an orthographic view unless asked, the shoulder view sees half as far
   again, the depth from the eye is the distance to the point, and
   visibility closes in with cloud, rain and night, never under fifteen
   metres.
@@ -262,7 +290,7 @@ is one command.
 - **The keys down** (ADR-008). Two perpendicular direction keys held at
   once are one unit diagonal heading, half way between what each means
   alone, under both traversal settings and from an eye as well as the
-  isometric view; a diagonal key is exactly the two keys it stands for;
+  table; a diagonal key is exactly the two keys it stands for;
   two opposite keys are no heading at all, and so is nothing held. The
   held set lifts a key on its release and keeps the others; where
   releases are not reported each key holds its own lease instead, two
@@ -282,9 +310,9 @@ is one command.
   the wheel is a notch either way in both. `off` turns nothing whatever
   arrives and forgets where the pointer was. Moving the pointer right
   turns the view right — looking south and turning a quarter looks west —
-  its rows tilt the isometric table, fifteen rows down being fifteen
-  degrees steeper, and both the tilt and a perspective pitch stop at the
-  ends of their range however far the pointer is dragged. The `mouse`
+  its rows tilt the table, fifteen rows down being fifteen
+  degrees steeper, and the angle stops at the ends of its projection's
+  range however far the pointer is dragged. The `mouse`
   row's values are `MouseMode::NAMES` and each reads back as its mode.
 - **Walking** (ADR-008). Over ticks of 40 ms with the key renewed each
   tick, the distance walked is the speed times the seconds to the
@@ -338,7 +366,7 @@ is one command.
   same move the keys make, so a step off the island is refused; `walk=`
   gives the same frame twice, moves the figure into its stride, covers
   more ground with `run=1`, goes the other way for `a`, and walks nothing
-  in no time; `tilt=` and `camera=free` render the table's angle and the
+  in no time; `pitch=` and `camera=free` render the view's angle and the
   detached eye.
 
 ## Data

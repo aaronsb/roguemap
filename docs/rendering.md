@@ -103,64 +103,114 @@ and then the cloud layer over it.
 
 ## The camera
 
-A `Camera` is a yaw (the heading, `angle`), a pitch above the horizon, a
-field of view, a scale and a screen offset
-([ADR-007](adr/ADR-007-general-camera.md)). A field of view of zero is an
-orthographic view, which the isometric mode is; a positive one is a
-perspective view from an eye, which the chase, shoulder, first-person and
-free modes are. An orthographic view projects through a basis of three
-numbers — `a` columns per tile across the screen, `b` rows per tile of
-ground depth toward the camera, and `rpm` rows per metre of height —
-which are the scale times the tilt's sine and cosine:
+A `Camera` is a **vantage** and a **projection**
+([ADR-010](adr/ADR-010-projection-as-an-axis.md)). A vantage is an anchor
+and a placement: what the screen centre holds, and how far back, how high
+and how far to the side the eye sits from it. It yields a view direction,
+a focus point and a reference distance. A projection turns those three
+into a basis: orthographic takes the scale at the reference distance and
+drops the distance itself, perspective stands the eye at that distance
+and takes the field of view. The two are separate settings rows, `camera`
+and `projection`.
+
+| vantage | anchor | fixes | derives |
+|---|---|---|---|
+| table | the ground under the screen centre | the scale: the zoom's columns per metre | the distance, `focal / columns` |
+| chase | the character | 12 m | the scale at 12 m |
+| shoulder | the character, pushed 12 m on and 3 m right | 30 m | the scale at 30 m |
+| first-person | the character's eye | 0 m | the scale at `FIRST_PERSON_DEPTH`, 4 m |
+| free | the eye itself | 0 m | the scale at 4 m |
+
+A scale and a distance are the same fact stated twice, joined by the
+field of view and the screen's width: `columns per metre * metres of
+depth = focal`, where `focal` is `(sw / 2) / tan(fov / 2)`. That identity
+is what lets two overviews be compared at a named ratio, and it is why
+`projection` is a row of its own rather than a fifth `camera` value.
+
+An orthographic view projects through a basis of three numbers — `a`
+columns per tile across the screen, `b` rows per tile of ground depth
+toward the camera, and `rpm` rows per metre of height — which are the
+scale times the pitch's sine and cosine:
 
 ```
 sx = a * (x cos - y sin) + ox
 sy = b * (x sin + y cos) - z * rpm + oy
 ```
 
-The isometric mode is a table
+The table is the vantage the four zoom presets belong to
 ([ADR-009](adr/ADR-009-camera-modes-and-controls.md)):
-`Camera::isometric(zoom)` builds its basis from the zoom's columns per
-metre, the `tilt` the ground plane draws at and the `relief` height is
+`Camera::table(zoom)` builds its basis from the zoom's columns per
+metre, the `pitch` the ground plane draws at and the `relief` height is
 drawn taller by.
 
 ```
 cols = columns_per_metre * TILE_METRES
-rows = cols * CELL_ASPECT * sin(tilt)
-rise = relief * columns_per_metre * CELL_ASPECT * cos(tilt)
+rows = cols * CELL_ASPECT * sin(pitch)
+rise = relief * columns_per_metre * CELL_ASPECT * cos(pitch)
 ```
 
-The tilt runs from 30 degrees, the isometric look, to 90, straight down,
-where `rise` is zero and height displaces nothing; the relief is
-`sqrt 1.5` and vanishes with the cosine it multiplies, so it is a knob in
-the tilted range alone. `Basis::apparent_pitch` is the angle the
-exaggeration implies, 25.24 degrees at the floor, and `Camera::tilt` is
-the real one. `Camera::orthographic(yaw, tilt, relief, columns)` is the
-general form the presets are instances of. The basis is computed when a
-camera is built, its zoom set or its tilt changed, not on every
-projection, so the presets' numbers are exact; the yaw's sine and cosine
-are cached the same way, so the heading is set through `set_angle`.
+`Camera::pitch` is one angle for both projections, with the range the
+projection sets. Orthographic runs 30 degrees, the isometric look, to 90,
+straight down, where `rise` is zero and height displaces nothing; below
+30 the ground plane flattens toward a line that `unproject` and `ray`
+divide by. Perspective runs the full sphere, -90 to 90, since the eye is
+a point. An angle outside the range it lands in is clamped on the way in.
+The relief is `sqrt 1.5` and vanishes with the cosine it multiplies, so
+it is a knob in the tilted range alone, and it stays an orthographic
+idea. `Basis::apparent_pitch` is the angle the exaggeration implies,
+25.24 degrees at the floor. `Camera::orthographic(yaw, pitch, relief,
+columns)` is the general form the presets are instances of. The basis is
+computed when a camera is built, its zoom set or its angle changed, not
+on every projection, so the presets' numbers are exact; the yaw's sine
+and cosine are cached the same way, so the heading is set through
+`set_angle`.
 
-A tilt moves the height on screen and must not move the detail on screen,
-so the two are separate numbers: `rows_per_metre` is `rise`, read by the
-projection and the screen-extent culls, and `detail_rows` is the rows an
-upright thing facing the viewer draws as, which is `rise` at the floor
-tilt and does not move with the table. Level of detail, the sprite tier,
-the walk's samples per metre, the cloud-layer switch and the prop shadow
-threshold read `detail_rows`.
+An angle moves the height on screen and must not move the detail on
+screen, so the two are separate numbers: `rows_per_metre` is `rise`, read
+by the projection and the screen-extent culls, and `detail_rows` is the
+rows an upright thing facing the viewer draws as, which neither the angle
+nor the projection moves — the table's zoom's `rise` at the floor tilt,
+and a placement's `focal_rows / depth_ref` with no foreshortening. Level
+of detail, the sprite tier, the walk's samples per metre, the
+cloud-layer switch and the prop shadow threshold read `detail_rows`.
+
+### Eight of the ten combinations mean something
+
+| vantage | orthographic | perspective |
+|---|---|---|
+| table | the isometric look: four zooms, 30 to 90 degrees | the overview with an eye in it: the same four scales, the eye at `focal / columns`, the angle the full sphere |
+| chase | the table locked to the character at 30 degrees, no dead zone | the chase view |
+| shoulder | the same at 30 degrees, its own 20 being under the orthographic floor | the shoulder view |
+| first-person | inert | first person |
+| free | inert | the free camera |
+
+The two inert cells are the two vantages whose eye is their own anchor.
+An orthographic projection drops the distance, and a vantage that has
+none has nothing left to say, so `Camera::in_projection` returns those
+two unchanged.
+
+Only the orthographic table has a screen offset of its own, which the pan
+keys and the follow's dead zone slide; every other combination is set up
+by `Camera::aim` from the anchor, the placement, the yaw, the angle and
+the screen, and centres its target. So `pan`, `follow`, `focus`,
+`set_angle`, `set_zoom`, `zoom_by` and the mouse wheel ask the vantage,
+while the passes that ask how a point becomes a pixel — the raster's
+gates, the fog, `ray`, `unproject`, `reach`, `cloud_view` — ask
+`is_perspective`.
 
 ### The eye
 
-A perspective mode places its eye from the character by a `Placement`:
-the screen centre is the point the camera is aimed at pushed `ahead`
-metres away along the ground and `lateral` metres to the right, the eye
-sits `distance` metres back from that centre along the view direction,
-pitched down by `pitch`, and the mode names a default field of view that
-the `fov` settings row overrides. `Camera::perspective(eye, yaw, pitch,
-fov)` is the general form the three presets are instances of.
+A placement is how a vantage puts its eye from the point it is aimed at:
+the screen centre is that point pushed `ahead` metres away along the
+ground and `lateral` metres to the right, the eye sits `distance` metres
+back from that centre along the view direction, pitched down by `pitch`,
+and the vantage names a default field of view that the `fov` settings row
+overrides. `Camera::perspective(eye, yaw, pitch, fov)` is the general
+form the three character-placed presets are instances of.
 
-| mode | distance | pitch | fov | centre from the character | the eye | fog |
+| vantage | distance | pitch | fov | centre from the anchor | the eye | fog |
 |---|---|---|---|---|---|---|
+| table | `focal / columns` | 30 | 60 | on it | above the ground under the screen centre, orbiting it | 2x |
 | chase | 12 m | 30 | 60 | on it | close behind and above the character's middle, following them | 1x |
 | shoulder | 30 m | 20 | 40 | 12 m ahead, 3 m right | well back and high, off to one side, looking past the shoulder; the figure sits low and off-centre | 1.5x |
 | first-person | 0 | 0 | 60 | on it | the character's eye, `EYE_HEIGHT` (0.85) of their height over the ground; the character is not drawn | 1x |
@@ -171,17 +221,29 @@ along the view direction, screen right and screen up and divided by its
 depth, with a focal length of `(sw / 2) / tan(fov / 2)` columns and half
 that in rows, since a cell is twice as tall as it is wide. A point behind
 the eye lands far off screen. The basis of a perspective view is the
-scale at the character's depth: `rows_per_metre` is `focal / 2 / depth *
+scale at the reference depth: `rows_per_metre` is `focal / 2 / depth *
 cos(pitch)`, the first-person view stating it four metres out
 (`FIRST_PERSON_DEPTH`), so level of detail, the sprite tiers of ADR-004
 and the zoom preset carried for what is keyed by zoom keep one answer per
 frame. `detail_rows_at` gives any other point's, which is what a
 creature, a prop and a tree take at their own distance. Rotation turns
-the eye about the character, `{` and `}` pitch it, zoom halves or
-doubles the chase distance between three metres and sixty-four, `<` and
-`>` widen and narrow the field of view, and the camera follows the
-character every frame. The `camera` settings row switches the mode
-through `Camera::in_mode`, which keeps the yaw and the aimed point.
+the eye about the anchor, `{` and `}` look up and down, `<` and `>`
+widen and narrow the field of view, and the camera follows the character
+every frame. Zoom is the vantage's own scale: the table steps its preset,
+which moves the eye, and a placement halves or doubles its distance
+between three metres and sixty-four. The `camera` settings row switches
+the vantage through `Camera::in_mode` and the `projection` row switches
+the projection through `Camera::in_projection`, both keeping the yaw, the
+aimed point and the field-of-view override; the vantage goes first, since
+a vantage switch rebuilds the camera.
+
+A perspective table is a turntable: its anchor is the ground under the
+screen centre, so the yaw and the angle swing the eye around that point
+and the ground under the centre stays under it. Tilt the overview from
+straight down to level and the eye rides from 73 m above the point to
+level with it, at the same 73 m of range. The far and mid overviews stand
+above the cloud plane, so the cloud pass draws over any cell whose hit is
+on the far side of the plane from the eye and keeps its parallax.
 
 The free mode is the exception to all of that: its anchor is the eye
 itself, so `Camera::fly` moves the eye along the view direction and
@@ -189,8 +251,8 @@ across it, the pan keys move it too, `follow` does not run, and `c`
 brings it back to the character. `V` enters it from whatever view was in
 play and returns to that view; entered from an eye it takes the eye it
 found, and from the table the point under the screen centre pushed back
-along the yaw and up by the tilt at thirty metres, so the switch does not
-jump. Leaving is that push undone, the point thirty metres down the eye's
+along the yaw and up by the angle at thirty metres, so the switch does
+not jump. Leaving is that push undone, the point thirty metres down the eye's
 own view: `V` twice is the view it was entered from, and a flown eye
 leaves the table on the ground ahead of it.
 `Camera::addresses_character` is the question that separates the
@@ -210,16 +272,16 @@ that needs a camera quantity asks for it rather than deriving it:
 | `detail_rows()`, `detail_rows_at(x, y, z)` | the rows an upright metre draws as, here and at a point's own depth | level of detail, sprite and prop tiers, a tree's model detail |
 | `fog_origin(sw, sh)`, `fog_depth` | where the fog is measured from and how deep a point is in it | the light pass, the sub-rays' start |
 | `reach(w, far)` | the ground under the frustum out to the fog | the grid's box |
-| `in_mode(i)`, `hides_player()`, `addresses_character()`, `view_label()` | the mode switch, whether the character is the eye, whether the keys address the character, the status line | the settings row, the sprite pass, the tick, the HUD |
+| `in_mode(i)`, `in_projection(i)`, `hides_player()`, `addresses_character()`, `view_label()` | the vantage and projection switches, whether the character is the eye, whether the keys address the character, the status line | the settings rows, the sprite pass, the tick, the HUD |
 | `forward()`, `right()`, `depth(x, y)`, `tile_depth` | the map-space view axes and the depth sort | face shading, the sprite and prop sort, crown seams |
 | `project_vector(run, rise)` | a world displacement in cells | stroke directions for bare branches and furrows |
 | `footprint()` | the cells a tile spans | door and window widths, `pan` |
 | `rows_per_metre()`, `columns_per_metre()` | the scale, height and ground | the projection, the screen-extent culls |
-| `tilt()`, `set_tilt()`, `pitch_by()` | the table's angle and the keys that change it | `{` and `}`, the mouse's rows, the snapshot's `tilt=` |
+| `pitch`, `set_pitch()`, `pitch_by()`, `pitch_degrees()` | the angle above the ground and the keys that change it | `{` and `}`, the mouse's rows, the snapshot's `pitch=` |
 | `cloud_view(w, h)` | the cloud plane's parallax | the cloud layer |
 | `inset()` | the second camera at the other end of the scale | the inset frame |
 | `focus(sw, sh)`, `cell_step`, `screen_dir_to_map` | the target and the walk keys' steps | zoom and rotation pivots, movement |
-| `Camera::isometric(zoom)` | a preset's scale | the editor's preview panes, `fitting_zoom` |
+| `Camera::table(zoom)` | a preset's scale | the editor's preview panes, `fitting_zoom` |
 
 Level of detail is a table keyed off rows per metre, `raster::lod_of`,
 and every switch that depends on the zoom — roof profiles, models, glyph
@@ -254,7 +316,7 @@ of its path, and a crown it is already inside counts at its foot), and
 every segment is solved with its own foot as the zero of height and the
 ground point there as `p0`, because a near-level ray's drift of hundreds
 of tiles per metre loses the quadratics' digits in `f32` with the world's
-zero. A terrain crossing is then bisected along the ray. The isometric
+zero. A terrain crossing is then bisected along the ray. The orthographic
 walk is the other instantiation of the same code, with neither the
 direction nor the shift in it, which is what keeps its bits.
 
@@ -284,7 +346,7 @@ The specks a top face is textured with — gravel, scree, sand, tufts,
 waves, roof tiles, leaves — are a grid fixed in the world at the
 surface's `grain_metres` (surfaces.toml), hashed at the point the ray
 met. Nothing about the camera enters it and nothing is stored: a speck is
-a pure function of where it is, at the same place at every zoom, tilt,
+a pure function of where it is, at the same place at every zoom, angle,
 heading and distance. A stone worth picking up is a placed object with
 its own identity, and gathering from scree makes one, so the procedural
 field stays inexhaustible scenery and the two never have to reconcile
@@ -464,7 +526,7 @@ sky colour by its depth in the fog (#21): `Scene.fog` is the distance,
 `fog_factor(depth, distance)` is nothing at the eye, everything at the
 distance and the square in between, so the middle distance keeps its
 colour and the far field goes to sky where the perspective walk stops
-anyway. The depth is the distance from the eye, or in the isometric
+anyway. The depth is the distance from the eye, or in an orthographic
 view the depth along the view past the screen centre, so it can be
 fogged too (the `fog` settings row: perspective views only, always, or
 never). The distance is a weather quantity, `World::visibility`: 120 m on

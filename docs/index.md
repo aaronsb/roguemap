@@ -1,7 +1,7 @@
 # roguemap
 
-roguemap draws a height-mapped world in a terminal, in isometric
-projection, at 24-bit colour. There is no tile atlas and no sprite sheet
+roguemap draws a height-mapped world in a terminal, orthographic or in
+perspective, at 24-bit colour. There is no tile atlas and no sprite sheet
 for the landscape. Every screen cell casts a ray back into the world and
 walks down the continuous height field under it until it meets a surface,
 so the camera turns to any angle and the terrain has no seams.
@@ -40,8 +40,8 @@ terminal shows with the same font.
 | Page | What it covers |
 |---|---|
 | [world.md](world.md) | The height field, relief in metres, rivers, climate, biomes, chunks and the world map |
-| [rendering.md](rendering.md) | The camera and its modes, the ray walk from above and from an eye, block and tree geometry, shadows, lighting, fog, antialiasing, level of detail, cost |
-| [scale.md](scale.md) | Metres, the four zooms and their ratios, the tilt, movement and its control schemes, the inset view |
+| [rendering.md](rendering.md) | The camera, its vantages and projections, the ray walk from above and from an eye, block and tree geometry, shadows, lighting, fog, antialiasing, level of detail, cost |
+| [scale.md](scale.md) | Metres, the four zooms and their ratios, the angle, the projection, movement and its control schemes, the inset view |
 | [trees.md](trees.md) | The growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |
 | [frames.md](frames.md) | Frames over the scene: the HUD, settings, world map, inset, panes |
@@ -62,9 +62,11 @@ The catalogues and decision records the pages above lean on:
 | [ADR-004](adr/ADR-004-world-scale.md) | World scale in metres and zoom as exact ratios |
 | [ADR-005](adr/ADR-005-overlay-frames.md) | One frame system for everything drawn over the scene |
 | [ADR-006](adr/ADR-006-movement-by-screen-cell.md) | One keypress moves one screen cell, positions in centimetres |
-| [ADR-007](adr/ADR-007-general-camera.md) | A general camera, with the isometric view as a mode |
+| [ADR-007](adr/ADR-007-general-camera.md) | A general camera, with the orthographic table as one vantage |
 | [ADR-008](adr/ADR-008-walking.md) | The figure walks over time, by the keys held down |
 | [ADR-009](adr/ADR-009-camera-modes-and-controls.md) | The table tilts, and who turns with the view |
+| [ADR-010](adr/ADR-010-projection-as-an-axis.md) | Projection as an axis of its own, beside the vantage |
+| [ADR-011](adr/ADR-011-a-sandbox-on-a-sphere.md) | A sandbox on a sphere, and the horizon it gives the overview |
 
 ## Running it
 

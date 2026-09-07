@@ -109,11 +109,11 @@ typing in it does not walk the player.
 | `conversation` | `C` | bottom | wrapped text with a prompt |
 
 `roguemap --snap` takes `open=name,name` to render any of them headless,
-`camera=chase` (or `shoulder`, `first-person`) for the perspective modes
-with `pitch=` and `fov=` in degrees, `camera=free from=MODE` for the
-detached eye placed where the switch from that view leaves it, `tilt=`
-degrees for the isometric table, `coupling=view-only` for the body that
-turns on its own, `fog=` metres of visibility (`0` for no fade),
+`camera=chase` (or `shoulder`, `first-person`) for the vantages placed
+from the character with `pitch=` and `fov=` in degrees,
+`camera=free from=MODE` for the detached eye placed where the switch from
+that view leaves it, `projection=orthographic` or `perspective` for the
+other axis, `coupling=view-only` for the body that turns on its own, `fog=` metres of visibility (`0` for no fade),
 `fogmode=always` for the fog row, and `px=`, `py=` for the tile the
 character stands on, which a perspective view otherwise puts at the view
 centre.
@@ -127,8 +127,10 @@ The top bar is one line:
 ```
 
 It names the camera heading in degrees, the zoom as its ratio and its
-name — or, in a perspective mode, the mode with its distance, field of
-view and pitch, `chase 12m fov 60 pitch 30` — the season by name and as a
+name — or, from a vantage placed on the character, that vantage with its
+distance, field of view and pitch, `chase 12m fov 60 pitch 30`, and where
+the projection row overrides the vantage's own, that too, `1:8 far 5deg
+persp` or `chase 12m ortho` — the season by name and as a
 number, the clock with `(paused)` when
 the clock is stopped, the cloud cover, wind and precipitation as
 percentages, the glyph set, the light count — placed lights plus the ones
@@ -156,7 +158,8 @@ shortcut and the binding table in step.
 |---|---|---|
 | Traversal | screen space, map axes | |
 | Mouse | drag, free, off | |
-| Camera | isometric, chase, shoulder, first-person, free | `V` for free |
+| Camera | table, chase, shoulder, first-person, free | `V` for free |
+| Projection | vantage, orthographic, perspective | |
 | Coupling | body-turns, view-only | |
 | Field of view | preset, 30, 40, 50, 60, 70, 80, 90, 100, 110 | `<` `>` |
 | Fog | perspective, always, never | |
@@ -174,18 +177,21 @@ shortcut and the binding table in step.
 `Settings::apply` pushes each row into the object it governs: the world
 view sets whether the map is bounded, the clock sets `auto_time`, weather
 and wind set their presets, day length sets the seconds in a day, the
-camera row puts the camera in its mode and the field of view row
-overrides the mode's own field of view (the preset's is 60 degrees for
-chase, first-person and free and 40 for shoulder; the isometric mode has
+camera row puts the camera in its vantage, the projection row puts it
+under a projection, and the field of view row overrides the vantage's own
+field of view (the preset's is 60 degrees for the table, chase,
+first-person and free and 40 for shoulder; the orthographic table has
 none and ignores the row), and antialias, cloud layer and fog become the
 renderer's options. `<` and `>` step the field of view row in tens of
 degrees from wherever the camera stands and never wrap it back to
-`preset`; `{` and `}` pitch a perspective view by five degrees and tilt
-the isometric table by the same, which is the camera's and not a row.
+`preset`; `{` and `}` look up and down by five degrees, which is the
+camera's and not a row.
 
-The camera row is where the eye sits and the coupling row is whether the
-body turns with it
-([ADR-009](adr/ADR-009-camera-modes-and-controls.md)); the two are read
+The camera row is where the eye sits, the projection row is how its
+scale and distance become a picture
+([ADR-010](adr/ADR-010-projection-as-an-axis.md)), and the coupling row
+is whether the body turns with the view
+([ADR-009](adr/ADR-009-camera-modes-and-controls.md)); they are read
 by the tick, in [scale.md](scale.md). `V` is the camera row's one
 shortcut: it sets the row to `free` and back to the mode it suspended,
 which is state beside the camera, since no row holds it.
@@ -204,7 +210,8 @@ cursor and a legend of every biome. The details are in
 
 The inset owns a second `Camera` and `Renderer` and its own canvas,
 rebuilt whenever its interior changes size. It copies the main camera's
-angle and, from a table, its tilt, sets its zoom by the bias rule of
+heading and, from an orthographic table, its angle, sets its zoom by the
+bias rule of
 [scale.md](scale.md), looks at
 the player, renders the same `Scene` with antialiasing and clouds off, and
 blits the result. Its title is the row's title plus the ratio it is
