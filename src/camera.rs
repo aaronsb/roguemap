@@ -1024,6 +1024,33 @@ impl Camera {
         (x / len, y / len)
     }
 
+    /// The heading of several direction keys held at once (ADR-008): the
+    /// normalised sum of what each one means on its own, so two
+    /// perpendicular keys are a unit diagonal and two opposite ones are
+    /// `None` — nothing held and nothing to walk toward.
+    pub fn held_heading(&self, screen_space: bool, dirs: impl IntoIterator<Item = (i32, i32)>) -> Option<(f32, f32)> {
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut add = |dx: i32, dy: i32| {
+            let (hx, hy) = self.heading(screen_space, dx, dy);
+            x += hx;
+            y += hy;
+        };
+        // Each key counts as the unit heading of each axis it names, so a
+        // diagonal key is the two keys it stands for and no key weighs
+        // more for the ground its screen axis covers.
+        for (dx, dy) in dirs {
+            if dx != 0 {
+                add(dx.signum(), 0);
+            }
+            if dy != 0 {
+                add(0, dy.signum());
+            }
+        }
+        let len = x.hypot(y);
+        // Two opposite keys leave a sum that is zero but for rounding.
+        (len > 1e-3).then(|| (x / len, y / len))
+    }
+
     /// Which way a figure walking along a map heading faces on screen:
     /// `None` when it walks straight toward or away from the camera, so
     /// the figure keeps the facing it had.
@@ -1799,6 +1826,37 @@ mod tests {
         assert!((x + fx).abs() < 1e-4 && (y + fy).abs() < 1e-4, "up is away: {x}, {y} against forward {fx}, {fy}");
         assert_eq!(chase.facing_of(chase.heading(true, 1, 0)), Some(Facing::Right));
         assert_eq!(chase.facing_of(chase.heading(true, 0, -1)), None);
+    }
+
+    #[test]
+    fn two_keys_held_are_one_diagonal_heading_and_two_opposite_ones_are_none() {
+        use std::f32::consts::FRAC_1_SQRT_2;
+        let iso = Camera::isometric(3);
+        let chase = Camera::chase(FRAC_PI_4);
+        for cam in [iso, chase] {
+            for screen_space in [true, false] {
+                // One key is what that key means on its own.
+                let (x, y) = cam.held_heading(screen_space, [(1, 0)]).expect("one key walks");
+                let (hx, hy) = cam.heading(screen_space, 1, 0);
+                assert!((x - hx).abs() < 1e-6 && (y - hy).abs() < 1e-6, "{x}, {y} against {hx}, {hy}");
+                assert_eq!(cam.held_heading(screen_space, []), None, "nothing held is nothing to walk toward");
+                // Two perpendicular keys are the unit vector half way
+                // between them: the diagonal of the two headings.
+                let (ax, ay) = cam.heading(screen_space, 0, -1);
+                let (bx, by) = cam.heading(screen_space, 1, 0);
+                let (x, y) = cam.held_heading(screen_space, [(0, -1), (1, 0)]).expect("two keys walk");
+                assert!((x.hypot(y) - 1.0).abs() < 1e-5, "a unit heading: {x}, {y}");
+                assert!((x - (ax + bx) * FRAC_1_SQRT_2).abs() < 1e-5 && (y - (ay + by) * FRAC_1_SQRT_2).abs() < 1e-5, "half way between the two: {x}, {y}");
+                // Opposite keys cancel, whichever pair and however many.
+                assert_eq!(cam.held_heading(screen_space, [(1, 0), (-1, 0)]), None);
+                assert_eq!(cam.held_heading(screen_space, [(0, 1), (0, -1)]), None);
+                assert_eq!(cam.held_heading(screen_space, [(1, 1), (-1, -1), (1, 0), (-1, 0)]), None);
+                // A diagonal key alone is that same diagonal.
+                let one = cam.held_heading(screen_space, [(1, -1)]).expect("a diagonal key walks");
+                let two = cam.held_heading(screen_space, [(0, -1), (1, 0)]).expect("two keys walk");
+                assert!((one.0 - two.0).abs() < 1e-5 && (one.1 - two.1).abs() < 1e-5, "{one:?} against {two:?}");
+            }
+        }
     }
 
     #[test]

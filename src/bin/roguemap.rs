@@ -10,7 +10,7 @@ use roguemap::assets::Assets;
 use roguemap::camera::Camera;
 use roguemap::canvas::Canvas;
 use roguemap::frame::{Flow, FrameCtx, Frames, Item, List};
-use roguemap::input::{self, Action};
+use roguemap::input::{self, Action, Held};
 use roguemap::map::Map;
 use roguemap::render::{Renderer, Scene};
 use roguemap::settings::Settings;
@@ -47,13 +47,16 @@ struct App {
     /// Whether the player was walking after the last tick, so the end of
     /// a walk can be logged once.
     walking: bool,
+    /// The direction keys down (ADR-008); their sum is the heading each
+    /// tick, so two of them walk a diagonal.
+    held: Held,
     /// Screen size in cells.
     sw: i32,
     sh: i32,
 }
 
 impl App {
-    fn new(assets: Rc<Assets>, seed: u64, size: usize, sw: i32, sh: i32) -> App {
+    fn new(assets: Rc<Assets>, seed: u64, size: usize, sw: i32, sh: i32, key_release: bool) -> App {
         let tilesets = Tileset::all(&assets);
         let frames = ui::frames(&assets);
         let mut map = Map::new(size, size, seed, assets.clone());
@@ -65,15 +68,17 @@ impl App {
         cam.look_at(map.w as i32 / 2, map.h as i32 / 2, &map, sw, sh);
         world.spawn_player(&map, map.w as i32 / 2, map.h as i32 / 2);
         let inset_corner = settings.get("inset").max(1);
-        App { map, world, cam, settings, inset_corner, settling: false, walking: false, wmap: WorldMap::new(), frames, renderer: Renderer::new(sw, sh), tilesets, sw, sh }
+        App { map, world, cam, settings, inset_corner, settling: false, walking: false, held: Held::new(key_release), wmap: WorldMap::new(), frames, renderer: Renderer::new(sw, sh), tilesets, sw, sh }
     }
 
-    /// One tick of time (ADR-008): the clock and the weather, the
-    /// player's walk, and the camera easing after them — every tick in a
-    /// perspective mode, and in the isometric mode while a walk is still
-    /// settling. The end of a walk goes to the history.
+    /// One tick of time (ADR-008): the clock and the weather, the heading
+    /// the keys down make, the player's walk along it, and the camera
+    /// easing after them — every tick in a perspective mode, and in the
+    /// isometric mode while a walk is still settling. The end of a walk
+    /// goes to the history.
     fn tick(&mut self, dt: f32) {
         self.world.tick(dt);
+        self.walk_held();
         let walking = self.world.step_walk(&self.map, dt);
         if self.walking && !walking {
             if let Some((x, y)) = self.world.player().map(|p| p.metres()) {
@@ -85,6 +90,22 @@ impl App {
             let settled = self.cam.follow(&self.world, &self.map, self.sw, self.sh);
             self.settling = !settled;
         }
+        // The leases are spent after the walk, so a tap that renews none
+        // of them walks exactly its grace's worth.
+        self.held.tick(dt);
+    }
+
+    /// Point the walk where the keys down say (ADR-008): the normalised
+    /// sum of what each one means, which is a diagonal for two of them and
+    /// nothing for two opposite ones, held for as long as their leases
+    /// have left. With no key down the figure stops on this tick.
+    fn walk_held(&mut self) {
+        let Some(dir) = self.cam.held_heading(self.settings.screen_space(), self.held.dirs()) else {
+            self.world.stop_walk();
+            return;
+        };
+        self.world.walk_for(dir, self.held.running(), self.cam.facing_of(dir), self.held.grace());
+        self.settling = true;
     }
 
     fn resize(&mut self, w: i32, h: i32) {
@@ -109,7 +130,8 @@ impl App {
             self.renderer.draw(cv, &Scene::new(&self.map, ts, &self.world, &self.cam, t).with_fog(opts.fog), &opts);
             lights = self.world.lights.len() + self.renderer.frame_light_count();
         }
-        let ctx = FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts, settings: &self.settings, wmap: &self.wmap, lights, t, focused: false };
+        let keys = if self.held.release_events() { "  keys:held" } else { "  keys:repeat" };
+        let ctx = FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts, settings: &self.settings, wmap: &self.wmap, lights, t, focused: false, keys };
         self.frames.update(&ctx);
         self.frames.draw(cv, &ctx);
     }
@@ -147,7 +169,7 @@ impl App {
         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         let Some(focused) = self.frames.focus().map(str::to_string) else {
             return match input::lookup(input::SCENE, k.code, shift) {
-                Some(a) => self.scene_action(a),
+                Some(a) => self.scene_action(a, k.code),
                 None => Loop::Continue,
             };
         };
@@ -175,13 +197,17 @@ impl App {
         Loop::Continue
     }
 
-    fn scene_action(&mut self, a: Action) -> Loop {
+    fn scene_action(&mut self, a: Action, code: KeyCode) -> Loop {
         let (sw, sh) = (self.sw, self.sh);
+        if let Some((dir, run)) = Held::movement(a) {
+            // A direction key does not move the figure; it joins the keys
+            // down, and the tick walks their sum (ADR-008).
+            self.held.press(code, dir, run);
+            return Loop::Continue;
+        }
         match a {
             Action::Quit => return Loop::Quit,
             Action::Toggle(name) => self.toggle(name),
-            Action::Walk(dx, dy) => self.walk((dx, dy), false),
-            Action::Run(dx, dy) => self.walk((dx, dy), true),
             Action::Pan(dx, dy) => {
                 self.cam.pan(dx, dy);
                 self.settling = false;
@@ -243,18 +269,6 @@ impl App {
         }
     }
 
-    /// A walk key (ADR-008): set the player's heading — in screen space
-    /// the ground under the pressed screen direction, which is a diagonal
-    /// in map space at the compass view; along the map axes the axis the
-    /// key names — facing that way, and lease it for `World::GRACE`
-    /// seconds. The ticks do the walking, at the creature's speed or the
-    /// run multiple of it, and the camera settles after the figure.
-    fn walk(&mut self, dir: (i32, i32), run: bool) {
-        let heading = self.cam.heading(self.settings.screen_space(), dir.0, dir.1);
-        self.world.walk_toward(heading, run, self.cam.facing_of(heading));
-        self.settling = true;
-    }
-
     /// Light a campfire on the tile at the screen centre.
     fn light_campfire(&mut self) {
         let (mx, my) = self.cam.center_tile(&self.map, self.sw, self.sh);
@@ -311,8 +325,12 @@ fn main() -> std::io::Result<()> {
     let seed: u64 = argv.get(1).and_then(|s| s.parse().ok()).unwrap_or(7);
     let size: usize = argv.get(2).and_then(|s| s.parse().ok()).unwrap_or(32);
 
-    let mut term = terminal::Terminal::new()?;
-    let mut app = App::new(assets, seed, size, term.width(), term.height());
+    // The hook restores the terminal before the message prints, so a
+    // panic is readable instead of going to the alternate screen with a
+    // raw, enhanced keyboard behind it.
+    terminal::install_panic_hook();
+    let mut term = terminal::Terminal::with_key_release()?;
+    let mut app = App::new(assets, seed, size, term.width(), term.height(), term.key_release());
 
     let start = Instant::now();
     let frame = Duration::from_millis(40);
@@ -329,11 +347,19 @@ fn main() -> std::io::Result<()> {
 
         while event::poll(frame.saturating_sub(now.elapsed()))? {
             match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                // A repeat is the terminal saying the key is still down,
+                // which is a press to every binding: without release
+                // events it is the only thing that renews a walk, and
+                // with them it is what a repeating key has always done.
+                Event::Key(k) if k.kind == KeyEventKind::Press || k.kind == KeyEventKind::Repeat => {
                     if let Loop::Quit = app.handle_key(k) {
                         return Ok(());
                     }
                 }
+                // A release lifts a direction key whatever modifiers it
+                // comes back with, and whatever frame has focus, so a walk
+                // never outlives the key that started it (ADR-008).
+                Event::Key(k) if k.kind == KeyEventKind::Release => app.held.release(k.code),
                 Event::Resize(w, h) => {
                     term.resize(w, h);
                     app.resize(w as i32, h as i32);

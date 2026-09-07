@@ -217,7 +217,7 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     // One whole frame: the scene, then the overlay frames over it. The
     // inset view renders inside the second half, so its cost is in the
     // number `frames=N` prints.
-    let base = FrameCtx { map: &map, world: &world, cam: &cam, ts, settings: &settings, wmap: &wmap, lights: 0, t, focused: false };
+    let base = FrameCtx { map: &map, world: &world, cam: &cam, ts, settings: &settings, wmap: &wmap, lights: 0, t, focused: false, keys: "" };
     let one = |cv: &mut Canvas, renderer: &mut Renderer, frames: &mut Frames, t: f32| {
         let mut lights = 0;
         if !frames.is_open("worldmap") {

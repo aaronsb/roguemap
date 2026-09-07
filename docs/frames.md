@@ -102,7 +102,7 @@ typing in it does not walk the player.
 | `hud-help` | | bottom row, always | the generated key help |
 | `settings` | `Tab` or `o` | centre, sized to itself | the settings table |
 | `worldmap` | `m` | full screen | biomes plotted top-down with a teleport cursor |
-| `inset` | `n` | a corner, above 100 columns | the second view at the other end of the zoom scale |
+| `inset` | `x` | a corner, above 100 columns | the second view at the other end of the zoom scale |
 | `inventory` | `i` | left | what the character carries |
 | `stats` | `I` | right | position, biome, temperature, height, time, weather |
 | `history` | `L` | centre | the last fifty events |

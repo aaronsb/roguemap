@@ -136,3 +136,51 @@ the terminal's repeat delay.
   snapshot's `walk=` gives the same frame twice.
 - Docs: scale.md's movement section, assets.md's art format, testing.md,
   the README key table, properties.md's `speed` row.
+
+## Consequences of holding more than one key
+
+The owner, walking in Konsole: "it seems I can't press more than one key
+at once for movement." A terminal that delivers only presses and repeats
+repeats the last key pressed and no other, so the walk had one heading at
+a time and a diagonal by chord was impossible. Three things follow, and
+none of them changes what a walk is once it has a heading.
+
+**The keys down are a set, not a press.** `input::Held` holds the
+direction keys down; `Camera::held_heading` is the normalised sum of what
+each means on its own, each key counting as the unit heading of every
+axis it names. Two perpendicular keys are the diagonal between them, two
+opposite ones are nothing, and a diagonal key is exactly the two keys it
+stands for. A key pressed with shift makes the walk a run. The event loop
+sets the heading every tick rather than on the press, and
+`World::stop_walk` ends the walk on the tick the last key comes up.
+`World::walk_for` is `walk_toward` with the lease given, since the set
+knows what its keys have left.
+
+**Key releases where the terminal reports them.**
+`Terminal::with_key_release` asks for the keyboard enhancement protocol
+when `supports_keyboard_enhancement` says the terminal speaks it, pushing
+`DISAMBIGUATE_ESCAPE_CODES`, `REPORT_EVENT_TYPES`,
+`REPORT_ALTERNATE_KEYS` and `REPORT_ALL_KEYS_AS_ESCAPE_CODES` — the last
+because a plain-text key is reported at all three event types only when
+every key comes as an escape code, and the alternate keycode because a
+shifted letter then arrives as its base key, and `R` must stay `R`.
+`input::lookup` takes the capital of a shifted letter before the plain
+key for the same reason. The flags are popped on leave and by the panic
+hook, which restores the terminal before the message prints. The status
+bar reads `keys:held` or `keys:repeat` so the mode is visible.
+
+**A lease per key where they are not.** Each key keeps its own lease of
+`GRACE` seconds that a press or repeat renews and the tick spends, and
+the heading is the sum of the leases still live, so two keys alternated
+walk a diagonal and one held key behaves exactly as it did. A held chord
+still cannot be delivered, so `y u b n` walk the four diagonals with one
+key each and their capitals run them. `n` was the inset view, which moves
+to `x` in the binding table and in `assets/ui.toml`; the new help entries
+go at the end of the table, since the bottom bar of a 120-column frame
+shows the first 120 columns of the generated line and the golden frames
+pin those.
+
+The event loop treats a repeat as a press, which is what a repeat has
+always been, and a release lifts a direction key whatever modifiers it
+comes back with and whatever frame has focus, so a walk never outlives
+its key.

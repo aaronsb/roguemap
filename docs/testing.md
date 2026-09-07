@@ -201,6 +201,21 @@ is one command.
 
 ## Interaction
 
+- **The keys down** (ADR-008). Two perpendicular direction keys held at
+  once are one unit diagonal heading, half way between what each means
+  alone, under both traversal settings and from an eye as well as the
+  isometric view; a diagonal key is exactly the two keys it stands for;
+  two opposite keys are no heading at all, and so is nothing held. The
+  held set lifts a key on its release and keeps the others; where
+  releases are not reported each key holds its own lease instead, two
+  keys pressed within the grace are both live, a repeat renews one while
+  the other's runs out, and a lease nothing renews ends. `y u b n` are
+  the four diagonals and their capitals the runs; a shifted letter finds
+  the capital's action before the plain key's, which is how a terminal
+  reporting every key as an escape code delivers it. The walk takes the
+  lease as its grace, and stopping ends it on the tick with the stride
+  rested. A help entry added to the binding table falls past the 120
+  columns the golden frames pin.
 - **Walking** (ADR-008). Over ticks of 40 ms with the key renewed each
   tick, the distance walked is the speed times the seconds to the
   centimetre, 2.8 m in two seconds at 1.4 m/s, and a run on a diagonal

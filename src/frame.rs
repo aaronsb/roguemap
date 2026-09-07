@@ -305,6 +305,12 @@ pub struct FrameCtx<'a> {
     pub t: f32,
     /// Whether this frame has focus.
     pub focused: bool,
+    /// How the terminal delivers held keys (ADR-008), for the HUD to name:
+    /// `keys:held` where releases are reported and `keys:repeat` where the
+    /// walk is guessed at from repeats, carrying its own separator. Empty
+    /// headless, where there is no terminal and the bar reads to the byte
+    /// as it always has.
+    pub keys: &'a str,
 }
 
 /// What a focused frame did with a key.

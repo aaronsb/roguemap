@@ -103,14 +103,15 @@ line reads `chase 12m fov 60 pitch 30`.
 The player's position is centimetres, `Entity::x_cm, y_cm`, and the tile
 it stands in is derived from it
 ([ADR-006](adr/ADR-006-movement-by-screen-cell.md)). A keypress does not
-move the figure; it sets a heading and the figure walks
-([ADR-008](adr/ADR-008-walking.md)): every 40 ms tick of the event loop
-the figure advances `speed * dt` metres along it, `speed` being the
-creature row's metres per second — the person's 1.4 — in whole
-centimetres with the fraction carried to the next tick, so the distance
-walked is the speed times the time to the centimetre at every zoom. The
-binding is `Action::Walk(dx, dy)` on `w a s d` and `h j k l`; shift with
-an arrow is `Action::Run(dx, dy)`, `World::RUN` = 3 times the speed.
+move the figure; it joins the keys down, whose sum is a heading, and the
+figure walks along it ([ADR-008](adr/ADR-008-walking.md)): every 40 ms
+tick of the event loop the figure advances `speed * dt` metres along it,
+`speed` being the creature row's metres per second — the person's 1.4 —
+in whole centimetres with the fraction carried to the next tick, so the
+distance walked is the speed times the time to the centimetre at every
+zoom. The binding is `Action::Walk(dx, dy)` on `w a s d` and `h j k l`,
+the four diagonals on `y u b n`; shift with an arrow or a capital
+diagonal is `Action::Run(dx, dy)`, `World::RUN` = 3 times the speed.
 
 ![stride](screenshots/stride.png)
 
@@ -119,22 +120,52 @@ The yardstick at 1:1 with the person 0.3 s into a walk to the right,
 `walk=KEY,SECONDS` holds a walk key that long in the game's own ticks,
 with `run=1` for the run speed, so a frame mid-stride is reproducible.
 
-A press leases the heading for `World::GRACE` = 0.1 s and each tick
-spends `dt` of it, the last tick cut to what is left, so a tap walks
-exactly 14 cm and a held key — which a terminal delivers as a press per
-repeat interval, 40 ms on a typical desktop after its repeat delay — is a
-steady walk that stops within three ticks of the release. The pause
-between the first press and the first repeat is the terminal's repeat
-delay and shows as a short hitch; the grace is not stretched over it,
-since that would make every release late.
+### The keys down
+
+The heading is the normalised sum of the direction keys down,
+`Camera::held_heading`, each key counting as the unit heading of each
+axis it names. So `w` and `d` together walk the diagonal half way between
+them, `w` and `s` cancel to no walk at all, and a diagonal key is exactly
+the two keys it stands for. Any key down pressed with shift makes the
+whole walk a run. Letting the last one up stops the figure on that tick,
+`World::stop_walk`, rather than after the grace.
+
+Whether two keys can be down at once is the terminal's to say, and the
+status bar names which of the two modes the session is in.
+
+`keys:held`. A terminal that speaks the keyboard enhancement protocol —
+Konsole, kitty, foot, WezTerm, Alacritty — reports releases, so the game
+asks for them at startup, `Terminal::with_key_release`. It pushes
+`DISAMBIGUATE_ESCAPE_CODES`, `REPORT_EVENT_TYPES`,
+`REPORT_ALTERNATE_KEYS` and `REPORT_ALL_KEYS_AS_ESCAPE_CODES`: the
+release and repeat events are the point, a plain-text key is only
+reported at all three event types once every key comes as an escape code,
+and the alternate keycode is what keeps a shifted letter arriving as its
+capital. The flags are popped on the way out and in the panic hook. A key
+is then down from its press until its release, so any number of them are
+down at once and a chord is a diagonal.
+
+`keys:repeat`. A terminal that reports no releases delivers a press, its
+repeat delay, and then a press per repeat interval — 40 ms on a typical
+desktop — and while two keys are held it repeats only the last pressed.
+So each key instead holds a lease of `World::GRACE` = 0.1 s that every
+press or repeat renews and every tick spends, the last tick cut to what
+is left: a tap walks exactly 14 cm over three ticks, a held key is a
+steady walk that stops within three ticks of the release, and two keys
+alternated stay live together and walk the diagonal as well as the
+terminal can deliver it. A held chord cannot be delivered at all, which
+is what `y u b n` are for. The pause between the first press and the
+first repeat is the terminal's repeat delay and shows as a short hitch;
+the lease is not stretched over it, since that would make every release
+late.
 
 While the figure walks, its art cycles through the poses the tier
 carries (docs/assets.md): the pose is picked by distance walked on this
 walk through a stride of `World::STRIDE` = 0.7 m, so `n` poses hold
 `0.7 / n` metres each and a run cycles three times faster. Stopping
 returns the figure to its rest pose. The figure faces its direction of
-travel: a press sets `Entity::facing` from the screen-space sign of the
-heading, left or right, keeps the last facing when the heading is
+travel: the heading sets `Entity::facing` from its screen-space sign,
+left or right, keeps the last facing when the heading is
 straight toward or away from the camera, and the facing persists when
 stopped; a figure facing left is the art's mirror. The figure's feet are
 drawn at the exact point, at `Map::ground_at`; on a slope the rise or
@@ -232,7 +263,7 @@ tenths of its height, needs at least 20 by 8 cells, and is hidden below
 100 columns. Because it follows the player and not the camera, panning
 the main view leaves the inset where it was.
 
-`n` toggles it. The `Inset` settings row places it in any of the four
+`x` toggles it. The `Inset` settings row places it in any of the four
 corners or turns it off. Its row in `assets/ui.toml` ranks below the HUD
 bars in priority, so it covers the tail of the line it sits on rather
 than taking the whole line away; the frame system is in

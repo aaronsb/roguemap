@@ -79,7 +79,7 @@ z = 40
 # rather than taking the whole line away, and yields to any pane opened
 # over it.
 priority = 15
-key = "n"
+key = "x"
 show = { min_columns = 100 }
 background = "opaque"
 size = { cols = 0.25, rows = 0.3, min_cols = 20, min_rows = 8 }

@@ -552,16 +552,34 @@ impl World {
     /// when given and as before when not. A press on the same heading
     /// keeps the centimetre carry; a turn drops it.
     pub fn walk_toward(&mut self, dir: (f32, f32), run: bool, facing: Option<Facing>) {
+        self.walk_for(dir, run, facing, World::GRACE);
+    }
+
+    /// The same with the lease given: the held-key set of the event loop
+    /// knows how long its keys have left, so it hands the walk that
+    /// instead of a whole grace (ADR-008).
+    pub fn walk_for(&mut self, dir: (f32, f32), run: bool, facing: Option<Facing>, grace: f32) {
         let Some(p) = self.player_mut() else { return };
         let factor = if run { World::RUN } else { 1.0 };
         let carry = match p.walk {
             Some(w) if w.dir == dir => w.carry,
             _ => (0.0, 0.0),
         };
-        p.walk = Some(Walk { dir, grace: World::GRACE, factor, carry });
+        p.walk = Some(Walk { dir, grace, factor, carry });
         if let Some(f) = facing {
             p.facing = f;
         }
+    }
+
+    /// End the player's walk now rather than when the grace runs out: with
+    /// key releases reported, letting the last direction key up stops the
+    /// figure on the tick (ADR-008). Returns whether they were walking.
+    pub fn stop_walk(&mut self) -> bool {
+        let Some(p) = self.player_mut() else { return false };
+        let was = p.walk.is_some();
+        p.walk = None;
+        p.walked = 0.0;
+        was
     }
 
     /// Spend `dt` seconds of the player's walk (ADR-008): advance
@@ -732,6 +750,31 @@ mod tests {
         let mut n = World::new(1);
         n.walk_toward((1.0, 0.0), false, None);
         assert!(!n.step_walk(&map, 0.04));
+    }
+
+    #[test]
+    fn a_lease_is_the_walks_grace_and_letting_the_key_up_stops_it_on_the_tick() {
+        let map = plain();
+        let mut w = World::new(1);
+        w.spawn_player(&map, 32, 32);
+        let start = w.player().unwrap().metres();
+        // The held-key set hands the walk what its keys have left, so a
+        // lease shorter than the tick walks only its own worth.
+        w.walk_for((1.0, 0.0), false, Some(Facing::Right), 0.02);
+        assert!(!w.step_walk(&map, 0.04), "a spent lease ends the walk");
+        let speed = map.assets.creatures[PLAYER as usize].speed;
+        assert!((w.player().unwrap().metres().0 - start.0 - speed * 0.02).abs() < 0.0051);
+        // Releasing the last key stops the figure where it stands, without
+        // waiting out the grace, and rests its stride.
+        w.walk_for((1.0, 0.0), false, None, World::GRACE);
+        assert!(w.step_walk(&map, 0.04));
+        let (x, y) = w.player().unwrap().metres();
+        assert!(w.stop_walk(), "they were walking");
+        let p = w.player().unwrap();
+        assert_eq!(p.metres(), (x, y), "stopping moves nobody");
+        assert!(p.walk.is_none() && p.walked == 0.0 && p.pose(4).is_none(), "{p:?}");
+        assert!(!w.stop_walk(), "and they are not walking now");
+        assert!(!w.step_walk(&map, 0.04), "a stopped walk takes no more ticks");
     }
 
     #[test]

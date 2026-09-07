@@ -72,6 +72,8 @@ help line at the bottom of the screen.
 | Key | Action |
 |---|---|
 | `w a s d` or `h j k l` | walk that way at 1.4 m/s while held, a tap 14 cm; the figure faces and strides, and the camera follows with some give |
+| `y u b n` | the four diagonals, one key each; the capitals run them |
+| two direction keys | held together they walk the diagonal between them; opposite keys cancel |
 | arrows | pan by one tile; shift with an arrow runs, three times walking speed |
 | `c` | centre on the player |
 | `r` / `R`, `(` / `)` | snap to the next compass view, or turn five degrees |
@@ -84,7 +86,7 @@ help line at the bottom of the screen.
 | `W`, `f`, `F` | cycle the weather, light a campfire, put the fires out |
 | `Tab` or `o` | the settings frame: the camera mode (isometric, chase, shoulder, first-person), the field of view, the fog and the rest |
 | `m` | the world map |
-| `n` | the inset view at the other end of the zoom scale |
+| `x` | the inset view at the other end of the zoom scale |
 | `i`, `I`, `L`, `C` | inventory, stats, history, conversation |
 | `H` | hide the HUD |
 | `q` or `Esc` | quit |

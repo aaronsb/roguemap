@@ -108,7 +108,7 @@ impl Content for Hud {
         let wx = &world.weather;
         let weather = format!("cloud {:.0}% wind {:.0}% precip {:.0}%", wx.cover * 100.0, wx.wind * 100.0, wx.precip * 100.0);
         let line = format!(
-            " roguemap  {}deg  {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}  {} ",
+            " roguemap  {}deg  {}  {} ({:.2})  {:02}:{:02}{}  {}  glyphs:{}  lights:{}{}  {} ",
             ctx.cam.degrees(),
             ctx.cam.view_label(),
             SEASON_NAMES[season_blend(world.season).0],
@@ -119,6 +119,7 @@ impl Content for Hud {
             weather,
             ctx.ts.name,
             ctx.lights,
+            ctx.keys,
             here,
         );
         cv.text(rect.x, rect.y, &line, CHROME.text, CHROME.bar);
@@ -378,7 +379,7 @@ mod tests {
         }
 
         fn ctx(&self) -> FrameCtx<'_> {
-            FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts: &self.tilesets[0], settings: &self.settings, wmap: &self.wmap, lights: 0, t: 0.0, focused: false }
+            FrameCtx { map: &self.map, world: &self.world, cam: &self.cam, ts: &self.tilesets[0], settings: &self.settings, wmap: &self.wmap, lights: 0, t: 0.0, focused: false, keys: "" }
         }
     }
 
