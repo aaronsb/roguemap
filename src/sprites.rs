@@ -23,6 +23,35 @@ struct SpriteColors {
     base: Tint,
 }
 
+/// The scattered props of one tile: a deterministic 4x4 sub-grid, one roll
+/// per cell against the props whose placement rules the tile passes, in
+/// table order. `f` takes the prop's ground position and its row. Tiles
+/// carrying a tree or a stack have no room for them, and water none at
+/// all. The sprite pass draws these and the shadow mask sweeps them, so
+/// the two agree on where a prop stands.
+pub(crate) fn scatter(sc: &Scene, mx: i32, my: i32, tile: &Tile, mut f: impl FnMut(f32, f32, usize)) {
+    let (assets, cam) = (sc.assets, sc.cam);
+    if tile.tree.is_some() || tile.stack.is_some() || tile.terrain == Terrain::Water {
+        return;
+    }
+    let cover = tile.biome(assets).cover;
+    for sub in 0..16 {
+        let hv = hash(mx as i64 * 4 + sub % 4, my as i64 * 4 + sub / 4, (tile.seed as u64) ^ 0x9A0B);
+        let roll = (hv % 10000) as f32 / 10000.0;
+        let mut acc = 0.0;
+        for (pi, p) in assets.props.iter().enumerate() {
+            if (cam.zoom as u8) < p.min_zoom || !p.terrain.contains(&tile.terrain) || (p.near_water && !tile.near_water) || (!p.cover.is_empty() && !p.cover.contains(&cover)) {
+                continue;
+            }
+            acc += p.density;
+            if roll < acc {
+                f(mx as f32 + (sub % 4) as f32 / 4.0 + 0.125, my as f32 + (sub / 4) as f32 / 4.0 + 0.125, pi);
+                break;
+            }
+        }
+    }
+}
+
 /// Something standing on a tile that draws as a billboard.
 enum SpriteItem {
     Tree(Flora),
@@ -157,28 +186,7 @@ impl Renderer {
         for my in y0..=y1 {
             for mx in x0..=x1 {
                 let Some(tile) = map.get(mx, my) else { continue };
-                if tile.tree.is_some() || tile.stack.is_some() || tile.terrain == Terrain::Water {
-                    continue;
-                }
-                let cover = tile.biome(assets).cover;
-                for sub in 0..16 {
-                    let hv = hash(mx as i64 * 4 + sub % 4, my as i64 * 4 + sub / 4, (tile.seed as u64) ^ 0x9A0B);
-                    let roll = (hv % 10000) as f32 / 10000.0;
-                    let mut acc = 0.0;
-                    for (pi, p) in props.iter().enumerate() {
-                        if (cam.zoom as u8) < p.min_zoom || !p.terrain.contains(&tile.terrain) || (p.near_water && !tile.near_water) || (!p.cover.is_empty() && !p.cover.contains(&cover)) {
-                            continue;
-                        }
-                        acc += p.density;
-                        if roll < acc {
-                            let x = mx as f32 + (sub % 4) as f32 / 4.0 + 0.125;
-                            let y = my as f32 + (sub / 4) as f32 / 4.0 + 0.125;
-                            let depth = x * fx + y * fy;
-                            items.push((depth, x, y, tile.hf.max(SEA as f32), pi));
-                            break;
-                        }
-                    }
-                }
+                scatter(sc, mx, my, &tile, |x, y, pi| items.push((x * fx + y * fy, x, y, tile.hf.max(SEA as f32), pi)));
             }
         }
         // Hand-placed props draw at every zoom: they are explicit, not scattered.

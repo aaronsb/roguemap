@@ -4,7 +4,7 @@
 //!
 //! A frame file is width and height as u32 little-endian, then one record
 //! per cell, row-major: codepoint u32 little-endian, foreground r g b,
-//! background r g b. Twelve 120x40 frames are about half a megabyte.
+//! background r g b. Thirteen 120x40 frames are about half a megabyte.
 //!
 //! The comparison is tolerant by default: a frame passes when at least
 //! `GOLDEN_MIN_IDENTICAL` percent of cells are identical (default 98) and

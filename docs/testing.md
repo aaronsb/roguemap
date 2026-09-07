@@ -13,7 +13,7 @@ is one command.
   `roguemap::snapshot::render`, and compares each with its reference in
   `tests/golden/<name>.frame`: width and height as u32 little-endian, then
   per cell a u32 codepoint and the foreground and background bytes. The
-  references are committed (about half a megabyte for twelve 120x40
+  references are committed (about half a megabyte for thirteen 120x40
   frames). The comparison scores a frame by the percentage of identical
   cells, the percentage with the same glyph, and the mean six-channel
   colour distance; it passes at `GOLDEN_MIN_IDENTICAL` (default 98) and
@@ -25,6 +25,9 @@ is one command.
   frames changed and why. The comparator has its own tests: identical
   frames score 100 and 0, one changed cell in 4800 scores as expected,
   and a sprite shifted one cell is reported by its differing cells.
+  One frame, `props`, is there for the prop shadows: a close view of a
+  boulder field at 15:00, the only shot whose sun is low enough for the
+  mask to be built at a zoom where props cast.
 - **Camera.** Project then unproject returns the input at every zoom and
   several angles; `screen_dir_to_map` gives the eight compass steps;
   `tile_depth` orders a nearer tile above a farther one at every angle.
@@ -118,7 +121,11 @@ is one command.
   ground down-sun for its height times the per-unit length (half a tile
   per metre), not beyond, not on the sun side and not sideways; a point
   above the ray is lit and the roof is not in its own shadow; at night
-  there is no mask.
+  there is no mask. A placed prop shades the ground down-sun by its own
+  height times that length and no further, nothing on the sun side, and a
+  boulder's shadow stops where a thing twice as tall still reaches; at the
+  overview a prop casts nothing. Both run on a plain of sand under a cover
+  no prop asks for, so the only occluders are the ones the test places.
 - **Antialiasing.** The sextant map is a bijection onto U+1FB00..U+1FB3B
   plus the two half blocks; quantising six identical colours yields no
   glyph; two colours split three and three yield the expected pattern.

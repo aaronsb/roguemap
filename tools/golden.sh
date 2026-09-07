@@ -21,4 +21,5 @@ shot worldmap      fill=1 worldmap=1 scale=2 cx=0 cy=0
 shot settings      popover=1 zoom=0
 shot ascii         zoom=1 fill=1 cx=0 cy=0 t=3 tod=12 glyphs=ascii
 shot scale         scene=scale zoom=3 t=3 tod=12
+shot props         fill=1 zoom=3 cx=0 cy=0 t=3 tod=15
 echo "wrote $(ls "$out" | wc -l) frames to $out"

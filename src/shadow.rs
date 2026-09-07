@@ -1,28 +1,43 @@
 //! Cast shadows (docs/structures.md): once per frame a mask in map space
-//! over the visible tiles, four samples per tile, holding the height of
+//! over the visible tiles, four samples per tile and sixteen where props
+//! cast, holding the height of
 //! the highest sun ray any occluder blocks over each ground point. A point
 //! below that height is in shadow. Occluders are terrain steeper than the
-//! sun's ray, stack columns with their roofs, and tree canopies, each
+//! sun's ray, stack columns with their roofs, props and tree canopies, each
 //! swept along the sun's ground direction by its height in metres times the
 //! shadow length per metre, which is the cloud shadows' own factor.
 
+use crate::biome::Prop;
 use crate::blocks::Profile;
+use crate::canvas::Rgb;
 use crate::grid::HeightGrid;
-use crate::map::SEA;
+use crate::map::{SEA, TILE_METRES};
 use crate::render::Scene;
 
-/// Samples per tile along each axis.
+/// Samples per tile along each axis, and the finer grid the close zooms
+/// use: a prop is a sub-tile thing, and a boulder's shadow is shorter than
+/// one coarse sample, so where props cast the mask is laid twice as fine.
 const RES: f32 = 2.0;
+const CLOSE_RES: f32 = 4.0;
 /// Longest sweep in tiles, whatever the sun does.
 const MAX_SWEEP: f32 = 12.0;
 /// Occluders below this height above their surroundings cast nothing.
 const CLEAR: f32 = -1.0e9;
+/// Rows per metre from which props cast: the close zooms, 1:2 and 1:1
+/// (ADR-004). At the overview a prop is one glyph and its shadow would be
+/// shorter than the cell it stands in.
+const PROP_ROWS: f32 = 3.0;
+/// Shortest prop that casts, in metres: below this it is ground cover and
+/// has no shadow to speak of.
+const PROP_MIN_H: f32 = 0.25;
 
 pub(crate) struct ShadowMask {
     x0: i32,
     y0: i32,
     w: i32,
     h: i32,
+    /// Samples per tile of this frame's mask.
+    res: f32,
     top: Vec<f32>,
     /// How much of the sun the occluder over each sample stops, 0..1: a
     /// crown stops its species' leaf density, so a thin tree throws a light
@@ -47,11 +62,13 @@ impl ShadowMask {
             return None; // the sun is overhead: nothing reaches past its own footprint
         }
         let (x0, y0, x1, y1) = grid.bounds();
-        let (w, h) = (((x1 - x0 + 1) as f32 * RES) as i32, ((y1 - y0 + 1) as f32 * RES) as i32);
-        let u = world.shadow_dir();
-        let mut mask = ShadowMask { x0, y0, w, h, top: vec![CLEAR; (w * h) as usize], opacity: vec![0.0; (w * h) as usize], u, k };
         let volumes = crate::raster::lod_of(sc.cam.rows_per_metre()).volumes;
-        for (mx, my, _, g) in grid.cells() {
+        let props = sc.cam.rows_per_metre() >= PROP_ROWS;
+        let res = if props { CLOSE_RES } else { RES };
+        let (w, h) = (((x1 - x0 + 1) as f32 * res) as i32, ((y1 - y0 + 1) as f32 * res) as i32);
+        let u = world.shadow_dir();
+        let mut mask = ShadowMask { x0, y0, w, h, res, top: vec![CLEAR; (w * h) as usize], opacity: vec![0.0; (w * h) as usize], u, k };
+        for (mx, my, t, g) in grid.cells() {
             let (cx, cy) = (mx as f32 + 0.5, my as f32 + 0.5);
             // Terrain: a tile whose ground drops faster than the sun's ray
             // along the shadow direction shades what lies below it.
@@ -59,6 +76,13 @@ impl ShadowMask {
             let ahead = grid.sample(cx + u.0, cy + u.1).max(SEA as f32);
             if (here - ahead) * k > 2.0 {
                 mask.stamp((cx, cy), 0.6, 0.0, (k * (here - ahead) + 1.5).min(MAX_SWEEP), here, 1.0, None);
+            }
+            // Props: a boulder or a tent is a solid thing a metre or two
+            // high and its `size` says so, so it lays a short shadow of its
+            // own through the same sweep. Only at the close zooms: at the
+            // overview a prop is one glyph and a metre is under a row.
+            if props {
+                crate::sprites::scatter(sc, mx, my, t, |x, y, pi| mask.prop(&sc.assets.props[pi], x, y, g.base));
             }
             if let Some(st) = g.stack {
                 if st.levels > 0 {
@@ -68,6 +92,13 @@ impl ShadowMask {
                     let len = (k * (top - g.base) + 1.5).min(MAX_SWEEP);
                     mask.stamp((cx, cy), 0.72, 0.0, len, top, 1.0, Some((mx as f32, my as f32, 1.0, 1.0)));
                 }
+            }
+        }
+        if props {
+            // Hand-placed props stand where someone put them rather than on
+            // a tile's own geometry, so their ground comes from the field.
+            for pl in sc.world.placed.iter().filter(|pl| pl.prop < sc.assets.props.len()) {
+                mask.prop(&sc.assets.props[pl.prop], pl.x, pl.y, grid.sample(pl.x, pl.y).max(SEA as f32));
             }
         }
         if volumes {
@@ -85,6 +116,25 @@ impl ShadowMask {
         Some(mask)
     }
 
+    /// Sweep one prop standing at a ground point: a disc the size of its
+    /// footprint, from its top, with `size` in metres deciding both the
+    /// height of the ray and how far down-sun it reaches. A prop is a
+    /// sub-tile thing, so a boulder's whole shadow is a sample or two past
+    /// its own footprint, and one narrower than the mask can hold throws
+    /// nothing.
+    fn prop(&mut self, p: &Prop, x: f32, y: f32, ground: f32) {
+        let (w, d, h) = (p.size[0] / TILE_METRES, p.size[1] / TILE_METRES, p.size[2]);
+        if h < PROP_MIN_H {
+            return; // a patch of moss is ground cover, not a thing standing on it
+        }
+        // A prop drawn as a bare glyph over the ground — no fill colour — is
+        // a thin thing: a tuft of grass or a stand of reeds stops half the
+        // sun, the way a sparse crown does. A solid one stops all of it.
+        let opacity = if p.color == Rgb(0, 0, 0) { 0.5 } else { 1.0 };
+        let r = w.max(d) / 2.0;
+        self.stamp((x, y), r, 0.0, (self.k * h + r).min(MAX_SWEEP), ground + h, opacity, Some((x - w / 2.0, y - d / 2.0, w, d)));
+    }
+
     /// Sweep a disc of radius `r` at `c` along the shadow direction from
     /// `t0` to `t1` tiles, recording the height of the ray from `top` that
     /// enters the disc's column. Samples inside `exclude` (x, y, w, h), the
@@ -98,15 +148,15 @@ impl ShadowMask {
         let (bx, by) = (c.0 + ux * t1, c.1 + uy * t1);
         let (minx, maxx) = (ax.min(bx) - r, ax.max(bx) + r);
         let (miny, maxy) = (ay.min(by) - r, ay.max(by) + r);
-        let i0 = (((minx - self.x0 as f32) * RES).floor() as i32).max(0);
-        let i1 = (((maxx - self.x0 as f32) * RES).ceil() as i32).min(self.w - 1);
-        let j0 = (((miny - self.y0 as f32) * RES).floor() as i32).max(0);
-        let j1 = (((maxy - self.y0 as f32) * RES).ceil() as i32).min(self.h - 1);
+        let i0 = (((minx - self.x0 as f32) * self.res).floor() as i32).max(0);
+        let i1 = (((maxx - self.x0 as f32) * self.res).ceil() as i32).min(self.w - 1);
+        let j0 = (((miny - self.y0 as f32) * self.res).floor() as i32).max(0);
+        let j1 = (((maxy - self.y0 as f32) * self.res).ceil() as i32).min(self.h - 1);
         let r2 = r * r;
         for j in j0..=j1 {
-            let qy = self.y0 as f32 + (j as f32 + 0.5) / RES;
+            let qy = self.y0 as f32 + (j as f32 + 0.5) / self.res;
             for i in i0..=i1 {
-                let qx = self.x0 as f32 + (i as f32 + 0.5) / RES;
+                let qx = self.x0 as f32 + (i as f32 + 0.5) / self.res;
                 if let Some((ex, ey, ew, eh)) = exclude {
                     if qx >= ex && qx < ex + ew && qy >= ey && qy < ey + eh {
                         continue;
@@ -139,8 +189,8 @@ impl ShadowMask {
     /// Shadow at a world point, 0 lit to 1 shaded, bilinear over the four
     /// samples around it.
     pub(crate) fn factor(&self, wx: f32, wy: f32, wz: f32) -> f32 {
-        let fx = (wx - self.x0 as f32) * RES - 0.5;
-        let fy = (wy - self.y0 as f32) * RES - 0.5;
+        let fx = (wx - self.x0 as f32) * self.res - 0.5;
+        let fy = (wy - self.y0 as f32) * self.res - 0.5;
         let (ix, iy) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - ix, fy - iy);
         let (ix, iy) = (ix as i32, iy as i32);
@@ -171,13 +221,22 @@ impl ShadowMask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::test_assets;
+    use crate::assets::{test_assets, Assets};
+    use crate::biome::Cover;
     use crate::blocks::Stack;
     use crate::camera::Camera;
-    use crate::map::{Map, Tile};
+    use crate::map::{Map, Terrain, Tile};
     use crate::render::Renderer;
     use crate::tileset::Tileset;
-    use crate::world::World;
+    use crate::world::{PlacedProp, World};
+
+    /// A tile of a plain the scattered props leave alone: sand under a cover
+    /// none of them asks for, since they want grass, rock, dirt or the
+    /// waterline. A test on one sees only the occluders it places itself.
+    fn bare(assets: &Assets, z: i32) -> Tile {
+        let biome = assets.biomes.iter().position(|b| b.cover != Cover::Dry).expect("a biome that is not dry country");
+        Tile { terrain: Terrain::Sand, biome: biome as u8, ..Tile::flat(z) }
+    }
 
     #[test]
     fn a_single_column_shades_the_ground_down_sun_for_its_height_times_the_factor() {
@@ -185,8 +244,9 @@ mod tests {
         let ts = &Tileset::all(&assets)[0];
         // A flat plain with one three-level tower at (10, 10).
         let tower = assets.blocks.iter().position(|b| b.name == "tower").expect("a tower kind");
+        let plain = bare(&assets, 5);
         let map = Map::synthetic(32, 32, assets.clone(), 0, move |x, y| {
-            let mut t = Tile::flat(5);
+            let mut t = plain;
             if (x, y) == (10, 10) {
                 t.stack = Some(Stack { kind: tower as u8, levels: 3 });
             }
@@ -233,5 +293,59 @@ mod tests {
         world.tod = 1.0;
         let sc = Scene::new(&map, ts, &world, &cam, 0.0);
         assert!(ShadowMask::build(&sc, &grid).is_none());
+    }
+
+    #[test]
+    fn a_prop_shades_down_sun_by_its_height_at_the_close_zooms_and_nothing_at_the_overview() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let plain = bare(&assets, 5);
+        let map = Map::synthetic(32, 32, assets.clone(), 0, move |_, _| plain);
+        let prop = |name: &str| assets.props.iter().position(|p| p.name == name).unwrap_or_else(|| panic!("a {name} prop"));
+        let (reeds, boulder) = (prop("reeds"), prop("boulder"));
+        let (tall, short) = (assets.props[reeds].size[2], assets.props[boulder].size[2]);
+        assert!(tall > 2.0 * short - 0.1, "the reeds stand about twice the boulder: {tall} m and {short} m");
+        let mut world = World::new(1);
+        world.tod = 15.0;
+        world.placed.push(PlacedProp { x: 12.5, y: 12.5, prop: reeds });
+        world.placed.push(PlacedProp { x: 17.5, y: 17.5, prop: boulder });
+        let (w, h) = (120, 40);
+        let r = Renderer::new(w, h);
+        let ground = 5.5;
+        let mask_at = |zoom: usize| {
+            let mut cam = Camera::new();
+            cam.set_zoom(zoom, w, h);
+            cam.look_at(15, 15, &map, w, h);
+            let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+            let (x0, y0, x1, y1) = r.visible_bounds(&cam, 40.0);
+            let grid = HeightGrid::build(&sc, x0, y0, x1, y1, w, h, &mut crate::grid::ModelCache::new());
+            ShadowMask::build(&sc, &grid).expect("the sun is up")
+        };
+        let mask = mask_at(2);
+        let k = world.shadow_per_metre();
+        let (ux, uy) = mask.u;
+        let along = |c: (f32, f32), t: f32| (c.0 + ux * t, c.1 + uy * t);
+        // The reeds shade the ground down-sun out to their height times the
+        // per-unit length, and not beyond it or on the sun side.
+        let (sx, sy) = along((12.5, 12.5), tall * k * 0.5);
+        assert!(mask.factor(sx, sy, ground) > 0.2, "half way along the reeds' shadow the ground is dark");
+        let (sx, sy) = along((12.5, 12.5), tall * k + 1.0);
+        assert_eq!(mask.factor(sx, sy, ground), 0.0, "past {} tiles down-sun the ground is lit", tall * k);
+        let (sx, sy) = along((12.5, 12.5), -1.0);
+        assert_eq!(mask.factor(sx, sy, ground), 0.0, "the sun side is lit");
+        // Height decides the reach: the boulder shades the ground just past
+        // its own footprint, and not as far as a thing twice as tall does.
+        let (sx, sy) = along((17.5, 17.5), short * k + 0.1);
+        assert!(mask.factor(sx, sy, ground) > 0.2, "the boulder shades the ground beside it");
+        let (sx, sy) = along((17.5, 17.5), tall * k);
+        assert_eq!(mask.factor(sx, sy, ground), 0.0, "and no further than its own height carries");
+        let (sx, sy) = along((12.5, 12.5), tall * k);
+        assert!(mask.factor(sx, sy, ground) > 0.2, "where the reeds, twice as tall, still reach");
+        // At the overview a prop is one glyph and throws nothing.
+        let far = mask_at(0);
+        for t in [0.25, 0.5, 1.0] {
+            let (sx, sy) = along((12.5, 12.5), tall * k * t);
+            assert_eq!(far.factor(sx, sy, ground), 0.0, "no prop shadow at 1:8");
+        }
     }
 }

@@ -144,7 +144,8 @@ tile is on it.
 ## The shadow mask
 
 Once per frame `ShadowMask::build` lays a mask over the visible tiles at
-four samples per tile, holding the highest sun ray any occluder blocks
+four samples per tile — sixteen at the close zooms, where props cast and a
+boulder's shadow is shorter than a coarse sample — holding the highest sun ray any occluder blocks
 over each ground point; a surface below that height is in shadow. The mask
 is skipped at night and when the sun is near overhead. Every occluder is a
 disc swept along the sun's ground direction, which is fixed north-west and
@@ -156,7 +157,14 @@ where the ground drops more than two tiles' worth of shadow across a tile.
 A stack is a disc over its footprint swept from the eaves plus half the
 roof peak. A crown is a disc of its stand-in radius, with the species'
 leaf density as its opacity, so a thin tree throws a light shadow and a
-dead one throws 0.45. Individual branches and clusters are never stamped:
+dead one throws 0.45. A prop is a disc of its own footprint from its
+`size` height, at 1:2 and 1:1 only: at the overview it is one glyph and
+its shadow would be shorter than the cell it stands in. Anything under a
+quarter metre — a patch of moss — casts nothing, and a prop drawn as a
+bare glyph over the ground rather than a solid fill is thin, so a tuft of
+grass or a stand of reeds stops half the sun the way a sparse crown does.
+A prop narrower than a mask sample may fall between four of them and cast
+nothing at all: the mask holds what it can hold. Individual branches and clusters are never stamped:
 a hundred thousand discs would cost more than the frame.
 
 An occluder never stamps its own footprint, and the light pass looks the
