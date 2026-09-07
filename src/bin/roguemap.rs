@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 
 use roguemap::assets::Assets;
-use roguemap::camera::Camera;
+use roguemap::camera::{Camera, Mode};
 use roguemap::canvas::Canvas;
 use roguemap::frame::{Flow, FrameCtx, Frames, Item, List};
 use roguemap::input::{self, Action, Held, Look, Mouse};
@@ -194,8 +194,8 @@ impl App {
     /// Turn the view with the pointer (ADR-008). A focused frame owns the
     /// screen, so the mouse does nothing under one and forgets where it
     /// was, and the next motion after it closes is a fresh start rather
-    /// than a jump. The wheel narrows and widens a perspective view's
-    /// field of view and steps the isometric zoom.
+    /// than a jump. The wheel asks the vantage: the table's steps its
+    /// zoom, a placement's narrows and widens its field of view.
     fn mouse_event(&mut self, m: MouseEvent) {
         if self.frames.focus().is_some() {
             self.mouse.forget();
@@ -208,7 +208,7 @@ impl App {
                 // The rows tilt the isometric table (ADR-009).
                 self.cam.pitch_by(pitch.to_radians());
             }
-            Look::Wheel(dir) if self.cam.is_perspective() => self.settings.step_fov(-dir, self.cam.fov_degrees()),
+            Look::Wheel(dir) if self.cam.mode() != Mode::Table => self.settings.step_fov(-dir, self.cam.fov_degrees()),
             Look::Wheel(dir) => self.cam.zoom_by(dir, self.sw, self.sh),
         }
     }

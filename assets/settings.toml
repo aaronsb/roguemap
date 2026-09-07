@@ -20,6 +20,13 @@ values = ["table", "chase", "shoulder", "first-person", "free"]
 default = 0
 
 [[setting]]
+key = "projection"
+description = "How the vantage's scale and distance become a picture (ADR-010): vantage is the one it has always had, orthographic for the table and perspective for the rest; orthographic drops the distance and keeps the scale, so a chase or shoulder view becomes the table's look locked to the character; perspective puts an eye at the distance the scale implies, so the overview gains a vanishing point. It says nothing to first-person or free, whose eye is their own anchor."
+label = "Projection"
+values = ["vantage", "orthographic", "perspective"]
+default = 0
+
+[[setting]]
 key = "coupling"
 description = "Whether the body turns with the view (ADR-009): under body-turns a walk key is a screen direction read against the view every tick, so the mouse steers the walk and a and d strafe; under view-only w and s pace the body along its own facing, a and d turn it, and the mouse turns the view alone."
 label = "Coupling"

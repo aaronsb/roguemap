@@ -10,7 +10,7 @@ use crossterm::event::KeyCode;
 
 use crate::assets::Assets;
 use crate::blocks::Stack;
-use crate::camera::Camera;
+use crate::camera::{Camera, Mode, Projection};
 use crate::canvas::Canvas;
 use crate::frame::{FrameCtx, Frames};
 use crate::input::{self, Coupling, Held};
@@ -68,9 +68,11 @@ impl SnapArgs {
 /// person, an oak and a house on flat ground), camera (table, chase,
 /// shoulder or first-person: ADR-007; free for the detached eye of
 /// ADR-009, placed where the switch from the view named by from= leaves
-/// it, the table by default), pitch (degrees above the ground: 30 to 90
-/// on the table, ADR-009) and fov (degrees, for a perspective
-/// camera), fog (metres of visibility, 0 for no fade),
+/// it, the table by default), projection (vantage, orthographic or
+/// perspective: ADR-010, the vantage's own by default), pitch (degrees
+/// above the ground: 30 to 90 under an orthographic projection, the full
+/// sphere under a perspective one) and fov (degrees, for a view that
+/// reads one), fog (metres of visibility, 0 for no fade),
 /// fogmode (perspective, always or never), px and py (the tile the
 /// character stands on; a perspective view's default is cx, cy), walk
 /// (`KEYS,SECONDS`: hold those walk keys that long in 40 ms ticks,
@@ -111,6 +113,11 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
     let free = mode == Camera::MODES.len() - 1;
     let from = a.text("from").and_then(|m| Camera::MODES.iter().position(|n| *n == m)).filter(|m| *m != mode).unwrap_or(0);
     settings.set("camera", if free { from } else { mode });
+    // projection=vantage|orthographic|perspective is the other axis of
+    // ADR-010: the vantage's own, or the one the row names.
+    if let Some(p) = a.text("projection").and_then(|p| Projection::NAMES.iter().position(|n| *n == p)) {
+        settings.set("projection", p);
+    }
     // coupling=body-turns|view-only is whether the body turns with the
     // view (ADR-009), which is what the walk keys below mean.
     if let Some(c) = a.text("coupling").and_then(|c| Coupling::NAMES.iter().position(|n| *n == c)) {
@@ -208,8 +215,9 @@ pub fn render<S: AsRef<str>>(assets: Rc<Assets>, w: u16, h: u16, args: &[S]) -> 
         let (mx, my) = cam.center_tile(&map, sw, sh);
         world.light_campfire(&map, mx, my);
     }
-    // A perspective view is placed from the character.
-    if let Some(p) = world.player().filter(|_| cam.is_perspective()) {
+    // A placement is aimed from the character; the table is aimed at the
+    // ground under cx, cy whichever projection reads it.
+    if let Some(p) = world.player().filter(|_| cam.mode() != Mode::Table) {
         cam.look_at_entity(p, &map, sw, sh);
     }
     // camera=free detaches the eye where the switch from the aimed table

@@ -132,6 +132,13 @@ pub enum Projection {
     Perspective,
 }
 
+impl Projection {
+    /// The `projection` settings row's values, in its order: the first
+    /// asks the vantage for the projection it has always had, and the two
+    /// after it override that.
+    pub const NAMES: [&'static str; 3] = ["vantage", "orthographic", "perspective"];
+}
+
 /// How a perspective mode places its eye from the point it is aimed at
 /// (the character): the screen centre is that point pushed `ahead` metres
 /// away from the camera along the ground and `lateral` metres to the
@@ -152,6 +159,14 @@ pub struct Placement {
 }
 
 impl Placement {
+    /// The table (ADR-010): the ground under the screen centre, with no
+    /// push and no distance of its own — a zoom fixes the scale and the
+    /// distance falls out of it, `focal / columns`. The floor tilt is
+    /// where it starts and sixty degrees is what an eye reads it through.
+    /// Its far field is twice the weather's, since at 1:8 the eye stands
+    /// seventy-three metres from the point it looks at and a clear noon
+    /// fades the ground at a hundred and six.
+    pub const TABLE: Placement = Placement { distance: 0.0, pitch: 30.0 * DEG, fov: 60.0 * DEG, lateral: 0.0, ahead: 0.0, visibility: 2.0 };
     /// The chase view: twelve metres back at thirty degrees, sixty degrees wide.
     pub const CHASE: Placement = Placement { distance: 12.0, pitch: 30.0 * DEG, fov: 60.0 * DEG, lateral: 0.0, ahead: 0.0, visibility: 1.0 };
     /// The over-the-shoulder view: thirty metres back at twenty degrees,
@@ -256,6 +271,9 @@ pub struct CloudView {
     rows: f32,
     /// A ray from the real eye rather than the virtual camera.
     eye: bool,
+    /// Whether that eye stands above the cloud plane, which says on which
+    /// side of it a hit has to be for the crossing to come first.
+    above: bool,
 }
 
 /// How far along a cloud ray the plane still counts, in metres: past it
@@ -279,6 +297,19 @@ impl CloudView {
         }
         let (gx, gy) = cam.unproject(sx, sy + self.rows, 0.0);
         Some((self.cx + (gx - self.cx) * self.k, self.cy + (gy - self.cy) * self.k))
+    }
+
+    /// Whether a surface met at height `wz` lies past the cloud plane, so
+    /// the crossing the cell samples is in front of it (ADR-010). Height
+    /// runs one way along a ray, so that is exactly when the hit is on the
+    /// far side of the plane from the eye: from an overview above the
+    /// plane, ground below it; from an eye under it, a peak through it.
+    pub fn beyond_plane(&self, wz: f32) -> bool {
+        if self.above {
+            wz < World::CLOUD_ALTITUDE
+        } else {
+            wz > World::CLOUD_ALTITUDE
+        }
     }
 }
 
@@ -344,7 +375,7 @@ impl Camera {
             focus_z: SEA as f32,
             basis: Basis { cols: 1.0, rows: 1.0, rise: 1.0 },
             mode: Mode::Table,
-            placement: Placement::CHASE,
+            placement: Placement::TABLE,
             fov_override: None,
             anchor: (0.0, 0.0, 0.0),
             target: (0.0, 0.0, 0.0),
@@ -425,10 +456,11 @@ impl Camera {
         cam
     }
 
-    /// The placement a mode names; the table has none.
+    /// The placement a mode names.
     fn placement_of(mode: Mode) -> Placement {
         match mode {
-            Mode::Table | Mode::Chase => Placement::CHASE,
+            Mode::Table => Placement::TABLE,
+            Mode::Chase => Placement::CHASE,
             Mode::Shoulder => Placement::SHOULDER,
             Mode::FirstPerson => Placement::FIRST_PERSON,
             Mode::Free => Placement::FREE,
@@ -557,6 +589,82 @@ impl Camera {
         self.projection == Projection::Perspective
     }
 
+    /// The projection a vantage has of its own (ADR-010): the table states
+    /// a scale on the screen, a placement puts an eye at a distance.
+    fn projection_of(mode: Mode) -> Projection {
+        match mode {
+            Mode::Table => Projection::Orthographic,
+            _ => Projection::Perspective,
+        }
+    }
+
+    /// Whether the `projection` row means anything here. A vantage whose
+    /// eye is its own anchor has no distance, and an orthographic
+    /// projection is the one that drops the distance, so it has nothing
+    /// left to say.
+    fn takes_projection(&self) -> bool {
+        !matches!(self.mode, Mode::FirstPerson | Mode::Free)
+    }
+
+    /// Whether this is the orthographic table: the one of the eight
+    /// combinations whose basis is a zoom's and whose screen offset the
+    /// pan owns, so its setup is `preset` and not `aim`.
+    fn is_orthographic_table(&self) -> bool {
+        self.mode == Mode::Table && !self.is_perspective()
+    }
+
+    /// The screen the camera was last aimed on, or the one it assumes
+    /// until it is aimed at all.
+    fn screen_or_default(&self) -> (i32, i32) {
+        if self.screen == (0, 0) {
+            Camera::DEFAULT_SCREEN
+        } else {
+            self.screen
+        }
+    }
+
+    /// This view under another projection (an index into
+    /// `Projection::NAMES`, whose first value is the vantage's own): the
+    /// yaw, the anchor, the zoom, the angle and the field-of-view
+    /// override carry over, and the angle is clamped into the range the
+    /// projection it lands in allows. `first-person` and `free` come back
+    /// unchanged. `Settings::apply` calls it after `in_mode`, since a
+    /// vantage switch rebuilds the camera.
+    pub fn in_projection(&self, index: usize) -> Camera {
+        let want = match index % Projection::NAMES.len() {
+            1 => Projection::Orthographic,
+            2 => Projection::Perspective,
+            _ => Camera::projection_of(self.mode),
+        };
+        if want == self.projection || !self.takes_projection() {
+            return *self;
+        }
+        let mut cam = *self;
+        if cam.is_orthographic_table() {
+            // The table's anchor is the ground under the screen centre,
+            // which the pan moves without telling it.
+            let (sw, sh) = cam.screen_or_default();
+            let (x, y) = cam.focus(sw, sh);
+            cam.anchor = (x, y, cam.focus_z);
+        }
+        cam.projection = want;
+        let (lo, hi) = cam.pitch_range();
+        cam.pitch = cam.pitch.clamp(lo, hi);
+        if cam.mode == Mode::Table {
+            cam.table_pitch = cam.pitch;
+        }
+        if cam.is_orthographic_table() {
+            cam.preset(cam.zoom);
+            if cam.screen != (0, 0) {
+                let (x, y, z) = cam.anchor;
+                cam.look_at_point(x, y, z, cam.screen.0, cam.screen.1);
+            }
+            return cam;
+        }
+        cam.apply_fov();
+        cam
+    }
+
     /// The range of angles above the ground the projection allows: the
     /// table's, where a shallower plane degenerates toward a line, or the
     /// full sphere from an eye.
@@ -585,7 +693,10 @@ impl Camera {
     }
 
     fn apply_fov(&mut self) {
-        if self.mode == Mode::Table {
+        // The orthographic table is the one combination that reads no
+        // field of view: an orthographic placement turns its distance
+        // into a scale through the focal length (ADR-010).
+        if self.is_orthographic_table() {
             return;
         }
         self.fov = self.fov_override.unwrap_or(self.placement.fov).clamp(10.0 * DEG, 150.0 * DEG);
@@ -603,17 +714,23 @@ impl Camera {
     }
 
     /// Switch to a zoom preset in place: its index, basis and detail
-    /// scale. The offset is left to the caller.
+    /// scale. The offset is left to the caller. Under perspective the
+    /// zoom names a distance instead, `focal / columns`, so `aim` does it.
     fn preset(&mut self, zoom: usize) {
         self.zoom = zoom % ZOOMS.len();
+        if self.is_perspective() {
+            self.aim();
+            return;
+        }
         let columns = ZOOMS[self.zoom];
         self.basis = Camera::table_basis(columns, self.pitch, self.relief);
         self.detail = Camera::table_basis(columns, Camera::TILT_RANGE.0, self.relief).rise;
         self.foot = Camera::cells_of(&self.basis);
     }
 
-    /// The perspective modes' scale factor the preset carries: the far
-    /// field's scale is the weather's visibility times this.
+    /// The scale factor a view from an eye carries: the far field's scale
+    /// is the weather's visibility times this. An orthographic view has no
+    /// far field to end and takes the weather's own.
     pub fn visibility_scale(&self) -> f32 {
         if self.is_perspective() {
             self.placement.visibility
@@ -642,8 +759,13 @@ impl Camera {
     }
 
     /// The depth the scale is stated at: the character's, or in first
-    /// person a conversational few metres.
+    /// person a conversational few metres. The table states a scale
+    /// instead and the distance falls out of it through the identity
+    /// `columns per metre * metres of depth = focal` (ADR-010).
     fn depth_ref(&self) -> f32 {
+        if self.mode == Mode::Table {
+            return self.focal / ZOOMS[self.zoom % ZOOMS.len()];
+        }
         if self.placement.distance <= 0.0 {
             return Camera::FIRST_PERSON_DEPTH;
         }
@@ -653,14 +775,19 @@ impl Camera {
     }
 
     /// Place the eye and the screen from the anchor, the placement, the
-    /// yaw, the pitch and the screen: the perspective camera's one setup.
+    /// yaw, the pitch and the screen: every vantage's setup but the
+    /// orthographic table's, whose basis is its zoom's and whose offset
+    /// the pan owns. A projection reads the vantage's anchor, view
+    /// direction and reference distance and turns them into a basis
+    /// (ADR-010): perspective stands the eye at that distance and centres
+    /// the screen on it; orthographic drops the distance, takes the scale
+    /// `focal / depth` it implies and slides the projected target to the
+    /// centre.
     fn aim(&mut self) {
-        if self.mode == Mode::Table {
+        if self.is_orthographic_table() {
             return;
         }
-        let (sw, sh) = if self.screen == (0, 0) { Camera::DEFAULT_SCREEN } else { self.screen };
-        self.ox = sw as f32 / 2.0;
-        self.oy = sh as f32 / 2.0;
+        let (sw, sh) = self.screen_or_default();
         self.focal = (sw as f32 / 2.0) / (self.fov / 2.0).tan();
         let (s, c) = self.yaw;
         let (sp, cp) = self.pitch.sin_cos();
@@ -671,14 +798,31 @@ impl Camera {
         let (ax, ay, az) = self.anchor;
         self.target = (ax + (rx * p.lateral - s * p.ahead) / TILE_METRES, ay + (ry * p.lateral - c * p.ahead) / TILE_METRES, az);
         let (tx, ty, tz) = self.target;
-        self.eye = (tx + s * cp * p.distance / TILE_METRES, ty + c * cp * p.distance / TILE_METRES, tz + sp * p.distance);
+        let back = if self.mode == Mode::Table { self.depth_ref() } else { p.distance };
+        self.eye = (tx + s * cp * back / TILE_METRES, ty + c * cp * back / TILE_METRES, tz + sp * back);
         self.focus_z = tz;
         let depth = self.depth_ref();
         let rows = self.focal / 2.0 / depth;
-        self.basis = Basis { cols: self.focal / depth * TILE_METRES, rows: rows * sp * TILE_METRES, rise: rows * cp };
-        self.detail = rows;
-        self.zoom = Camera::nearest_zoom(self.detail);
-        self.foot = Camera::cells_of(&Camera::table_basis(ZOOMS[self.zoom], Camera::TILT_RANGE.0, Camera::RELIEF));
+        if self.mode == Mode::Table {
+            self.detail = Camera::table_basis(ZOOMS[self.zoom], Camera::TILT_RANGE.0, self.relief).rise;
+        } else {
+            self.detail = rows;
+            self.zoom = Camera::nearest_zoom(self.detail);
+        }
+        if self.is_perspective() {
+            self.ox = sw as f32 / 2.0;
+            self.oy = sh as f32 / 2.0;
+            self.basis = Basis { cols: self.focal / depth * TILE_METRES, rows: rows * sp * TILE_METRES, rise: rows * cp };
+            self.foot = Camera::cells_of(&Camera::table_basis(ZOOMS[self.zoom], Camera::TILT_RANGE.0, Camera::RELIEF));
+            return;
+        }
+        self.basis = Camera::table_basis(self.focal / depth, self.pitch, self.relief);
+        self.foot = Camera::cells_of(&self.basis);
+        self.ox = 0.0;
+        self.oy = 0.0;
+        let (px, py) = self.project(tx, ty, tz);
+        self.ox = (sw as f32 / 2.0 - px).round();
+        self.oy = (sh as f32 / 2.0 - py).round();
     }
 
     /// The view axes in metres: the direction the eye looks along, screen
@@ -721,12 +865,14 @@ impl Camera {
         self.angle
     }
 
-    /// Set the yaw, caching its sine and cosine for every projection. A
-    /// perspective eye moves with it, about the point it is aimed at.
+    /// Set the yaw, caching its sine and cosine for every projection. The
+    /// orthographic table reads it in `project`; every other vantage
+    /// swings its eye about the point it is aimed at, and an orthographic
+    /// placement's offset has to follow the swing.
     pub fn set_angle(&mut self, radians: f32) {
         self.angle = radians;
         self.yaw = radians.sin_cos();
-        if self.is_perspective() {
+        if !self.is_orthographic_table() {
             self.aim();
         }
     }
@@ -746,7 +892,7 @@ impl Camera {
         if self.mode == Mode::Table {
             self.table_pitch = self.pitch;
         }
-        if self.is_perspective() {
+        if !self.is_orthographic_table() {
             self.aim();
             return;
         }
@@ -886,16 +1032,23 @@ impl Camera {
         (ZOOM_NAMES[i], ZOOM_RATIOS[i])
     }
 
-    /// What the status line says of the view: the zoom's ratio and name,
-    /// with the angle when it is off the floor, or the perspective mode
-    /// with its distance, field of view and pitch.
+    /// What the status line says of the view: the table's zoom ratio and
+    /// name with the angle when it is off the floor, or a placement with
+    /// its distance, field of view and pitch. The projection is named
+    /// only where the row overrides the vantage's own (ADR-010), so at
+    /// the default every character of the line stays where it was.
     pub fn view_label(&self) -> String {
-        if !self.is_perspective() {
+        let angle = if (self.pitch - Camera::TILT_RANGE.0).abs() > 1e-6 { format!(" {}deg", self.pitch_degrees()) } else { String::new() };
+        let overridden = self.projection != Camera::projection_of(self.mode);
+        if self.mode == Mode::Table {
             let (name, ratio) = self.zoom_name();
-            let angle = if self.pitch > Camera::TILT_RANGE.0 { format!(" {}deg", self.pitch_degrees()) } else { String::new() };
-            return format!("{ratio} {name}{angle}");
+            let projection = if overridden { " persp" } else { "" };
+            return format!("{ratio} {name}{angle}{projection}");
         }
         let distance = if self.placement.distance > 0.0 { format!(" {:.0}m", self.placement.distance) } else { String::new() };
+        if overridden {
+            return format!("{}{distance} ortho{angle}", self.mode_name());
+        }
         format!("{}{distance} fov {:.0} pitch {}", self.mode_name(), self.fov_degrees(), self.pitch_degrees())
     }
 
@@ -919,13 +1072,13 @@ impl Camera {
 
     /// The inset's camera: this view's heading and angle at the other end
     /// of the zoom scale, for the caller to aim at the player, so the one
-    /// thing that differs between the panes is the scale. A perspective
-    /// view's inset is the table at the other end from the
-    /// preset its scale is nearest, at the floor tilt: an eye's pitch is
-    /// not a table's.
+    /// thing that differs between the panes is the scale. It is an
+    /// orthographic table whatever the main view is, and takes the main
+    /// view's angle only from another orthographic table: a pane that
+    /// also changed projection would compare two things at once.
     pub fn inset(&self) -> Camera {
         let mut cam = Camera::table(Camera::inset_zoom(self.zoom));
-        if !self.is_perspective() {
+        if self.is_orthographic_table() {
             cam.pitch = self.pitch;
             cam.table_pitch = self.pitch;
             cam.preset(cam.zoom);
@@ -1101,14 +1254,14 @@ impl Camera {
     /// this frame; see `CloudView`.
     pub fn cloud_view(&self, w: i32, h: i32) -> CloudView {
         if self.is_perspective() {
-            return CloudView { cx: 0.0, cy: 0.0, k: 1.0, rows: 0.0, eye: true };
+            return CloudView { cx: 0.0, cy: 0.0, k: 1.0, rows: 0.0, eye: true, above: self.eye.2 >= World::CLOUD_ALTITUDE };
         }
         let altitude = World::CLOUD_ALTITUDE;
         let c = self.altitude();
         let k = 1.0 - altitude / c;
         let (cx, cy) = self.unproject(w as f32 / 2.0, h as f32 / 2.0, 0.0);
         let rows = altitude * self.rows_per_metre();
-        CloudView { cx, cy, k, rows, eye: false }
+        CloudView { cx, cy, k, rows, eye: false, above: true }
     }
 
     /// The map-space box the view can reach on a `w`-column screen looking
@@ -1153,10 +1306,10 @@ impl Camera {
 
     /// The target: the map point under the centre of a `sw` by `sh` screen
     /// at the height the view was last aimed at, which zoom and rotation
-    /// pivot about. A perspective view pivots about the point it was
-    /// aimed at.
+    /// pivot about. Every vantage but the orthographic table pivots about
+    /// the point it was aimed at.
     pub fn focus(&self, sw: i32, sh: i32) -> (f32, f32) {
-        if self.is_perspective() {
+        if !self.is_orthographic_table() {
             return (self.anchor.0, self.anchor.1);
         }
         self.unproject(sw as f32 / 2.0, sh as f32 / 2.0, self.focus_z)
@@ -1284,12 +1437,12 @@ impl Camera {
         }
     }
 
-    /// Place a world point at the centre of the screen; a perspective
-    /// view aims itself at it by its placement.
+    /// Place a world point at the centre of the screen; every vantage but
+    /// the orthographic table aims itself at it by its placement.
     pub fn look_at_point(&mut self, x: f32, y: f32, z: f32, sw: i32, sh: i32) {
         self.anchor = (x, y, z);
         self.screen = (sw, sh);
-        if self.is_perspective() {
+        if !self.is_orthographic_table() {
             self.aim();
             return;
         }
@@ -1308,20 +1461,21 @@ impl Camera {
     }
 
     /// Slide the view by whole tile footprints: positive `dx` shows more of
-    /// the map to the left, positive `dy` more above. A perspective view
+    /// the map to the left, positive `dy` more above. Only the
+    /// orthographic table has an offset to slide; every other vantage
     /// moves the point it is aimed at by a tile that way.
     pub fn pan(&mut self, dx: i32, dy: i32) {
-        if self.is_perspective() {
-            let (rx, ry) = self.right();
-            let (fx, fy) = self.forward();
-            let (ax, ay, az) = self.anchor;
-            self.anchor = (ax - rx * dx as f32 - fx * dy as f32, ay - ry * dx as f32 - fy * dy as f32, az);
-            self.aim();
+        if self.is_orthographic_table() {
+            let (fw, fh) = self.footprint();
+            self.ox += (dx * fw) as f32;
+            self.oy += (dy * fh) as f32;
             return;
         }
-        let (fw, fh) = self.footprint();
-        self.ox += (dx * fw) as f32;
-        self.oy += (dy * fh) as f32;
+        let (rx, ry) = self.right();
+        let (fx, fy) = self.forward();
+        let (ax, ay, az) = self.anchor;
+        self.anchor = (ax - rx * dx as f32 - fx * dy as f32, ay - ry * dx as f32 - fy * dy as f32, az);
+        self.aim();
     }
 
     /// The point this camera aims at to look at an entity: its point at
@@ -1356,17 +1510,19 @@ impl Camera {
     /// camera follows nobody and is settled where it is (ADR-009). In the
     /// table the figure has a dead zone, the middle third of the
     /// screen each way, inside which the view does not move; outside it
-    /// the offset eases by whole cells, never less than one while any
-    /// remains, until the figure is back inside. The chase and shoulder
-    /// views ease the aimed point toward the character; the first-person
-    /// view is the character's eye and snaps to it.
+    /// the view eases by whole cells, never less than one while any
+    /// remains, until the figure is back inside — spent into the offset
+    /// under orthographic and into the anchor, through the ground under
+    /// that many cells, under perspective. The chase and shoulder views
+    /// ease the aimed point toward the character; the first-person view
+    /// is the character's eye and snaps to it.
     pub fn follow(&mut self, world: &World, map: &Map, sw: i32, sh: i32) -> bool {
         if !self.addresses_character() {
             return true;
         }
         let Some(p) = world.player() else { return true };
         let (x, y, z) = self.entity_point(p, map);
-        if self.is_perspective() {
+        if self.mode != Mode::Table {
             let (ax, ay, az) = self.anchor;
             let (dx, dy, dz) = (x - ax, y - ay, z - az);
             let left = (dx * TILE_METRES).hypot(dy * TILE_METRES).hypot(dz);
@@ -1375,6 +1531,14 @@ impl Camera {
                 return true;
             }
             self.look_at_point(ax + dx * Camera::EASE, ay + dy * Camera::EASE, az + dz * Camera::EASE, sw, sh);
+            return false;
+        }
+        // A figure behind the eye has no screen place to measure a dead
+        // zone from, so the anchor eases toward it until the projection
+        // can put it somewhere.
+        if self.is_perspective() && self.view_depth(x, y, z) <= 0.0 {
+            let (ax, ay, az) = self.anchor;
+            self.look_at_point(ax + (x - ax) * Camera::EASE, ay + (y - ay) * Camera::EASE, az + (z - az) * Camera::EASE, sw, sh);
             return false;
         }
         let (sx, sy) = self.project(x, y, z);
@@ -1401,15 +1565,27 @@ impl Camera {
                 s
             }
         };
-        self.ox += step(nx) as f32;
-        self.oy += step(ny) as f32;
+        let (dx, dy) = (step(nx), step(ny));
+        if self.is_perspective() {
+            // The offset is the eye's own place, so the cells go into the
+            // anchor instead: the ground under that many cells, the other
+            // way, since sliding the centre back moves the figure on.
+            let (gx, gy) = self.ground_vector(-dx as f32, -dy as f32);
+            let (ax, ay, az) = self.anchor;
+            self.anchor = (ax + gx, ay + gy, az);
+            self.aim();
+            return false;
+        }
+        self.ox += dx as f32;
+        self.oy += dy as f32;
         false
     }
 
     /// Switch tile size, keeping whatever is at the screen centre there.
-    /// A perspective view has no footprint and is left alone.
+    /// The zoom is the table's own fixed quantity, so a placement has
+    /// none and is left alone.
     pub fn set_zoom(&mut self, zoom: usize, sw: i32, sh: i32) {
-        if self.is_perspective() {
+        if self.mode != Mode::Table {
             return;
         }
         let z = self.focus_z;
@@ -1418,11 +1594,12 @@ impl Camera {
         self.look_at_point(x, y, z, sw, sh);
     }
 
-    /// Step through the zoom levels, wrapping at either end. A chase or
-    /// shoulder view halves or doubles its distance instead, between three
-    /// metres and sixty-four; a first-person view has nothing to zoom.
+    /// Step the vantage's own scale, wrapping at either end: the table's
+    /// preset index under either projection. A chase or shoulder view
+    /// halves or doubles its distance instead, between three metres and
+    /// sixty-four; a first-person view has nothing to zoom.
     pub fn zoom_by(&mut self, steps: i32, sw: i32, sh: i32) {
-        if self.is_perspective() {
+        if self.mode != Mode::Table {
             if self.placement.distance > 0.0 {
                 let factor = 2.0f32.powi(-steps);
                 self.placement.distance = (self.placement.distance * factor).clamp(3.0, 64.0);
@@ -2481,6 +2658,222 @@ mod tests {
         let mut sh = sh;
         sh.set_fov_override(None);
         assert!((sh.fov - Placement::SHOULDER.fov).abs() < 1e-6, "the preset's own field of view is back");
+    }
+
+    /// The three values of the `projection` row, as `in_projection` takes
+    /// them.
+    const VANTAGE: usize = 0;
+    const ORTHO: usize = 1;
+    const PERSP: usize = 2;
+
+    #[test]
+    fn a_vantage_states_one_scale_under_either_projection_and_the_tables_eye_is_focal_over_columns() {
+        for (sw, sh) in [(120, 40), (80, 25), (168, 71)] {
+            for zoom in 0..ZOOMS.len() {
+                let mut table = Camera::table(zoom);
+                table.look_at_point(20.5, 14.5, 3.0, sw, sh);
+                let eye = table.in_projection(PERSP);
+                assert!(eye.is_perspective() && eye.mode() == Mode::Table && eye.zoom == zoom);
+                // A scale and a distance are the same fact stated twice,
+                // joined by the field of view and the screen's width.
+                let columns = table.columns_per_metre();
+                assert!((eye.columns_per_metre() - columns).abs() < 1e-3, "{sw}x{sh} zoom {zoom}: {} against {columns}", eye.columns_per_metre());
+                let (ex, ey, ez) = eye.eye();
+                let (ax, ay, az) = eye.anchor_point();
+                let back = ((ex - ax) * TILE_METRES).hypot((ey - ay) * TILE_METRES).hypot(ez - az);
+                let focal = eye.focal_rows() * 2.0;
+                assert!((back - focal / columns).abs() < 1e-2, "{sw}x{sh} zoom {zoom}: the eye is {back} m out, not {}", focal / columns);
+            }
+            // A placement fixes the distance and the projection derives
+            // the scale, so the two read the same number at one angle.
+            for mut cam in [Camera::chase(0.3), Camera::shoulder(0.3)] {
+                cam.look_at_point(20.5, 14.5, 3.0, sw, sh);
+                cam.set_pitch(40.0 * DEG);
+                let flat = cam.in_projection(ORTHO);
+                assert!(!flat.is_perspective() && flat.pitch_degrees() == 40);
+                assert!((flat.columns_per_metre() - cam.columns_per_metre()).abs() < 1e-3, "{}: {} against {}", cam.mode_name(), flat.columns_per_metre(), cam.columns_per_metre());
+                assert!((flat.detail_rows() - cam.detail_rows()).abs() < 1e-4, "{}", cam.mode_name());
+                assert_eq!(flat.zoom, cam.zoom, "{}: the preset everything keyed by zoom reads", cam.mode_name());
+            }
+        }
+    }
+
+    #[test]
+    fn the_detail_scale_is_the_vantages_own_under_either_projection_and_at_every_angle() {
+        for (sw, sh) in [(120, 40), (80, 25)] {
+            for zoom in 0..ZOOMS.len() {
+                let mut table = Camera::table(zoom);
+                table.look_at_point(20.5, 14.5, 3.0, sw, sh);
+                let want = table.detail_rows();
+                let mut eye = table.in_projection(PERSP);
+                for deg in [-90.0, -30.0, 0.0, 30.0, 60.0, 90.0] {
+                    eye.set_pitch(deg * DEG);
+                    assert_eq!(eye.detail_rows(), want, "{sw}x{sh} zoom {zoom} at {deg}");
+                    assert_eq!(eye.zoom, zoom, "{sw}x{sh} zoom {zoom} at {deg}");
+                    assert_eq!(crate::raster::lod_of(eye.detail_rows()).volumes, crate::raster::lod_of(want).volumes);
+                }
+            }
+            let mut chase = Camera::chase(0.3);
+            chase.look_at_point(20.5, 14.5, 3.0, sw, sh);
+            for deg in [30.0, 60.0, 90.0] {
+                chase.set_pitch(deg * DEG);
+                let flat = chase.in_projection(ORTHO);
+                assert!((flat.detail_rows() - chase.detail_rows()).abs() < 1e-4, "{deg}: {} against {}", flat.detail_rows(), chase.detail_rows());
+                assert_eq!(flat.zoom, chase.zoom, "{deg}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_projection_row_clamps_the_angle_keeps_the_view_and_says_nothing_to_an_eye_at_its_anchor() {
+        let (sw, sh) = (120, 40);
+        let mut table = Camera::table(1);
+        table.set_pitch(60.0 * DEG);
+        table.look_at_point(20.5, 14.5, 3.0, sw, sh);
+        // Out to an eye and back is the view it left: the yaw, the zoom,
+        // the angle and the ground under the screen centre.
+        let eye = table.in_projection(PERSP);
+        assert!(eye.is_perspective() && eye.mode() == Mode::Table && eye.pitch_degrees() == 60);
+        assert_eq!(eye.view_label(), "1:4 mid 60deg persp");
+        let back = eye.in_projection(ORTHO);
+        assert!(!back.is_perspective());
+        assert_eq!((back.pitch_degrees(), back.zoom, back.angle()), (60, table.zoom, table.angle()));
+        assert_eq!(back.basis(), table.basis());
+        let ((bx, by), (fx, fy)) = (back.focus(sw, sh), table.focus(sw, sh));
+        assert!((bx - fx).abs() < 0.05 && (by - fy).abs() < 0.05, "({bx}, {by}) is not ({fx}, {fy})");
+        // And the angle a vantage was left at survives the trip, as it
+        // survives a mode round trip (ADR-009).
+        assert_eq!(back.in_mode(1).in_mode(0).pitch_degrees(), 60);
+        // The first value is the projection the vantage has always had.
+        assert!(!eye.in_projection(VANTAGE).is_perspective());
+        assert!(Camera::chase(0.0).in_projection(VANTAGE).is_perspective());
+        // An eye turns through the full sphere; an angle outside the
+        // table's floor is clamped on the way in, and the jump is visible.
+        let mut level = eye;
+        level.set_pitch(-90.0 * DEG);
+        assert_eq!(level.pitch_degrees(), -90);
+        assert_eq!(level.in_projection(ORTHO).pitch_degrees(), 30);
+        // The shoulder view's twenty degrees is under that floor too.
+        let mut shoulder = Camera::shoulder(0.3);
+        shoulder.look_at_point(20.5, 14.5, 3.0, sw, sh);
+        assert_eq!(shoulder.pitch_degrees(), 20);
+        let flat = shoulder.in_projection(ORTHO);
+        assert_eq!(flat.pitch_degrees(), 30);
+        assert_eq!(flat.anchor_point(), shoulder.anchor_point());
+        assert_eq!(flat.view_label(), "shoulder 30m ortho");
+        // The row is inert where the eye is its own anchor.
+        for cam in [Camera::first_person(0.4), Camera::first_person(0.4).in_mode(Camera::MODES.len() - 1)] {
+            for row in [VANTAGE, ORTHO, PERSP] {
+                let same = cam.in_projection(row);
+                assert!(same.is_perspective(), "{} takes no projection", cam.mode_name());
+                assert_eq!((same.basis(), same.eye()), (cam.basis(), cam.eye()), "{}", cam.mode_name());
+            }
+        }
+    }
+
+    #[test]
+    fn at_the_poles_the_view_axes_stay_orthonormal_and_the_yaw_becomes_a_roll() {
+        let dot = |a: V3, b: V3| a.0 * b.0 + a.1 * b.1 + a.2 * b.2;
+        for deg in [-90.0f32, 90.0] {
+            let mut radii = Vec::new();
+            for yaw in [0.0, 0.7, FRAC_PI_4, 3.0] {
+                let mut cam = Camera::perspective((5.0, 5.0, 30.0), yaw, 0.0, 60.0 * DEG);
+                cam.set_pitch(deg * DEG);
+                assert_eq!(cam.pitch_degrees(), deg as i32);
+                let (d, r, u) = cam.view_axes();
+                for v in [d, r, u] {
+                    assert!((dot(v, v).sqrt() - 1.0).abs() < 1e-5, "{deg} at {yaw}: {v:?} is not a unit vector");
+                }
+                assert!(dot(d, r).abs() < 1e-6 && dot(d, u).abs() < 1e-6 && dot(r, u).abs() < 1e-6, "{deg} at {yaw}");
+                // Straight up or down the view runs along the vertical and
+                // the up vector lies flat, pointing the way the yaw faces.
+                assert!((d.2.abs() - 1.0).abs() < 1e-6 && d.0.abs() < 1e-6 && d.1.abs() < 1e-6, "{deg} at {yaw}: {d:?}");
+                assert!(u.2.abs() < 1e-6 && (u.0.hypot(u.1) - 1.0).abs() < 1e-5, "{deg} at {yaw}: {u:?}");
+                // So turning the yaw spins the image about its centre: a
+                // point below the eye keeps its distance from the centre.
+                let (ex, ey, ez) = cam.eye();
+                let (px, py) = cam.project(ex + 4.0, ey, ez - 20.0 * deg.signum());
+                radii.push((px - cam.ox).hypot((py - cam.oy) * 2.0));
+            }
+            let first = radii[0];
+            assert!(radii.iter().all(|r| (r - first).abs() < 1e-2), "{deg}: {radii:?}");
+        }
+    }
+
+    #[test]
+    fn the_cloud_plane_is_sampled_over_a_hit_on_its_far_side() {
+        let (w, h) = (120, 40);
+        // The far overview stands above the plane, so the ground under it
+        // takes cloud and a peak through it does not.
+        let mut over = Camera::table(0);
+        over.look_at_point(20.5, 14.5, 0.0, w, h);
+        let over = over.in_projection(PERSP);
+        assert!(over.eye().2 > World::CLOUD_ALTITUDE, "the eye is {} m up", over.eye().2);
+        let view = over.cloud_view(w, h);
+        assert!(view.sample(&over, 60.5, 25.0).is_some(), "a descending ray meets the plane");
+        assert!(view.beyond_plane(0.0) && view.beyond_plane(World::CLOUD_ALTITUDE - 1.0));
+        assert!(!view.beyond_plane(World::CLOUD_ALTITUDE + 1.0));
+        // From under the plane it is the other way about, so the chase
+        // view's ground draws no cloud over it.
+        let mut under = Camera::chase(0.3);
+        under.look_at_point(20.5, 14.5, 3.0, w, h);
+        assert!(under.eye().2 < World::CLOUD_ALTITUDE, "the eye is {} m up", under.eye().2);
+        let view = under.cloud_view(w, h);
+        assert!(!view.beyond_plane(0.0) && !view.beyond_plane(World::CLOUD_ALTITUDE - 1.0));
+        assert!(view.beyond_plane(World::CLOUD_ALTITUDE + 1.0));
+        assert!(view.sample(&under, 60.5, 39.0).is_none(), "a descending ray from under the plane never reaches it");
+    }
+
+    #[test]
+    fn the_wheel_the_pan_and_the_follow_ask_the_vantage_and_not_the_projection() {
+        let assets = crate::assets::test_assets();
+        let map = Map::synthetic(64, 64, assets, 0, |_, _| crate::map::Tile::flat(5));
+        let mut world = World::new(1);
+        world.spawn_player(&map, 32, 32, 0.0);
+        let (sw, sh) = (120, 40);
+        // The table's zoom steps its preset under either projection.
+        let mut table = Camera::table(1);
+        table.look_at_point(32.5, 32.5, 5.0, sw, sh);
+        let mut eye = table.in_projection(PERSP);
+        let was = eye.eye();
+        eye.zoom_by(1, sw, sh);
+        assert_eq!(eye.zoom, 2, "the perspective table steps the preset");
+        assert!(eye.eye().2 < was.2, "and a step in moves the eye nearer");
+        assert_eq!(eye.distance(), 0.0, "the table has no distance of its own to halve");
+        // A placement's zoom is its distance under either projection.
+        let mut flat = Camera::chase(0.0).in_projection(ORTHO);
+        flat.look_at_point(32.5, 32.5, 5.0, sw, sh);
+        let columns = flat.columns_per_metre();
+        flat.zoom_by(-1, sw, sh);
+        assert!((flat.distance() - 2.0 * Placement::CHASE.distance).abs() < 1e-4, "the orthographic chase doubles its distance");
+        assert!((flat.columns_per_metre() * 2.0 - columns).abs() < 1e-3, "which halves the scale it draws at");
+        // The pan slides the offset only on the table, which owns one;
+        // every other vantage moves the point it is aimed at.
+        let (ox, oy) = (table.ox, table.oy);
+        let anchor = table.anchor_point();
+        table.pan(1, -2);
+        let (fw, fh) = table.footprint();
+        assert_eq!((table.ox - ox, table.oy - oy), (fw as f32, (-2 * fh) as f32));
+        assert_eq!(table.anchor_point(), anchor);
+        let anchor = flat.anchor_point();
+        flat.pan(1, 0);
+        assert_ne!(flat.anchor_point(), anchor, "the orthographic chase pans its anchor");
+        // The table's dead zone is measured on screen either way, and the
+        // cells it owes are spent into the anchor under perspective.
+        eye.look_at_entity(world.player().unwrap(), &map, sw, sh);
+        assert!(eye.follow(&world, &map, sw, sh), "settled on the figure");
+        let anchor = eye.anchor_point();
+        world.player_mut().unwrap().set_tile(44, 20);
+        let mut ticks = 0;
+        while !eye.follow(&world, &map, sw, sh) {
+            ticks += 1;
+            assert!(ticks < 200, "never settles");
+        }
+        assert!(ticks > 0 && eye.anchor_point() != anchor, "the anchor took the step, not the offset");
+        let (x, y, z) = eye.entity_point(world.player().unwrap(), &map);
+        let (px, py) = eye.project(x, y, z);
+        assert!(px >= (sw / 3) as f32 && px <= (sw - sw / 3) as f32, "back inside the zone at column {px}");
+        assert!(py >= (sh / 3) as f32 && py <= (sh - sh / 3) as f32, "and at row {py}");
     }
 
     #[test]

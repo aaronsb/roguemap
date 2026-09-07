@@ -25,7 +25,7 @@ pub struct SettingItem {
 }
 
 /// Keys the engine reads; loading fails if one is missing.
-pub const REQUIRED_SETTINGS: [&str; 16] = ["traversal", "mouse", "camera", "coupling", "fov", "fog", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
+pub const REQUIRED_SETTINGS: [&str; 17] = ["traversal", "mouse", "camera", "projection", "coupling", "fov", "fog", "view", "glyphs", "hud", "inset", "clock", "weather", "wind", "day_length", "clouds", "antialias"];
 
 pub struct Settings {
     pub items: Vec<SettingItem>,
@@ -141,10 +141,13 @@ impl Settings {
         world.weather_preset = self.get("weather").checked_sub(1);
         world.wind_preset = self.get("wind").checked_sub(1);
         world.day_secs = world::DAY_LENGTHS[self.get("day_length")];
+        // The vantage first and the projection second (ADR-010), since a
+        // vantage switch rebuilds the camera.
         let mode = self.get("camera");
         if cam.mode_index() != mode {
             *cam = cam.in_mode(mode);
         }
+        *cam = cam.in_projection(self.get("projection"));
         cam.set_fov_override(self.fov_degrees());
         RenderOptions { aa: self.get("antialias") == 0, clouds: self.get("clouds") == 0, fog: FogMode::from_index(self.get("fog")) }
     }
@@ -154,6 +157,7 @@ impl Settings {
 mod tests {
     use super::*;
     use crate::assets::test_assets;
+    use crate::camera::Projection;
     use crate::input::{self, Action, SCENE};
     use crate::world::{DAY_LENGTHS, WEATHER_PRESETS, WIND_PRESETS};
     use crossterm::event::KeyCode;
@@ -172,6 +176,11 @@ mod tests {
         // The camera row's values are the camera's own modes (ADR-007).
         assert_eq!(a.setting("camera").unwrap().values, Camera::MODES);
         assert_eq!(a.setting("camera").unwrap().values[a.setting("camera").unwrap().default as usize], "table");
+        // The projection row's values are the projection's own (ADR-010),
+        // and it defaults to the projection the vantage has always had.
+        let projection = a.setting("projection").unwrap();
+        assert_eq!(projection.values, Projection::NAMES);
+        assert_eq!(projection.values[projection.default as usize], "vantage");
         // The fog row's values are the renderer's fog modes, and the field
         // of view row is `preset` then whole degrees, rising.
         assert_eq!(a.setting("fog").unwrap().values, FogMode::NAMES);
@@ -280,6 +289,20 @@ mod tests {
         s.set("camera", 0);
         s.apply(&mut map, &mut world, &mut cam);
         assert!(!cam.is_perspective(), "and back to the table");
+        // The projection row is the other axis, applied after the vantage
+        // (ADR-010): the overview gains an eye and keeps its zoom, and a
+        // placement loses one and keeps its distance.
+        let zoom = cam.zoom;
+        s.set("projection", 2);
+        s.apply(&mut map, &mut world, &mut cam);
+        assert!(cam.is_perspective() && cam.mode_name() == "table" && cam.zoom == zoom);
+        s.set("camera", 1);
+        s.set("projection", 1);
+        s.apply(&mut map, &mut world, &mut cam);
+        assert!(!cam.is_perspective() && cam.mode_name() == "chase" && cam.distance() == 12.0);
+        s.set("projection", 0);
+        s.apply(&mut map, &mut world, &mut cam);
+        assert!(cam.is_perspective(), "vantage is the projection the vantage has");
         // The fov keys step the row's degrees from wherever the camera
         // shows and never wrap through `preset`.
         s.set("camera", 2);

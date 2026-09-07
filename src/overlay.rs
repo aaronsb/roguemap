@@ -31,9 +31,11 @@ impl Renderer {
         for y in 0..self.h {
             for x in 0..self.w {
                 let i = (y * self.w + x) as usize;
-                // From an eye the clouds are in the sky, behind everything
-                // the walk met.
-                if perspective && self.g[i].depth != SKY_DEPTH {
+                // From an eye the clouds are in the sky, or over ground
+                // the ray crossed the plane before it met: the far and mid
+                // perspective overviews stand above the plane and would
+                // otherwise draw none at all (ADR-010).
+                if perspective && self.g[i].depth != SKY_DEPTH && !view.beyond_plane(self.g[i].wz) {
                     continue;
                 }
                 let Some((wx, wy)) = view.sample(cam, x as f32 + 0.5, y as f32) else { continue };
