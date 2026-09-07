@@ -277,6 +277,48 @@ the reference photograph's sky is palest just above the horizon, saturation
 flat colour and the far tier is drawn against it. The far tier lands
 without a gradient behind it and looks better when #38 arrives.
 
+**Where the middle tier stops is derived, not tuned.** The owner:
+"geometry should reach until it isn't really distingusihable", "eye
+height, but also, imagine zooming all the way out to a planet".
+
+That is [rendering.md](../rendering.md)'s angular rule applied to the
+reach. A screen column subtends 0.0069 radians, so a thing of size `s`
+stops being distinguishable from a band of the same colour at `s / 0.0069`
+— 72 m for a tuft, 290 m for a person, 1.45 km for a tree, 24 km for a
+terrain feature at #36's wavelength. The middle tier's binding feature is
+the tallest thing it draws that the far tier cannot, which is a tree.
+
+Eye height enters through both terms and they pull opposite ways: the
+horizon grows as `sqrt(2 R h)` while nothing on the ground grows with the
+eye. So one rule gives three answers. Standing, the horizon is 4.5 km and
+geometry reaches about 1.4 km. From a 1,000 m peak the horizon is 110 km
+and geometry still reaches 1.4 km, because trees do not grow with
+altitude. From orbit nothing is distinguishable and geometry reaches
+nothing at all — the whole planet is the far tier, which is the right
+answer rather than a special case.
+
+The `reach` row's default is that derived distance rather than today's
+visibility, and the row remains as the override a cycle tunes with. Where
+the derived distance costs more than the budget allows — 52.3 ms already
+at 600 m — the answer is the ladder rather than a shorter reach: the
+middle tier itself descends to a glyph and then a dot before the band
+takes over, each rung at its own angular threshold. What the row caps is
+the first rung, and the cost of the rungs below it is what stage 5 has to
+measure.
+
+**The atmosphere has a thickness.** The owner again: "this means
+atmosphere has a thickness". Seen from the ground, Rayleigh over a
+path through the air gives the zenith-to-horizon gradient. Seen from
+outside, the same shell edge-on gives a lit limb at the planet's rim. One
+model, evaluated from inside it or along a chord through it.
+
+At full-planet zoom a 12,000 km diameter over 71 rows is 169 km a row, so
+a 20 km atmosphere is 0.12 of a row: rung four with a sextant placing its
+edge, the same shape as the horizon line. It becomes a whole row thick
+only eight zoom steps closer. That is #38's work seen from the far end and
+it is recorded here so the sky model is built knowing both views are the
+same one.
+
 **Where the middle tier stops, as a settled number.** This ADR makes it a
 row and gives it today's default. What it should be is a gameplay question
 about how far a player needs real geometry, and the cycle that builds the
