@@ -60,6 +60,7 @@ The catalogues and decision records the pages above lean on:
 | [ADR-004](adr/ADR-004-world-scale.md) | World scale in metres and zoom as exact ratios |
 | [ADR-005](adr/ADR-005-overlay-frames.md) | One frame system for everything drawn over the scene |
 | [ADR-006](adr/ADR-006-movement-by-screen-cell.md) | One keypress moves one screen cell, positions in centimetres |
+| [ADR-007](adr/ADR-007-general-camera.md) | A general camera, with the isometric view as a mode |
 
 ## Running it
 
