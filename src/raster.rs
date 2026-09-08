@@ -106,10 +106,21 @@ fn screen_x_of(n: (f32, f32, f32), cam: &Camera) -> f32 {
     (n.0 * rx + n.1 * ry) / len
 }
 
-/// Grass lean field: a travelling wave whose speed and reach follow the wind.
-fn grass_lean(x: f32, y: f32, t: f32, strength: f32) -> f32 {
+/// Ground position in the wind's frame: metres downwind of the origin and
+/// metres to the left of the wind, from a point in tiles.
+fn downwind(sc: &Scene, x: f32, y: f32) -> (f32, f32) {
+    let (wx, wy) = (sc.world.weather.wind_dir.cos(), sc.world.weather.wind_dir.sin());
+    ((x * wx + y * wy) * TILE_METRES, (y * wx - x * wy) * TILE_METRES)
+}
+
+/// Grass lean field: two waves over the ground, an eleven metre gust and a
+/// sixteen metre swell, carried downwind at the speed the wind sets. The
+/// phase is a place, so the gust crosses the field rather than the screen.
+fn grass_lean(sc: &Scene, x: f32, y: f32, strength: f32) -> f32 {
     let speed = 0.3 + 2.5 * strength;
-    let w = (t * speed + x * 0.09 + y * 0.18).sin() + 0.5 * (t * speed * 0.35 - x * 0.05 + y * 0.11).sin();
+    let (along, across) = downwind(sc, x, y);
+    let t = sc.t * speed;
+    let w = (along * 0.55 + across * 0.18 - t).sin() + 0.5 * (along * 0.3 - across * 0.25 - t * 0.35).sin();
     w * (0.25 + 0.75 * strength)
 }
 
@@ -178,6 +189,13 @@ fn cell_span(sc: &Scene, x: f32, y: f32, z: f32, gx: f32, gy: f32) -> f32 {
     (across * along).sqrt().min(across * WIDEST).clamp(1e-3, 100.0)
 }
 
+/// Metres a cell covers across the view at a point's depth: the narrow
+/// extent of `cell_span`, which no surface's lean widens.
+fn cell_across(sc: &Scene, x: f32, y: f32, z: f32) -> f32 {
+    let depth = sc.cam.detail_rows() / sc.cam.detail_rows_at(x, y, z).max(1e-4);
+    (sc.span.0 * depth).clamp(1e-3, 100.0)
+}
+
 /// One point's roll on the scatter lattice: a grid fixed in the world at
 /// the surface's grain, stepped up by powers of two until a step covers the
 /// ground the cell does. A speck sits at the same place at every zoom, tilt
@@ -201,7 +219,7 @@ fn grain_of(sc: &Scene, terrain: Terrain) -> f32 {
 /// Texture glyph and its colour for a top-surface cell, or a blank cell in
 /// the base colour. `rows_along_x` is the axis a ground kind's rows run
 /// along, from the tile's merged run.
-fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32, rows_along_x: bool) -> (char, Rgb) {
+fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, rows_along_x: bool) -> (char, Rgb) {
     let (ts, pal, world, cam) = (sc.ts, &sc.pal, sc.world, sc.cam);
     let hv = ground_hash(hit.x, hit.y, grain_of(sc, tile.terrain), hit.span, tile.seed);
     let r = (hv % 1000) as f32 / 1000.0;
@@ -245,7 +263,7 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32, rows
                 (None, 0.0)
             };
             if r < density {
-                let w = grass_lean(sx as f32, sy as f32, sc.t, wind_strength);
+                let w = grass_lean(sc, hit.x, hit.y, wind_strength);
                 let lean = if w < -0.35 {
                     0
                 } else if w > 0.35 {
@@ -262,7 +280,15 @@ fn texture(sc: &Scene, tile: &Tile, hit: &Hit, base: Rgb, sx: i32, sy: i32, rows
         }
         Terrain::Water => {
             let wave = sc.chop * smoothstep(6.0, 160.0, tile.body_size as f32);
-            let phase = (sc.t * (0.6 + wave) + sx as f32 * 0.13 + sy as f32 * 0.37 + (hv >> 16) as f32 * 0.001).sin();
+            // A six metre swell downwind: a place and a time, where this was
+            // a screen position. The swell stands still all the same. The
+            // jitter it is added to is the whole hash scaled, around 1e11,
+            // and an f32 steps by 16384 there, so the terms before it are
+            // dropped and the glyph is the lattice roll alone. Bounding that
+            // term to one turn is what would start the water moving, and
+            // every body of water in the game would start with it (#52).
+            let (along, across) = downwind(sc, hit.x, hit.y);
+            let phase = (along + across * 0.35 - sc.t * (0.6 + wave) + (hv >> 16) as f32 * 0.001).sin();
             let pond = tile.body_size < 60 && tile.z >= SEA - 4;
             if pond && vig > 0.3 && r < density_of.cattail + 0.06 * vig {
                 let ch = ts.cattail[((hv >> 20) % 2) as usize];
@@ -800,11 +826,11 @@ impl Renderer {
             HitKind::Terrain => 0.0,
         };
         let nsx = screen_x_of(cand.normal, sc.cam);
-        // A roof or a crown takes the grain itself, with no step up. Tiles
-        // and leaves are drawn where the surface is, in front of whatever
-        // the cell would otherwise cover, so the ground the cell rakes is
-        // not theirs to be band-limited to.
-        let span = 0.0;
+        // A roof or a crown is band-limited to its own footprint at its own
+        // depth. Tiles and leaves are drawn where the surface is, in front
+        // of whatever the cell would otherwise cover, so the ground the
+        // cell rakes is not theirs to take a lattice step from.
+        let span = cell_across(sc, x, y, cand.z);
         Some(Hit { tile, mx: cand.mx, my: cand.my, x, y, h: cand.z, bed: cand.z, face, below: 0, sun, kind: cand.kind, which: cand.which, nsx, span })
     }
 
@@ -1067,7 +1093,7 @@ impl Renderer {
             for x in 0..w {
                 let i = (y * w + x) as usize;
                 let Some(hit) = hits[i] else { continue };
-                let (albedo, ch, glyph) = self.shade(sc, &hit, x, y);
+                let (albedo, ch, glyph) = self.shade(sc, &hit);
                 let depth = sc.cam.depth(hit.x, hit.y);
                 self.g[i] = GCell { albedo, ch, glyph, wx: hit.x, wy: hit.y, wz: hit.h, face: hit.face, lit: true, depth };
             }
@@ -1171,7 +1197,7 @@ impl Renderer {
     }
 
     /// Unlit colour and texture glyph for a hit.
-    fn shade(&self, sc: &Scene, hit: &Hit, sx: i32, sy: i32) -> (Rgb, char, Rgb) {
+    fn shade(&self, sc: &Scene, hit: &Hit) -> (Rgb, char, Rgb) {
         let base = self.hit_color(sc, hit);
         let (ts, pal, cam) = (sc.ts, &sc.pal, sc.cam);
         let lod = lod(cam);
@@ -1195,7 +1221,7 @@ impl Renderer {
                 // Only a tilled tile asks which way its rows run, so the
                 // grid lookup behind it is off the path of open ground.
                 let tilled = tile.stack.is_some_and(|st| st.kind(sc.assets).ground == Ground::Till);
-                let (ch, glyph) = texture(sc, &tile, hit, base, sx, sy, tilled && self.rows_along_x(sc, hit));
+                let (ch, glyph) = texture(sc, &tile, hit, base, tilled && self.rows_along_x(sc, hit));
                 (base, ch, glyph)
             }
             HitKind::Wall => {
@@ -1713,6 +1739,52 @@ mod tests {
         assert!(r.grid().volumes.iter().filter(|v| v.my == 36).any(|v| v.shape == Shape::Cluster));
     }
 
+    /// A crown's leaves come off the same lattice the ground's specks do,
+    /// stepped up by the crown's own footprint at its own depth (#50). Zero
+    /// there is the finest lattice at every distance, which is several
+    /// lattice cells to a screen cell as soon as the tree is a few tens of
+    /// metres off.
+    #[test]
+    fn a_crown_takes_its_lattice_from_its_own_footprint() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let pine = assets.species.iter().position(|s| s.name == "pine").unwrap();
+        // The two pines of the stand-in test: twelve and seventy-five
+        // metres from an eye at (8.5, 2.5) looking along +y.
+        let map = Map::synthetic(48, 48, assets.clone(), 1, move |x, y| {
+            let mut t = Tile::flat(5);
+            t.seed = 7;
+            if (x, y) == (8, 8) || (x, y) == (24, 36) {
+                t.tree = Some(Flora { species: pine as u8, variant: 2 });
+            }
+            t
+        });
+        let world = World::new(1);
+        let (w, h) = (120, 40);
+        let mut cam = Camera::first_person(PI);
+        cam.look_at_point(8.5, 2.5, 5.0 + 1.7, w, h);
+        let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+        let r = prepared(&sc, w, h);
+        let crown = |my: i32, up: f32| {
+            let v = r.grid().tree_crowns().find(|v| v.my == my).unwrap();
+            let (px, py) = cam.project(v.cx, v.cy, v.h0 + up * v.height);
+            r.ray(&sc, px, py).filter(|hit| hit.kind == HitKind::Canopy).expect("a canopy hit")
+        };
+        let (near, far) = (crown(8, 0.5), crown(36, 0.5));
+        let grain = assets.surfaces.density.grain_metres;
+        assert!(near.span > 0.0, "a crown carries its own footprint, not zero");
+        let ratio = far.span / near.span;
+        assert!((4.0..10.0).contains(&ratio), "the footprint grows with the depth: {ratio} over six times the distance");
+        // Seventy-five metres off, a cell covers several leaf grains, which
+        // is the step up that zero never took.
+        assert!(far.span > 4.0 * grain, "{} m against a grain of {grain}", far.span);
+        // The cell's own width and no more: a roof tile or a leaf is drawn
+        // where the surface is, so the ground the cell rakes past it is not
+        // theirs to take a step from.
+        let raked = cell_span(&sc, far.x, far.y, far.h, 0.0, 0.0);
+        assert!(far.span <= raked, "a crown steps by its width, under the ground's rake: {} m against {raked}", far.span);
+    }
+
     #[test]
     fn a_tilled_plot_lays_its_own_ground_in_rows_along_its_longer_axis() {
         let assets = test_assets();
@@ -1744,7 +1816,7 @@ mod tests {
                     if hit.tile.stack.is_none() || hit.face != FACE_TOP {
                         continue;
                     }
-                    let (base, ch, _) = r.shade(&sc, &hit, x, y);
+                    let (base, ch, _) = r.shade(&sc, &hit);
                     // The kind's own colour, shaded by the slope under it
                     // (at most 0.18 either way) and nothing else.
                     let near = |a: u8, b: u8| (a as f32) >= b as f32 * 0.82 - 1.0 && (a as f32) <= b as f32 * 1.18 + 1.0;
@@ -1792,7 +1864,7 @@ mod tests {
                     if !hit.kind.is_tree() || !r.grid().volumes[hit.which as usize].dead {
                         continue;
                     }
-                    let (_, ch, _) = r.shade(&sc, &hit, x, y);
+                    let (_, ch, _) = r.shade(&sc, &hit);
                     assert!(ch == ' ' || ts.art.dead_branch.contains(&ch), "zoom {zoom}: a dead cell is bare wood, not {ch:?}");
                     assert_ne!(ch, trunk, "zoom {zoom}: and never the trunk glyph");
                     if ch != ' ' && !seen.contains(&ch) {
@@ -2003,5 +2075,39 @@ mod tests {
         assert_eq!(a, ground_hash(x, y, grain, 0.5, 3));
         assert_ne!(a, ground_hash(x, y, grain, 0.5, 4), "a different seed is a different roll");
         assert_eq!(a, ground_hash(x + q * 0.49, y - q * 0.49, grain, 0.5, 3), "anywhere in the cell is the same speck");
+    }
+
+    #[test]
+    fn a_tuft_leans_the_way_the_wind_blows_over_its_own_patch() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let map = Map::synthetic(48, 48, assets.clone(), 1, |_, _| Tile::flat(5));
+        let world = World::new(1);
+        let (w, h) = (120, 40);
+        // The same ground point at the far zoom, at 1:1, and from an eye:
+        // three cameras, one lean.
+        let scenes: Vec<Camera> = vec![Camera::table(0), Camera::table(3), Camera::first_person(PI)];
+        let leans: Vec<f32> = scenes
+            .iter()
+            .map(|cam| {
+                let mut cam = *cam;
+                cam.look_at(24, 24, &map, w, h);
+                grass_lean(&Scene::new(&map, ts, &world, &cam, 2.5), 24.5, 24.5, 0.4)
+            })
+            .collect();
+        assert!(leans.windows(2).all(|p| p[0] == p[1]), "one place, one lean, whatever is looking: {leans:?}");
+        // Downwind of that patch the gust is elsewhere in its cycle, and a
+        // moment later it has moved on.
+        let cam = {
+            let mut c = Camera::table(3);
+            c.look_at(24, 24, &map, w, h);
+            c
+        };
+        let sc = Scene::new(&map, ts, &world, &cam, 2.5);
+        let (wx, wy) = (world.weather.wind_dir.cos(), world.weather.wind_dir.sin());
+        let half = PI / (0.55 * TILE_METRES);
+        assert!((leans[0] - grass_lean(&sc, 24.5 + wx * half, 24.5 + wy * half, 0.4)).abs() > 0.2, "half a wave downwind is the other side of the gust");
+        let later = Scene::new(&map, ts, &world, &cam, 3.5);
+        assert!((leans[0] - grass_lean(&later, 24.5, 24.5, 0.4)).abs() > 0.2, "and a second on, the gust has moved");
     }
 }

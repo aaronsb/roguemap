@@ -366,6 +366,24 @@ view. The ground along the view runs away without bound as a surface
 turns edge-on, and a lattice step that long lays one speck along a run of
 cells and empties the ground between, which reads as streaks.
 
+A roof tile or a leaf is drawn where its own surface is, in front of
+whatever else the cell covers, so the ground the cell rakes past it is not
+theirs to take a step from: a geometry hit's span is the cell's width in
+metres at that point's depth alone, with no lean term. Zero there is the
+finest lattice at every distance, which is three to nine lattice cells to
+a screen cell at thirty to a hundred metres, and crowns sparkled for it
+(#50).
+
+The wind's phase is a place too. Which of the three cover glyphs a tuft
+leans as comes from two waves over the ground — an eleven metre gust under
+a sixteen metre swell — carried downwind at the speed `World::weather`
+sets, so a gust crosses the field rather than the screen. No screen
+coordinate reaches the ground texture at all now, water's swell included,
+though that one stands still for a reason of its own: the lattice jitter
+its phase is added to is the whole hash scaled to about 1e11, where an f32
+steps by 16384, so every term before it is dropped and the crest glyph is
+the roll alone (#52).
+
 ## Blocks
 
 A tile carries a `Stack { kind, levels }`. Its column runs from the ground

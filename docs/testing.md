@@ -279,11 +279,24 @@ is one command.
   steps nest and a coarse cell hashes the fine cell at its corner; the
   density stays the surface's at every span; and anywhere within a cell
   is the same speck, from a function no camera is passed to.
+  A crown's leaves come off the same lattice, stepped up by the crown's
+  own footprint: a pine twelve metres from an eye and one seventy-five
+  metres off, whose spans stand in the ratio of their depths, and the far
+  one's covers several leaf grains without passing the ground's rake. A
+  tuft's lean is a place and a time, the same at three cameras, half a
+  wave downwind on the other side of the gust and moved on a second later.
   `tests/scatter.rs` is the temporal pin, which a single frame cannot be:
-  a first-person view of a snowy mountain, then the same view one 40 ms
-  tick of walking later, and the count of cells whose speck came or went.
-  Fewer than one cell in a hundred may change, at 168x71 and at 80x25;
-  the camera-hung lattice moved more specks than the frame carried.
+  a first-person view, then the same view one 40 ms tick of walking later,
+  and the count of cells whose glyph changed while both colours held —
+  same surface, same shading, so what is left is a mark that moved. Three
+  scenes, one per kind of mark: a snowy mountain for the ground scatter, a
+  conifer stand across a meadow for crowns, a village for roofs, each at
+  168x71 and 80x25. The ceilings are what the engine achieves with room —
+  4 and 6 marks in a thousand for the ground, 5 and 4 for crowns, 12 and
+  24 for roofs. The first version counted only the ground texture's glyphs
+  against a share of the whole frame, which is the case #35 had fixed;
+  crowns and roofs churned at forty times the ground's rate under a count
+  that could not see them (#50).
 
 ## Interaction
 
