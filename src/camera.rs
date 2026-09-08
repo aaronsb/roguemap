@@ -509,10 +509,12 @@ impl Camera {
     }
 
     /// The free camera entered from this view (ADR-009): its eye is where
-    /// this view's is, so the switch does not jump. A perspective view
-    /// lends the eye and the pitch it has; the table lends the point under
-    /// the screen centre, pushed back along the yaw and up by the pitch at
-    /// the shoulder view's thirty metres and looked at down the pitch.
+    /// this view's is, so the switch does not jump. Every vantage but the
+    /// orthographic table stands its eye at a distance and lends it, and
+    /// the pitch it has; the orthographic table has none and lends the
+    /// point under the screen centre, pushed back along the yaw and up by
+    /// the pitch at the shoulder view's thirty metres and looked at down
+    /// the pitch.
     fn free_from(&self) -> Camera {
         let mut cam = Camera::in_placement(Mode::Free, Placement::FREE, self.angle);
         cam.table_pitch = self.table_pitch;
@@ -520,7 +522,7 @@ impl Camera {
         if self.screen != (0, 0) {
             cam.screen = self.screen;
         }
-        if self.is_perspective() {
+        if !self.is_orthographic_table() {
             cam.pitch = self.pitch;
             cam.anchor = self.eye;
         } else {
@@ -2628,10 +2630,17 @@ mod tests {
         let back = ((ex - fx) * TILE_METRES).hypot((ey - fy) * TILE_METRES).hypot(ez - table.focus_z);
         assert!((back - Placement::SHOULDER.distance).abs() < 1e-3, "{back} m from the point under the centre");
         assert!(ez > table.focus_z, "above the table's own plane");
-        // From an eye, the eye it already had.
+        // From a vantage that stands its eye at a distance, the eye it
+        // already had — which an orthographic placement has too, since
+        // the orthographic table is the one view with none (ADR-010).
         let mut fp = Camera::first_person(FRAC_PI_4);
         fp.look_at_entity(world.player().unwrap(), &map, sw, sh);
         assert_eq!(fp.in_mode(free).eye(), fp.eye(), "the first-person eye stays put");
+        for mut cam in [Camera::chase(0.3).in_projection(ORTHO), Camera::shoulder(0.3).in_projection(ORTHO)] {
+            cam.look_at_entity(world.player().unwrap(), &map, sw, sh);
+            assert_eq!(cam.in_mode(free).eye(), cam.eye(), "{}: the eye stays put", cam.view_label());
+            assert_eq!(cam.in_mode(free).pitch_degrees(), cam.pitch_degrees(), "{}", cam.view_label());
+        }
         // The keys fly it and the character stands where it was: forward
         // is the view direction, pitch and all, so a look down descends.
         let (p0, mut flown) = (*world.player().unwrap(), eye);
