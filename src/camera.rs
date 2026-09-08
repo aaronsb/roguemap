@@ -398,7 +398,11 @@ impl Camera {
         cam.set_angle(yaw);
         cam.relief = relief;
         cam.pitch = tilt;
-        cam.table_pitch = tilt;
+        // The general form draws at any angle; what a table is left at is a
+        // table's own range, and it outlives this camera through a mode
+        // round trip. At zero the basis has no rows and `ray` and
+        // `unproject` divide by them.
+        cam.table_pitch = tilt.clamp(Camera::TILT_RANGE.0, Camera::TILT_RANGE.1);
         cam.basis = Camera::table_basis(columns, tilt, relief);
         cam.detail = detail;
         cam.foot = Camera::cells_of(&cam.basis);
@@ -3083,6 +3087,27 @@ mod tests {
         let (px, py) = eye.project(x, y, z);
         assert!(px.floor() as i32 >= sw / 3 && (px.floor() as i32) <= sw - sw / 3, "inside the zone at column {px}");
         assert!(py.floor() as i32 >= sh / 3 && (py.floor() as i32) <= sh - sh / 3, "and at row {py}");
+    }
+
+    /// The general constructor draws at any angle, and the table's
+    /// remembered angle keeps a table's range whatever it is handed — it
+    /// outlives the camera through a mode round trip, and at zero the
+    /// basis has no rows for `ray` and `unproject` to divide by.
+    #[test]
+    fn the_generals_angle_is_free_and_the_remembered_table_angle_is_not() {
+        let (lo, hi) = Camera::TILT_RANGE;
+        for tilt in [-1.0, 0.0, 0.4, 2.1, 120.0_f32.to_radians()] {
+            let cam = Camera::orthographic(FRAC_PI_4, tilt, Camera::RELIEF, 2.0);
+            assert_eq!(cam.pitch, tilt, "the general form draws at the angle it is given");
+            assert!(cam.table_pitch >= lo && cam.table_pitch <= hi, "table_pitch {} out of range from {tilt}", cam.table_pitch);
+            // The angle a mode round trip restores is drawable.
+            let back = cam.in_mode(1).in_mode(0);
+            assert!(back.b() > 0.0, "basis rows {} not positive after a round trip from {tilt}", back.b());
+            let r = back.ray(10.0, 10.0);
+            assert!(r.d.0.is_finite() && r.d.1.is_finite(), "ray drift not finite from {tilt}");
+            let (ux, uy) = back.unproject(10.0, 10.0, 0.0);
+            assert!(ux.is_finite() && uy.is_finite(), "unproject not finite from {tilt}");
+        }
     }
 
     #[test]
