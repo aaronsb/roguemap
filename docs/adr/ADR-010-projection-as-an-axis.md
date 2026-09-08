@@ -308,8 +308,25 @@ orthographic, the anchor along the ground under perspective. `pan` on a
 placement moves the anchor away from the character, which `follow` then
 eases back, under both projections. `follow` on the table keeps ADR-008's
 dead zone, the middle third of the screen each way, measured on screen
-either way and spent into the offset or into the anchor through
-`ground_vector`. `follow` on a placement eases the anchor and leaves the
+either way and spent into the offset under orthographic, or into the
+anchor under perspective through `ground_shift` — the ground move that
+carries a point a given number of columns and rows **at its own depth**,
+solved in closed form. `ground_vector` was the first answer and is a
+direction helper: it scales by the view's reference depth and has no
+`1 / sin(pitch)` for rows, so it moved the figure `dy sin(pitch)` rows
+and over-corrected without bound once the figure came nearer than the
+reference. The build found it diverging and panicking at shallow and
+negative angles.
+
+`ground_shift`'s denominator vanishes at the horizon row, which is the
+geometric statement that no ground move buys a row past the horizon, so
+the solve is clamped to no farther than the figure already is and the
+anchor eases toward the figure when it is refused. The aimed height eases
+with it: a figure walking onto different ground leaves `az` stale, and a
+figure below the aimed height sits under the horizon whatever the ground
+move.
+
+`follow` on a placement eases the anchor and leaves the
 rest to `look_at_point`, whose orthographic path already places a point
 at the screen centre. Today both functions branch on `is_perspective`,
 which answers for the vantage only because the table is the only
@@ -541,7 +558,7 @@ hexagonal event grid stay where ADR-009 left them.
 - `raster`'s three gates (`ray`, `ray_from`, `antialias_edges`),
   `overlay`'s cloud gate, `grid`'s volume gate, `shadow`'s volume gate,
   `sprites`' `tree_billboards` and its sprite reach, `render`'s fog
-  gates, `snapshot`'s three, `ground_vector`, `cell_step`,
+  gates, `snapshot`'s three, `ground_shift`, `cell_step`,
   `entity_point`, `fog_origin`, `fog_depth`, `project`, `unproject`,
   `ray`, `eye_ray`, `project_vector`, `cloud_view` and `reach` all read
   `is_perspective` and keep reading it: the predicate's meaning is what
