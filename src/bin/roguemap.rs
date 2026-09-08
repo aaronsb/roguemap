@@ -114,7 +114,10 @@ impl App {
         } else {
             self.fly_held(dt);
         }
-        if self.cam.addresses_character() && (self.cam.is_perspective() || self.settling) {
+        // A placement is aimed from the character and tracks it every
+        // tick; the table follows by its dead zone, which owes a step
+        // only while a walk is settling.
+        if self.cam.addresses_character() && (self.cam.placed_on_character() || self.settling) {
             let settled = self.cam.follow(&self.world, &self.map, self.sw, self.sh);
             self.settling = !settled;
         }
@@ -194,8 +197,8 @@ impl App {
     /// Turn the view with the pointer (ADR-008). A focused frame owns the
     /// screen, so the mouse does nothing under one and forgets where it
     /// was, and the next motion after it closes is a fresh start rather
-    /// than a jump. The wheel narrows and widens a perspective view's
-    /// field of view and steps the isometric zoom.
+    /// than a jump. The wheel asks the vantage: the table's steps its
+    /// zoom, a placement's narrows and widens its field of view.
     fn mouse_event(&mut self, m: MouseEvent) {
         if self.frames.focus().is_some() {
             self.mouse.forget();
@@ -208,7 +211,7 @@ impl App {
                 // The rows tilt the isometric table (ADR-009).
                 self.cam.pitch_by(pitch.to_radians());
             }
-            Look::Wheel(dir) if self.cam.is_perspective() => self.settings.step_fov(-dir, self.cam.fov_degrees()),
+            Look::Wheel(dir) if self.cam.placed_on_character() => self.settings.step_fov(-dir, self.cam.fov_degrees()),
             Look::Wheel(dir) => self.cam.zoom_by(dir, self.sw, self.sh),
         }
     }

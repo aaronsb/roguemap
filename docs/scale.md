@@ -59,7 +59,7 @@ pub const ZOOM_RATIOS: [&str; 4] = ["1:8", "1:4", "1:2", "1:1"];
 | mid | 1:4 | 2.83 | 1.5 | 3 rows | 8x2 |
 | far | 1:8 | 1.41 | 0.75 | one glyph | 4x1 |
 
-`Camera::isometric(zoom)` builds a preset. `Camera::columns_per_metre` is
+`Camera::table(zoom)` builds a preset. `Camera::columns_per_metre` is
 the zoom's own number, the ground scale across the screen.
 `Camera::rows_per_metre` is how far up the screen a metre of height
 displaces a thing. Heights project through the second rather than through
@@ -69,45 +69,49 @@ rows at 1:8, with the person standing under its canopy.
 `z` / `Z` step through the four. The status bar names the current one by
 both its ratio and its name, so the top line reads `1:2 near`.
 
-### The tilt and the relief
+### The angle and the relief
 
-Zoom is scale alone; the angle of the table is its own number
-([ADR-009](adr/ADR-009-camera-modes-and-controls.md)). `Camera::tilt` is
+Zoom is scale alone; the angle above the ground is its own number
+([ADR-009](adr/ADR-009-camera-modes-and-controls.md)). `Camera::pitch` is
 the angle the ground plane draws at, from 30 degrees — today's isometric
 look, and `TILT_RANGE`'s floor — to 90, straight down. `Camera::relief`
-is how much taller than the tilt implies height is drawn, `sqrt 1.5`, the
-exaggeration the footprint presets always carried. The basis is those two
-and the scale:
+is how much taller than the angle implies height is drawn, `sqrt 1.5`,
+the exaggeration the footprint presets always carried. The basis is those
+two and the scale:
 
 ```
 cols = columns_per_metre * TILE_METRES
-rows = cols * CELL_ASPECT * sin(tilt)
-rise = relief * columns_per_metre * CELL_ASPECT * cos(tilt)
+rows = cols * CELL_ASPECT * sin(pitch)
+rise = relief * columns_per_metre * CELL_ASPECT * cos(pitch)
 ```
 
 `CELL_ASPECT` is 0.5, the canonical cell's 8 pixels over 16. At the floor
-tilt these are the four presets' own numbers to the bit. `relief`
-multiplies `cos(tilt)`, so it vanishes with it: straight down `rise` is
+angle these are the four presets' own numbers to the bit. `relief`
+multiplies `cos(pitch)`, so it vanishes with it: straight down `rise` is
 zero, nothing displaces, and the terrain reads through shading alone,
-while the cloud parallax stays at every tilt.
+while the cloud parallax stays at every angle.
 
-`{` and `}` tilt the table five degrees a press and the mouse's rows tilt
-it too; `tilt=DEGREES` renders one headless. The status bar says the
-angle whenever the table is off its floor. A perspective view has no
-table, so its pitch is an eye's and its inset borrows the floor.
+`{` and `}` turn the view five degrees a press and the mouse's rows turn
+it too; `pitch=DEGREES` renders one headless. The status bar says the
+angle whenever the view is off the floor. The range is the projection's
+([ADR-010](adr/ADR-010-projection-as-an-axis.md)): 30 to 90 orthographic,
+the full sphere from an eye, and an angle outside the range it lands in
+is clamped on the way in. `relief` stays an orthographic idea, and an
+orthographic view's inset borrows its angle where a perspective one's
+borrows the floor.
 
-Height on screen and detail on screen are two numbers under a tilt:
+Height on screen and detail on screen are two numbers under an angle:
 `Camera::rows_per_metre` is the displacement, which goes to zero straight
 down, and `Camera::detail_rows` is the rows an upright thing facing the
-viewer draws as, which is the floor tilt's `rise` at every tilt. Level of
-detail, the sprite tier, the walk's sample count and the cloud-layer
+viewer draws as, which is the floor angle's `rise` at every angle. Level
+of detail, the sprite tier, the walk's sample count and the cloud-layer
 switch read the second, so a plan view resolves the ground exactly as
 finely as a tilted one.
 
-## The perspective modes
+## The perspective vantages
 
 A perspective view has no footprint: its scale is the number of rows a
-metre spans at the character's depth, `focal / 2 / depth * cos(pitch)`
+metre spans at the reference depth, `focal / 2 / depth * cos(pitch)`
 with the focal length `(columns / 2) / tan(fov / 2)`, and every other
 point takes the scale at its own depth
 ([rendering.md](rendering.md), "The eye"). On a 168x71 screen at the
@@ -119,6 +123,41 @@ scale is what the frame carries for everything keyed by zoom, and the
 inset takes the other end of the scale from it. `z` / `Z` halve and
 double the chase distance instead of stepping footprints; the status
 line reads `chase 12m fov 60 pitch 30`.
+
+## The projection
+
+The four ratios above are the table's, and the `projection` settings row
+says whether an eye reads them
+([ADR-010](adr/ADR-010-projection-as-an-axis.md)). It runs `vantage`,
+`orthographic` and `perspective`, defaulting to the projection the
+vantage has always had, and it is inert on `first-person` and `free`,
+whose eye is their own anchor.
+
+A scale and a distance are the same fact stated twice: `columns per metre
+* metres of depth = focal`. So the table's zoom names an eye distance,
+and stepping the zoom under perspective moves the eye. At 120 columns and
+60 degrees, `focal` is 103.9:
+
+| zoom | columns per metre | eye distance | height above the focus at 30 deg | at 90 deg |
+|---|---|---|---|---|
+| far 1:8 | 1.414 | 73 m | 37 m | 73 m |
+| mid 1:4 | 2.828 | 37 m | 18 m | 37 m |
+| near 1:2 | 5.657 | 18 m | 9 m | 18 m |
+| close 1:1 | 11.314 | 9 m | 5 m | 9 m |
+
+On an 80 column screen the same zooms put the eye at 49 m and 6 m, since
+a narrower screen showing the same ground per column looks at it from
+nearer. `World::CLOUD_ALTITUDE` is 20 m, so the far and mid overviews
+stand above the clouds and the near and close ones under them. The far
+field of a perspective table is twice the weather's visibility, since at
+1:8 the eye stands 73 m from the point it looks at and a clear noon fades
+the ground at 106.
+
+The other way round, an orthographic placement is the table's look locked
+to the character: the scale `focal / distance` gives — 8.7 columns per
+metre for the chase view at 120 columns, between the near and close
+presets — at the placement's own angle, with no dead zone. The shoulder
+view's 20 degrees is under the orthographic floor, so it draws at 30.
 
 ## Movement
 
@@ -192,9 +231,9 @@ in, so a turn is the cells moved times `Mouse::YAW_PER_COLUMN` = 2
 degrees of yaw a column and `Mouse::PITCH_PER_ROW` = 3 degrees of pitch a
 row — a row is worth more because a cell is twice as tall as it is wide.
 Moving right turns right and moving down looks down, through
-`Camera::rotate_by` and `Camera::pitch_by`; on the isometric table the
-rows tilt it instead. The wheel narrows and widens a perspective view's
-field of view and steps the isometric zoom.
+`Camera::rotate_by` and `Camera::pitch_by`; on the table the rows tilt
+it instead. The wheel asks the vantage: the table's steps its zoom, a
+placement's narrows and widens its field of view.
 
 A terminal has no pointer lock, so in `free` the turn stops when the
 pointer reaches the edge of the screen: lift the mouse and put it back
@@ -223,13 +262,14 @@ drawn at the exact point, at `Map::ground_at`; on a slope the rise or
 fall of the ground shows on top of the distance walked.
 
 The camera follows with give: `Camera::follow` runs once a tick and
-closes `Camera::EASE` = 0.3 of what is left toward the figure. In the
-isometric mode the figure has a dead zone, the middle third of the screen
-each way, inside which the view does not move, so a few steps do not
-scroll the ground; outside it the offset eases by whole cells, never less
-than one while any remains, until the figure is back inside, so a long
-walk scrolls the ground steadily with the figure held near the zone's
-edge. The ease runs only while a walk is settling, so a plain arrow,
+closes `Camera::EASE` = 0.3 of what is left toward the figure. On the
+table the figure has a dead zone, the middle third of the screen each
+way, inside which the view does not move, so a few steps do not scroll
+the ground; outside it the view eases by whole cells, never less than one
+while any remains, until the figure is back inside, so a long walk
+scrolls the ground steadily with the figure held near the zone's edge.
+The cells go into the screen offset under an orthographic projection and
+into the anchor under a perspective one. The ease runs only while a walk is settling, so a plain arrow,
 `Action::Pan`, still slides the view by one tile and leaves it there; `c`
 recentres on the player in one jump. The chase and shoulder views ease
 the aimed point toward the character; the first-person view is the
@@ -286,8 +326,8 @@ tests use:
 | mid 1:4 | 35.4 cm | 141.4 cm |
 | far 1:8 | 70.7 cm | 282.8 cm |
 
-A column is `TILE_CM / cols` and a row is `2 / sin(tilt)` columns of it —
-four at the floor tilt, as the table above reads, and two straight down —
+A column is `TILE_CM / cols` and a row is `2 / sin(pitch)` columns of it —
+four at the floor angle, as the table above reads, and two straight down —
 so the ground a cell covers is uniform across the scale. At 1:1 the
 figure walks about two thirds of a column a tick and at 1:8 two columns a
 second, so the same walk is a stride on screen up close and a crawl
@@ -331,12 +371,14 @@ pub fn inset_zoom(main: usize) -> usize {
 While the main view is zoomed out at all — 1:2, 1:4 or 1:8 — the inset
 shows 1:1. When the main view is already at 1:1, the inset shows 1:8. The
 two views never share a level, so there is always a close reading and a
-far one on screen at once. A perspective view's inset is the isometric
-view at the other end from the preset nearest its scale: 1:8 beside the
-first-person view, 1:1 beside a chase view zoomed out. An isometric main
-view lends the inset its tilt as well as its heading, so the one thing
-that differs between the two panes is the scale; an eye has no tilt to
-lend, so its inset draws at the floor.
+far one on screen at once. The inset is an orthographic table whatever
+the main view is, at the other end from the preset nearest its scale: 1:8
+beside the first-person view, 1:1 beside a chase view zoomed out. An
+orthographic table lends the inset its angle as well as its heading, so
+the one thing that differs between the two panes is the scale; any other
+combination lends only the heading and the inset draws at the floor,
+since a pane that also changed projection would compare two things at
+once.
 
 The inset draws the scene alone: no HUD over it, and antialiasing and the
 cloud layer off. Its title carries the ratio it is drawing at, so it reads

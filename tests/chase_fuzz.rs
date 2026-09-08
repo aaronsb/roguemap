@@ -82,7 +82,7 @@ fn session(seed: u64, size: usize, sw: i32, sh: i32, ticks: usize, rng: &mut Lcg
             }
             3 => {
                 let dir = if rng.below(2) == 0 { 1 } else { -1 };
-                if cam.is_perspective() {
+                if cam.placed_on_character() {
                     settings.step_fov(-dir, cam.fov_degrees());
                 } else {
                     cam.zoom_by(dir, sw, sh);
@@ -110,7 +110,7 @@ fn session(seed: u64, size: usize, sw: i32, sh: i32, ticks: usize, rng: &mut Lcg
         } else if let Some((f, r)) = Camera::held_fly(held.dirs()) {
             cam.fly(f * 1.4 * dt, r * 1.4 * dt);
         }
-        if cam.addresses_character() && (cam.is_perspective() || settling) {
+        if cam.addresses_character() && (cam.placed_on_character() || settling) {
             settling = !cam.follow(&world, &map, sw, sh);
         }
         held.tick(dt);

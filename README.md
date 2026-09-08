@@ -2,8 +2,8 @@
 
 [github.com/aaronsb/roguemap](https://github.com/aaronsb/roguemap)
 
-A height-mapped terrain renderer for the terminal, in Rust: isometric,
-or from an eye behind or at the character.
+A height-mapped terrain renderer for the terminal, in Rust: an
+orthographic table, or from an eye behind, at or above the character.
 
 There is no tile atlas. Every screen cell casts a ray back into the world
 and walks down the continuous height field under it, testing the buildings
@@ -78,17 +78,17 @@ help line at the bottom of the screen.
 | `c` | centre on the player |
 | `r` / `R`, `(` / `)` | snap to the next compass view, or turn five degrees |
 | `z` / `Z` | zoom through far 1:8, mid 1:4, near 1:2, close 1:1; in a chase view halve or double the distance |
-| `{` / `}` | tilt the isometric table between 30 degrees and straight down, or pitch a perspective view, by five degrees |
+| `{` / `}` | look up and down five degrees a press: 30 degrees to straight down on the orthographic table, the full sphere from an eye |
 | `<` / `>` | narrow or widen the field of view by ten degrees |
 | `v` | island or filled world |
 | `g` | PETSCII or ASCII glyphs |
 | `[` / `]`, `,` / `.`, `p` | step the season, step the clock, pause it |
 | `W`, `f`, `F` | cycle the weather, light a campfire, put the fires out |
-| `Tab` or `o` | the settings frame: the camera mode (isometric, chase, shoulder, first-person, free), the coupling, the field of view, the fog and the rest |
+| `Tab` or `o` | the settings frame: the camera vantage (table, chase, shoulder, first-person, free), the projection (vantage, orthographic, perspective), the coupling, the field of view, the fog and the rest |
 | `m` | the world map |
 | `x` | the inset view at the other end of the zoom scale |
 | `V` | the free camera: a detached eye the walk keys fly, `c` back to the character, `V` again to the view it was entered from |
-| mouse | turns the view: drag with a button, or any motion under the `Mouse` setting's `free`; the wheel zooms the isometric view and narrows or widens a perspective one |
+| mouse | turns the view: drag with a button, or any motion under the `Mouse` setting's `free`; the wheel zooms the table and narrows or widens a placement's field of view |
 | `i`, `I`, `L`, `C` | inventory, stats, history, conversation |
 | `H` | hide the HUD |
 | `q` or `Esc` | quit |
@@ -106,7 +106,7 @@ the gallery, the map of the pages and how to run everything.
 |---|---|
 | [world.md](docs/world.md) | The height field, relief in metres, rivers, climate, biomes, chunks, the world map |
 | [rendering.md](docs/rendering.md) | The camera, the ray walk, block and tree geometry, shadows, lighting, sextant antialiasing, level of detail, cost |
-| [scale.md](docs/scale.md) | Metres, the four zooms and their ratios, the tilt, movement and its control schemes, the inset view |
+| [scale.md](docs/scale.md) | Metres, the four zooms and their ratios, the angle, the projection, movement and its control schemes, the inset view |
 | [trees.md](docs/trees.md) | The eight growth habits, their parameters, seasons, dead trees, how a species becomes a tree at each zoom |
 | [assets-and-editor.md](docs/assets-and-editor.md) | The asset directory, the loader, the editor, how to add a row |
 | [frames.md](docs/frames.md) | Frames over the scene: HUD, settings, world map, inset, panes |
@@ -127,7 +127,10 @@ The catalogues and decision records those pages lean on:
 | [ADR-004](docs/adr/ADR-004-world-scale.md) | World scale in metres and zoom as exact ratios |
 | [ADR-005](docs/adr/ADR-005-overlay-frames.md) | One frame system for everything drawn over the scene |
 | [ADR-006](docs/adr/ADR-006-movement-by-screen-cell.md) | One keypress moves one screen cell, positions in centimetres |
-| [ADR-007](docs/adr/ADR-007-general-camera.md) | A general camera, with the isometric view as a mode |
+| [ADR-007](docs/adr/ADR-007-general-camera.md) | A general camera, with the orthographic table as one vantage |
+| [ADR-008](docs/adr/ADR-008-walking.md) | Walking by the keys down, and the mouse that turns the view |
+| [ADR-009](docs/adr/ADR-009-camera-modes-and-controls.md) | The table tilts, and who turns with the view |
+| [ADR-010](docs/adr/ADR-010-projection-as-an-axis.md) | Projection as an axis beside the vantage |
 
 ## Contributing
 
