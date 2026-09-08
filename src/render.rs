@@ -109,9 +109,15 @@ impl<'a> Scene<'a> {
         let fog = cam.is_perspective().then_some(far);
         let b = cam.basis();
         let tm = crate::map::TILE_METRES;
-        let span = (tm / b.cols.max(1e-3), tm / b.rows.max(1e-3));
+        // `b.rows` carries the pitch's sine: zero at a level view, where a
+        // cell covers unbounded ground along the view, and negative looking
+        // up, where the ground recedes the other way. A floor on the
+        // magnitude keeps the sign, so the cotangent stays a cotangent;
+        // `cell_span` caps how much ground a cell is allowed to read.
+        let rows = b.rows.abs().max(1e-3).copysign(b.rows);
+        let span = (tm / b.cols.max(1e-3), tm / rows.abs());
         let (s, c) = cam.forward();
-        let cot = b.rise * tm / b.rows.max(1e-3);
+        let cot = b.rise * tm / rows;
         Scene { map, assets, ts, pal: assets.surfaces.for_season(world.season), world, cam, t, chop: world.choppiness(), daylight: world.daylight(), far, fog, span, lean: (s * cot, c * cot), snow }
     }
 
@@ -338,7 +344,7 @@ impl Renderer {
     pub(crate) fn bounds_to(&self, cam: &Camera, top: f32, far: f32) -> (i32, i32, i32, i32) {
         /// Tiles the box may stretch beyond the ground the screen covers.
         const MAX_DEPTH: f32 = 24.0;
-        if let Some((x0, y0, x1, y1)) = cam.reach(self.w, far) {
+        if let Some((x0, y0, x1, y1)) = cam.reach(self.w, self.h, far) {
             let m = ((16.0 / cam.a()).ceil() as i32 + 2).max(5);
             return (x0.floor() as i32 - m, y0.floor() as i32 - m, x1.ceil() as i32 + m, y1.ceil() as i32 + m);
         }
@@ -384,6 +390,47 @@ impl Renderer {
         match &self.heights {
             Some(g) => g.bounds(),
             None => self.visible_bounds(cam, 0.0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::map::TILE_METRES;
+
+    /// Screens a view is drawn on, from the smallest terminal up.
+    const SCREENS: [(i32, i32); 3] = [(80, 25), (120, 40), (168, 71)];
+
+    #[test]
+    fn the_frustum_stays_inside_the_box_at_every_pitch() {
+        // Each cell's ray marches from the eye out to the fog and reads
+        // terrain from the grid built over the box, so the eye and every
+        // corner ray's far end lie in the box at every angle the pitch
+        // range allows.
+        let (lo, hi) = Camera::PITCH_RANGE;
+        for (sw, sh) in SCREENS {
+            let r = Renderer::new(sw, sh);
+            for yaw in [0.0, 0.7, 1.6, 2.5, 4.0, 5.9] {
+                for mut cam in [Camera::chase(yaw), Camera::shoulder(yaw), Camera::first_person(yaw)] {
+                    cam.look_at_point(20.5, 14.5, 6.0, sw, sh);
+                    for step in 0..=180 {
+                        let pitch = lo + (hi - lo) * step as f32 / 180.0;
+                        cam.set_pitch(pitch);
+                        let far = cam.far_reach();
+                        let (x0, y0, x1, y1) = r.bounds_to(&cam, 0.0, far);
+                        let (ex, ey, _) = cam.eye();
+                        let inside = |x: f32, y: f32| x >= x0 as f32 && x <= x1 as f32 && y >= y0 as f32 && y <= y1 as f32;
+                        let note = || format!("{} at {sw}x{sh}, yaw {yaw}, pitch {}, box {x0}, {y0}..{x1}, {y1}", cam.mode_name(), pitch.to_degrees());
+                        assert!(inside(ex, ey), "the eye at {ex}, {ey} is outside: {}", note());
+                        for (sx, sy) in [(0.0, 0.0), (sw as f32, 0.0), (0.0, sh as f32), (sw as f32, sh as f32)] {
+                            let ray = cam.eye_ray(sx, sy);
+                            let (x, y) = (ex + ray.dir.0 * far / TILE_METRES, ey + ray.dir.1 * far / TILE_METRES);
+                            assert!(inside(x, y), "the ray through {sx}, {sy} ends at {x}, {y}, outside: {}", note());
+                        }
+                    }
+                }
+            }
         }
     }
 }

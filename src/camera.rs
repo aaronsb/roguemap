@@ -337,7 +337,7 @@ impl Camera {
 
     /// The pitch a perspective view may be turned to: the full sphere,
     /// since the eye is a point and its ground plane never degenerates.
-    const PITCH_RANGE: (f32, f32) = (-90.0 * DEG, 90.0 * DEG);
+    pub(crate) const PITCH_RANGE: (f32, f32) = (-90.0 * DEG, 90.0 * DEG);
 
     /// A cell's width over its height: the canonical font's 8 pixels
     /// over 16.
@@ -409,13 +409,24 @@ impl Camera {
         cam
     }
 
+    /// A pitch's sine and cosine, with the cosine held at zero straight up
+    /// or down. `cos(90 degrees)` in f32 is a small negative remainder, and
+    /// the cosine scales the whole horizontal part of the view: a negative
+    /// one turns the view through 180 degrees.
+    #[inline]
+    fn pitch_sin_cos(pitch: f32) -> (f32, f32) {
+        if pitch.abs() >= Camera::PITCH_RANGE.1 {
+            (pitch.signum(), 0.0)
+        } else {
+            pitch.sin_cos()
+        }
+    }
+
     /// The basis of a table (ADR-009): `columns` per metre across the
     /// screen, the ground plane tilted `pitch` radians toward the viewer,
     /// and height `relief` times taller than the pitch implies.
     fn table_basis(columns: f32, pitch: f32, relief: f32) -> Basis {
-        // cos(90 degrees) in f32 is a negative remainder; straight down,
-        // height displaces nothing.
-        let (s, c) = if pitch >= Camera::TILT_RANGE.1 { (1.0, 0.0) } else { pitch.sin_cos() };
+        let (s, c) = Camera::pitch_sin_cos(pitch);
         let cols = columns * TILE_METRES;
         Basis { cols, rows: cols * Camera::CELL_ASPECT * s, rise: relief * columns * Camera::CELL_ASPECT * c }
     }
@@ -533,7 +544,7 @@ impl Camera {
             let (sw, sh) = cam.screen;
             let (x, y) = self.focus(sw, sh);
             let (s, c) = self.yaw;
-            let (sp, cp) = self.pitch.sin_cos();
+            let (sp, cp) = Camera::pitch_sin_cos(self.pitch);
             let back = Placement::SHOULDER.distance;
             cam.pitch = self.pitch;
             cam.anchor = (x + s * cp * back / TILE_METRES, y + c * cp * back / TILE_METRES, self.focus_z + sp * back);
@@ -813,7 +824,7 @@ impl Camera {
         let (sw, sh) = self.screen_or_default();
         self.focal = (sw as f32 / 2.0) / (self.fov / 2.0).tan();
         let (s, c) = self.yaw;
-        let (sp, cp) = self.pitch.sin_cos();
+        let (sp, cp) = Camera::pitch_sin_cos(self.pitch);
         let p = self.placement;
         // The screen centre: the anchor pushed away along the ground and
         // to the right by the placement, in tiles.
@@ -853,7 +864,7 @@ impl Camera {
     #[inline]
     fn view_axes(&self) -> (V3, V3, V3) {
         let (s, c) = self.yaw;
-        let (sp, cp) = self.pitch.sin_cos();
+        let (sp, cp) = Camera::pitch_sin_cos(self.pitch);
         ((-s * cp, -c * cp, -sp), (c, -s, 0.0), (-s * sp, -c * sp, cp))
     }
 
@@ -1287,34 +1298,64 @@ impl Camera {
         CloudView { cx, cy, k, rows, eye: false, above: true }
     }
 
-    /// The map-space box the view can reach on a `w`-column screen looking
-    /// `far` metres from the eye: the ground under the frustum, as the
-    /// extremes of its yaw range at that distance. Orthographic views do
-    /// not have one and answer `None`.
-    pub fn reach(&self, w: i32, far: f32) -> Option<(f32, f32, f32, f32)> {
+    /// The largest `p.0 u + p.1 v + q` over `sqrt(1 + u * u + v * v)` on
+    /// the rectangle `[-x, x]` by `[-y, y]`: how far the frustum reaches
+    /// along one ground axis, per metre it looks. The unconstrained
+    /// maximum stands at `(u, v) = p / q`; otherwise an edge holds it, and
+    /// an edge fixed at `w` is the same form in one variable, whose own
+    /// maximum stands at `t = a * (1 + w * w) / b`.
+    fn ground_support(p: (f32, f32), q: f32, x: f32, y: f32) -> f32 {
+        let at = |u: f32, v: f32| (p.0 * u + p.1 * v + q) / (1.0 + u * u + v * v).sqrt();
+        // The corners stand for the ends of every edge, so an edge holding
+        // no maximum inside itself needs nothing.
+        let edge = |a: f32, b: f32, w: f32, lim: f32| if b == 0.0 { 0.0 } else { (a * (1.0 + w * w) / b).clamp(-lim, lim) };
+        let mut best = f32::NEG_INFINITY;
+        for (u, v) in [(x, y), (x, -y), (-x, y), (-x, -y)] {
+            best = best.max(at(u, v));
+        }
+        for v in [y, -y] {
+            best = best.max(at(edge(p.0, p.1 * v + q, v, x), v));
+        }
+        for u in [x, -x] {
+            best = best.max(at(u, edge(p.1, p.0 * u + q, u, y)));
+        }
+        if q > 0.0 && (p.0 / q).abs() <= x && (p.1 / q).abs() <= y {
+            best = best.max(at(p.0 / q, p.1 / q));
+        }
+        best
+    }
+
+    /// The map-space box the view can reach on a `w` by `h` screen looking
+    /// `far` metres from the eye: the eye and the far end of every ray of
+    /// the frustum, as the extreme of those on each map axis. Orthographic
+    /// views do not have one and answer `None`.
+    pub fn reach(&self, w: i32, h: i32, far: f32) -> Option<(f32, f32, f32, f32)> {
         if !self.is_perspective() {
             return None;
         }
-        // The ground directions the screen's columns look along span the
-        // view yaw either side by the half field of view; the extreme
-        // reach on each map axis is the farthest that arc goes that way.
-        let (d, _, _) = self.view_axes();
-        let theta = d.1.atan2(d.0);
-        let half = ((w as f32 / 2.0) / self.focal).atan();
-        let extreme = |axis: f32| -> f32 {
-            // The largest cos(phi - axis) over phi in [theta - half, theta + half].
-            let rel = (theta - axis + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI) - std::f32::consts::PI;
-            if rel.abs() <= half {
-                1.0
-            } else {
-                (rel.abs() - half).cos().max(0.0)
-            }
-        };
+        // A cell's ray leaves the eye along `d + u * right + v * up` for
+        // its place on the screen and ends `far` metres down it, so its
+        // ground displacement along a map axis is `far` times that
+        // direction's component there over its length, and the extreme is
+        // the largest of those over the screen's whole rectangle. In the
+        // view's own ground frame a ray's heading is `(u, cos pitch + v *
+        // sin pitch)`: level, that is the field of view's wedge about the
+        // yaw; as the view nears vertical the rectangle comes back over
+        // the eye and the headings run the whole way round, which is the
+        // disk the ground under a vertical view is.
+        let (sp, cp) = Camera::pitch_sin_cos(self.pitch);
+        let (s, c) = self.yaw;
+        // Half the screen either way in those units; a row is two columns.
+        let (x, y) = ((w as f32 / 2.0) / self.focal, h as f32 / self.focal);
         let r = far / TILE_METRES;
+        let extreme = |ax: f32, ay: f32| -> f32 {
+            // The axis in the view's own ground frame: across the screen,
+            // and along the way it faces.
+            let (a, b) = (c * ax - s * ay, -(s * ax + c * ay));
+            r * Camera::ground_support((a, b * sp), b * cp, x, y).max(0.0)
+        };
         let (ex, ey) = (self.eye.0, self.eye.1);
-        let (px, nx) = (extreme(0.0), extreme(std::f32::consts::PI));
-        let (py, ny) = (extreme(FRAC_PI_2), extreme(-FRAC_PI_2));
-        Some((ex - r * nx, ey - r * ny, ex + r * px, ey + r * py))
+        Some((ex - extreme(-1.0, 0.0), ey - extreme(0.0, -1.0), ex + extreme(1.0, 0.0), ey + extreme(0.0, 1.0)))
     }
 
     /// Map tile nearest the centre of the screen at sea level; in
@@ -1367,7 +1408,7 @@ impl Camera {
         if depth < NEAR_DEPTH {
             return None;
         }
-        let (sp, cp) = self.pitch.sin_cos();
+        let (sp, cp) = Camera::pitch_sin_cos(self.pitch);
         let (sx, sy) = self.project(x, y, z);
         // Where the point is asked to land, measured from the centre.
         let (col, row) = (sx + dx - self.ox, sy + dy - self.oy);
