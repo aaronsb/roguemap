@@ -28,6 +28,7 @@ shot shoulder      fill=1 camera=shoulder cx=130 cy=-8 t=3 tod=12 deg=90
 shot firstperson   camera=first-person cx=3 cy=23 t=3 tod=12 deg=180 pitch=5
 shot tabletop      zoom=0 t=3 tod=12 player=1 projection=perspective
 shot vista         fill=1 zoom=0 cx=0 cy=0 t=3 tod=12 player=1 projection=perspective pitch=5
+shot nadir         fill=1 camera=shoulder cx=470 cy=-300 t=3 tod=12 pitch=90
 shot plan          scene=scale zoom=3 t=3 tod=12 pitch=90
 shot overhead      fill=1 zoom=0 cx=0 cy=0 t=3 tod=14 cover=0.4 pitch=90
 echo "wrote $(ls "$out" | wc -l) frames to $out"
