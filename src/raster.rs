@@ -178,6 +178,13 @@ fn cell_span(sc: &Scene, x: f32, y: f32, z: f32, gx: f32, gy: f32) -> f32 {
     (across * along).sqrt().min(across * WIDEST).clamp(1e-3, 100.0)
 }
 
+/// Metres a cell covers across the view at a point's depth: the narrow
+/// extent of `cell_span`, which no surface's lean widens.
+fn cell_across(sc: &Scene, x: f32, y: f32, z: f32) -> f32 {
+    let depth = sc.cam.detail_rows() / sc.cam.detail_rows_at(x, y, z).max(1e-4);
+    (sc.span.0 * depth).clamp(1e-3, 100.0)
+}
+
 /// One point's roll on the scatter lattice: a grid fixed in the world at
 /// the surface's grain, stepped up by powers of two until a step covers the
 /// ground the cell does. A speck sits at the same place at every zoom, tilt
@@ -800,11 +807,11 @@ impl Renderer {
             HitKind::Terrain => 0.0,
         };
         let nsx = screen_x_of(cand.normal, sc.cam);
-        // A roof or a crown takes the grain itself, with no step up. Tiles
-        // and leaves are drawn where the surface is, in front of whatever
-        // the cell would otherwise cover, so the ground the cell rakes is
-        // not theirs to be band-limited to.
-        let span = 0.0;
+        // A roof or a crown is band-limited to its own footprint at its own
+        // depth. Tiles and leaves are drawn where the surface is, in front
+        // of whatever the cell would otherwise cover, so the ground the
+        // cell rakes is not theirs to take a lattice step from.
+        let span = cell_across(sc, x, y, cand.z);
         Some(Hit { tile, mx: cand.mx, my: cand.my, x, y, h: cand.z, bed: cand.z, face, below: 0, sun, kind: cand.kind, which: cand.which, nsx, span })
     }
 
@@ -1711,6 +1718,52 @@ mod tests {
         let sc = Scene::new(&map, ts, &world, &iso, 0.0);
         let r = prepared(&sc, w, h);
         assert!(r.grid().volumes.iter().filter(|v| v.my == 36).any(|v| v.shape == Shape::Cluster));
+    }
+
+    /// A crown's leaves come off the same lattice the ground's specks do,
+    /// stepped up by the crown's own footprint at its own depth (#50). Zero
+    /// there is the finest lattice at every distance, which is several
+    /// lattice cells to a screen cell as soon as the tree is a few tens of
+    /// metres off.
+    #[test]
+    fn a_crown_takes_its_lattice_from_its_own_footprint() {
+        let assets = test_assets();
+        let ts = &Tileset::all(&assets)[0];
+        let pine = assets.species.iter().position(|s| s.name == "pine").unwrap();
+        // The two pines of the stand-in test: twelve and seventy-five
+        // metres from an eye at (8.5, 2.5) looking along +y.
+        let map = Map::synthetic(48, 48, assets.clone(), 1, move |x, y| {
+            let mut t = Tile::flat(5);
+            t.seed = 7;
+            if (x, y) == (8, 8) || (x, y) == (24, 36) {
+                t.tree = Some(Flora { species: pine as u8, variant: 2 });
+            }
+            t
+        });
+        let world = World::new(1);
+        let (w, h) = (120, 40);
+        let mut cam = Camera::first_person(PI);
+        cam.look_at_point(8.5, 2.5, 5.0 + 1.7, w, h);
+        let sc = Scene::new(&map, ts, &world, &cam, 0.0);
+        let r = prepared(&sc, w, h);
+        let crown = |my: i32, up: f32| {
+            let v = r.grid().tree_crowns().find(|v| v.my == my).unwrap();
+            let (px, py) = cam.project(v.cx, v.cy, v.h0 + up * v.height);
+            r.ray(&sc, px, py).filter(|hit| hit.kind == HitKind::Canopy).expect("a canopy hit")
+        };
+        let (near, far) = (crown(8, 0.5), crown(36, 0.5));
+        let grain = assets.surfaces.density.grain_metres;
+        assert!(near.span > 0.0, "a crown carries its own footprint, not zero");
+        let ratio = far.span / near.span;
+        assert!((4.0..10.0).contains(&ratio), "the footprint grows with the depth: {ratio} over six times the distance");
+        // Seventy-five metres off, a cell covers several leaf grains, which
+        // is the step up that zero never took.
+        assert!(far.span > 4.0 * grain, "{} m against a grain of {grain}", far.span);
+        // The cell's own width and no more: a roof tile or a leaf is drawn
+        // where the surface is, so the ground the cell rakes past it is not
+        // theirs to take a step from.
+        let raked = cell_span(&sc, far.x, far.y, far.h, 0.0, 0.0);
+        assert!(far.span <= raked, "a crown steps by its width, under the ground's rake: {} m against {raked}", far.span);
     }
 
     #[test]
